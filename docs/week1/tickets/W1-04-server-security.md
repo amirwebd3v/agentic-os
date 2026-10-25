@@ -2,7 +2,7 @@
 id: W1-04
 title: "Fastify server, hardening, token login"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/4
 points: 3
 wave: 3
 risk: Medium
@@ -12,8 +12,6 @@ depends_on:
 skills:
   - secure-code-guardian
   - fullstack-guardian
-started:
-completed:
 ---
 
 # W1-04 — Fastify server with local hardening and token login

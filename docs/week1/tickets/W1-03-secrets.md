@@ -2,7 +2,7 @@
 id: W1-03
 title: "Secrets in Windows Credential Manager"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/3
 points: 1
 wave: 2
 risk: Low
@@ -10,8 +10,6 @@ depends_on:
   - "[[W1-01-scaffold]]"
 skills:
   - secure-code-guardian
-started:
-completed:
 ---
 
 # W1-03 — Secrets in Windows Credential Manager

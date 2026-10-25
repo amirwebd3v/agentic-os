@@ -2,7 +2,7 @@
 id: W1-08
 title: "Vault conventions, CLAUDE.md, writer, watcher"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/8
 points: 3
 wave: 3
 risk: Medium
@@ -11,8 +11,6 @@ depends_on:
   - "[[W1-02-database]]"
 skills:
   - typescript-pro
-started:
-completed:
 ---
 
 # W1-08 — Vault: Obsidian conventions, `CLAUDE.md`, safe writer, watcher

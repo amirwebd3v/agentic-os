@@ -2,7 +2,7 @@
 id: W1-10
 title: "Session categorization + summary note"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/10
 points: 5
 wave: 5
 risk: High
@@ -14,8 +14,6 @@ depends_on:
 skills:
   - prompt-engineer
   - typescript-pro
-started:
-completed:
 ---
 
 # W1-10 — Session categorization + summary note (decider → Claude cascade)

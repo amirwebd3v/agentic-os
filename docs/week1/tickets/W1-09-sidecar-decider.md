@@ -2,7 +2,7 @@
 id: W1-09
 title: "Python sidecar (Laya CUDA) + decider client"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/9
 points: 3
 wave: 3
 risk: Medium
@@ -12,8 +12,6 @@ depends_on:
 skills:
   - python-pro
   - typescript-pro
-started:
-completed:
 ---
 
 # W1-09 — Python sidecar (Laya on CUDA) + `decider.ts` client

@@ -2,7 +2,7 @@
 id: W1-13
 title: "Week 1 verification, README, acceptance"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/13
 points: 1
 wave: 6
 risk: Low
@@ -22,8 +22,6 @@ depends_on:
 skills:
   - test-master
   - code-reviewer
-started:
-completed:
 ---
 
 # W1-13 — Week 1 verification, README, acceptance run

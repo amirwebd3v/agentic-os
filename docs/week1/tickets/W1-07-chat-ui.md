@@ -2,7 +2,7 @@
 id: W1-07
 title: "Chat UI with sanitized Markdown"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/7
 points: 5
 wave: 4
 risk: Medium
@@ -10,8 +10,6 @@ depends_on:
   - "[[W1-04-server-security]]"
 skills:
   - vue-expert
-started:
-completed:
 ---
 
 # W1-07 — Chat UI (Vue 3) with safe Markdown rendering

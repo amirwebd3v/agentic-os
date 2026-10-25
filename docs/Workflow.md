@@ -14,22 +14,23 @@ How every ticket is built. Three plugins are used together, each for a different
 
 ## Backlog
 
-- The board is [[Backlog.base]]: a kanban view by `status` and a table view by `wave`, with point totals.
-- Status lives **only** in each ticket's frontmatter: `Backlog → In progress → Review → Done`, plus the `started` and `completed` dates. Don't copy status anywhere else.
-- Start a ticket only when every note in its `depends_on` shows `Done`.
-- Open this `docs/` folder in Obsidian via *Open folder as vault*. It's separate from the Thesis vault and from the app's personal vault.
+- **The board is the GitHub Project [Agentic OS](https://github.com/users/amirwebd3v/projects/1)**, linked to the private repo [amirwebd3v/agentic-os](https://github.com/amirwebd3v/agentic-os). It has one issue per ticket, with **Points**, **Wave** and **Risk** fields, the `week1` label and the "Week 1" milestone.
+- **Status lives only in the Project:** `Todo → In Progress → Done`. "Review" means an open pull request for the ticket.
+- **The ticket files** in `week1/tickets/` are the *specs* (steps, tests, acceptance criteria). Each one links to its issue via the `issue` property. Edit the spec file, not the issue body.
+- **Dependencies** are native GitHub "blocked by" links. Start an issue only when it shows no open blockers.
+- You can still open this `docs/` folder in Obsidian (*Open folder as vault*) to read the specs with working wikilinks. It's separate from the Thesis vault and from the app's personal vault.
 
 ## Per-ticket loop
 
-1. **Pick:** the lowest-wave ticket whose dependencies are all `Done`. Set `status: In progress` and `started: <date>`.
+1. **Pick:** the lowest-Wave issue with no open blockers. Set it to **In Progress** and create the branch `w1-0X-<slug>`.
 2. **Recall:** `/claude-mem:mem-search <ticket topic>` for earlier decisions and gotchas. From the second session on, relevant context is also injected automatically.
 3. **Build:** follow the ticket steps with its `skills`. Under ponytail, reuse what already exists, add no new dependency the ticket doesn't name, and mark every deliberate shortcut with a `// ponytail: <ceiling>, <upgrade path>` comment.
 4. **Check:** run the ticket's tests, then `pnpm verify` (typecheck + lint + test).
-5. **Review** (set `status: Review`):
+5. **Review:** open a pull request with `Closes #<issue>` in its body, then run:
    - `/ponytail-review` on the diff for over-engineering.
    - `fullstack-dev-skills:code-reviewer` for bugs and quality.
    - Tickets with `secure-code-guardian` in `skills` (W1-03, W1-04) also get a `fullstack-dev-skills:security-reviewer` pass, and so do the security-critical files in W1-07 (`markdown.ts`) and W1-08 (`writer.ts`).
-6. **Close:** tick the ticket's acceptance criteria, set `status: Done` and `completed: <date>`, and make one commit per ticket: `W1-0X: <title>`.
+6. **Close:** tick the acceptance criteria in the spec file, then merge the pull request (one squash commit per ticket: `W1-0X: <title>`). The issue closes, and the Project moves it to **Done**. If it doesn't move automatically, enable the Project's built-in "Item closed → Done" workflow.
 
 ## Per wave
 

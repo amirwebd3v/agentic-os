@@ -2,7 +2,7 @@
 id: W1-02
 title: "SQLite foundation"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/2
 points: 3
 wave: 2
 risk: Low
@@ -10,8 +10,6 @@ depends_on:
   - "[[W1-01-scaffold]]"
 skills:
   - sql-pro
-started:
-completed:
 ---
 
 # W1-02 — SQLite foundation: migrations, Week 1 tables, append-only audit log

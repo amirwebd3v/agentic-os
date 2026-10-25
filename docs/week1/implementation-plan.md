@@ -1,6 +1,6 @@
 # AOS-W1 Implementation Plan: Agentic OS, Week 1
 
-*Created 2026-10-26 with the fullstack-dev-skills `create-implementation-plan` workflow. The backlog lives in this Obsidian vault (`docs/`), replacing Jira: the board is [[Backlog.base]], each ticket in [`tickets/`](tickets/) is self-contained, and the build loop is in [[Workflow]].*
+*Created 2026-10-26 with the fullstack-dev-skills `create-implementation-plan` workflow. The backlog is the GitHub Project [Agentic OS](https://github.com/users/amirwebd3v/projects/1) (issues #1–#13 in [amirwebd3v/agentic-os](https://github.com/amirwebd3v/agentic-os)), replacing Jira. Each ticket in [`tickets/`](tickets/) is the self-contained spec for its issue, and the build loop is in [[Workflow]].*
 
 ## Summary
 
@@ -20,66 +20,66 @@
 
 ## Completion status
 
-Status lives only in each ticket's frontmatter. See the board: ![[Backlog.base]]
+Status lives only in the [GitHub Project](https://github.com/users/amirwebd3v/projects/1).
 
 ## Execution order (topologically sorted)
 
 | # | Ticket | Summary | Pts | Risk | Depends on |
 |---|--------|---------|-----|------|------------|
-| 1 | W1-01 | Monorepo scaffold, config, tooling | 2 | Low | — |
-| 2 | W1-02 | SQLite: migrations, Week 1 tables, append-only audit | 3 | Low | 01 |
-| 3 | W1-03 | Secrets in Windows Credential Manager | 1 | Low | 01 |
-| 4 | W1-04 | Fastify, local hardening, token login, CSP | 3 | Med | 02, 03 |
-| 5 | W1-05 | `llm.ts`, no-key mode, provider smoke test | 3 | Med | 02, 03 |
-| 6 | W1-08 | Vault: Obsidian conventions, `CLAUDE.md`, safe writer, watcher | 3 | Med | 01, 02 |
-| 7 | W1-09 | Python sidecar (Laya, CUDA) + `decider.ts` | 3 | Med | 01, 03 |
-| 8 | W1-06 | Chat backend: sessions, SSE, crash-safe persistence | 3 | Med | 04, 05 |
-| 9 | W1-07 | Chat UI (Vue) with sanitized Markdown | 5 | Med | 04 |
-| 10 | W1-10 | Session categorization + summary note (cascade) | 5 | High | 05, 06, 08, 09 |
-| 11 | W1-11 | Review queue + edit distance | 3 | Low | 02, 04, 07 |
-| 12 | W1-12 | Persona interview mode | 2 | Low | 06, 10, 11 |
-| 13 | W1-13 | Verification, README, acceptance run | 1 | Low | all |
+| 1 | [W1-01](https://github.com/amirwebd3v/agentic-os/issues/1) | Monorepo scaffold, config, tooling | 2 | Low | — |
+| 2 | [W1-02](https://github.com/amirwebd3v/agentic-os/issues/2) | SQLite: migrations, Week 1 tables, append-only audit | 3 | Low | 01 |
+| 3 | [W1-03](https://github.com/amirwebd3v/agentic-os/issues/3) | Secrets in Windows Credential Manager | 1 | Low | 01 |
+| 4 | [W1-04](https://github.com/amirwebd3v/agentic-os/issues/4) | Fastify, local hardening, token login, CSP | 3 | Med | 02, 03 |
+| 5 | [W1-05](https://github.com/amirwebd3v/agentic-os/issues/5) | `llm.ts`, no-key mode, provider smoke test | 3 | Med | 02, 03 |
+| 6 | [W1-08](https://github.com/amirwebd3v/agentic-os/issues/8) | Vault: Obsidian conventions, `CLAUDE.md`, safe writer, watcher | 3 | Med | 01, 02 |
+| 7 | [W1-09](https://github.com/amirwebd3v/agentic-os/issues/9) | Python sidecar (Laya, CUDA) + `decider.ts` | 3 | Med | 01, 03 |
+| 8 | [W1-06](https://github.com/amirwebd3v/agentic-os/issues/6) | Chat backend: sessions, SSE, crash-safe persistence | 3 | Med | 04, 05 |
+| 9 | [W1-07](https://github.com/amirwebd3v/agentic-os/issues/7) | Chat UI (Vue) with sanitized Markdown | 5 | Med | 04 |
+| 10 | [W1-10](https://github.com/amirwebd3v/agentic-os/issues/10) | Session categorization + summary note (cascade) | 5 | High | 05, 06, 08, 09 |
+| 11 | [W1-11](https://github.com/amirwebd3v/agentic-os/issues/11) | Review queue + edit distance | 3 | Low | 02, 04, 07 |
+| 12 | [W1-12](https://github.com/amirwebd3v/agentic-os/issues/12) | Persona interview mode | 2 | Low | 06, 10, 11 |
+| 13 | [W1-13](https://github.com/amirwebd3v/agentic-os/issues/13) | Verification, README, acceptance run | 1 | Low | all |
 
 ## Parallel execution strategy
 
 ### Wave 1: Skeleton (2 pts)
 | Ticket | Summary | Pts | Skill |
 |---|---|---|---|
-| W1-01 | Scaffold | 2 | typescript-pro |
+| [W1-01](https://github.com/amirwebd3v/agentic-os/issues/1) | Scaffold | 2 | typescript-pro |
 
 ### Wave 2: Storage and secrets (4 pts), in parallel
 | Ticket | Summary | Pts | Skill |
 |---|---|---|---|
-| W1-02 | SQLite foundation | 3 | sql-pro |
-| W1-03 | Secrets | 1 | secure-code-guardian |
+| [W1-02](https://github.com/amirwebd3v/agentic-os/issues/2) | SQLite foundation | 3 | sql-pro |
+| [W1-03](https://github.com/amirwebd3v/agentic-os/issues/3) | Secrets | 1 | secure-code-guardian |
 
 ### Wave 3: Platform services (12 pts), in parallel
 | Ticket | Summary | Pts | Skill |
 |---|---|---|---|
-| W1-04 | Server + hardening | 3 | secure-code-guardian, fullstack-guardian |
-| W1-05 | LLM client | 3 | typescript-pro, claude-api |
-| W1-08 | Vault | 3 | typescript-pro |
-| W1-09 | Sidecar + decider | 3 | python-pro |
+| [W1-04](https://github.com/amirwebd3v/agentic-os/issues/4) | Server + hardening | 3 | secure-code-guardian, fullstack-guardian |
+| [W1-05](https://github.com/amirwebd3v/agentic-os/issues/5) | LLM client | 3 | typescript-pro, claude-api |
+| [W1-08](https://github.com/amirwebd3v/agentic-os/issues/8) | Vault | 3 | typescript-pro |
+| [W1-09](https://github.com/amirwebd3v/agentic-os/issues/9) | Sidecar + decider | 3 | python-pro |
 
 ### Wave 4: Chat (8 pts), in parallel
 | Ticket | Summary | Pts | Skill |
 |---|---|---|---|
-| W1-06 | Chat backend | 3 | typescript-pro |
-| W1-07 | Chat UI | 5 | vue-expert |
+| [W1-06](https://github.com/amirwebd3v/agentic-os/issues/6) | Chat backend | 3 | typescript-pro |
+| [W1-07](https://github.com/amirwebd3v/agentic-os/issues/7) | Chat UI | 5 | vue-expert |
 
 **Note:** W1-07 can start in Wave 3 against a mocked `/api`, since it only needs W1-04's auth and headers to integrate.
 
 ### Wave 5: Filing and review (8 pts), in parallel
 | Ticket | Summary | Pts | Skill |
 |---|---|---|---|
-| W1-10 | Categorization | 5 | prompt-engineer, typescript-pro |
-| W1-11 | Review queue | 3 | vue-expert |
+| [W1-10](https://github.com/amirwebd3v/agentic-os/issues/10) | Categorization | 5 | prompt-engineer, typescript-pro |
+| [W1-11](https://github.com/amirwebd3v/agentic-os/issues/11) | Review queue | 3 | vue-expert |
 
 ### Wave 6: Persona and verification (3 pts)
 | Ticket | Summary | Pts | Skill |
 |---|---|---|---|
-| W1-12 | Persona mode | 2 | prompt-engineer |
-| W1-13 | Verify | 1 | test-master, code-reviewer |
+| [W1-12](https://github.com/amirwebd3v/agentic-os/issues/12) | Persona mode | 2 | prompt-engineer |
+| [W1-13](https://github.com/amirwebd3v/agentic-os/issues/13) | Verify | 1 | test-master, code-reviewer |
 
 **Coordination notes:**
 - `server/test/helpers.ts` (`buildTestApp`, `makeTestDb`, fakes) is shared. Create it in W1-02 and extend it per ticket, so parallel tickets don't conflict.

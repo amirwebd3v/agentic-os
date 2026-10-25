@@ -2,7 +2,7 @@
 id: W1-05
 title: "LLM client, no-key mode, smoke test"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/5
 points: 3
 wave: 3
 risk: Medium
@@ -12,8 +12,6 @@ depends_on:
 skills:
   - typescript-pro
   - claude-api
-started:
-completed:
 ---
 
 # W1-05 — LLM client (`llm.ts`), no-key mode, provider smoke test

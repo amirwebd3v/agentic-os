@@ -2,7 +2,7 @@
 id: W1-12
 title: "Persona interview mode"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/12
 points: 2
 wave: 6
 risk: Low
@@ -12,8 +12,6 @@ depends_on:
   - "[[W1-11-review-queue]]"
 skills:
   - prompt-engineer
-started:
-completed:
 ---
 
 # W1-12 — Persona interview mode

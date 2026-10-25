@@ -2,7 +2,7 @@
 id: W1-06
 title: "Chat backend, SSE, crash-safe persistence"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/6
 points: 3
 wave: 4
 risk: Medium
@@ -12,8 +12,6 @@ depends_on:
 skills:
   - typescript-pro
   - websocket-engineer
-started:
-completed:
 ---
 
 # W1-06 — Chat backend: sessions, streaming, crash-safe persistence

@@ -2,7 +2,7 @@
 id: W1-11
 title: "Review queue + edit distance"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/11
 points: 3
 wave: 5
 risk: Low
@@ -13,8 +13,6 @@ depends_on:
 skills:
   - vue-expert
   - typescript-pro
-started:
-completed:
 ---
 
 # W1-11 — Review queue (approve / edit / reject) with edit-distance capture

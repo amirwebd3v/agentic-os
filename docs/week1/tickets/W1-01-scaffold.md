@@ -2,15 +2,13 @@
 id: W1-01
 title: "Monorepo scaffold, config, tooling"
 epic: AOS-W1
-status: Backlog
+issue: https://github.com/amirwebd3v/agentic-os/issues/1
 points: 2
 wave: 1
 risk: Low
 depends_on: []
 skills:
   - typescript-pro
-started:
-completed:
 ---
 
 # W1-01 — Monorepo scaffold, config, tooling
