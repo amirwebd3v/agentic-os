@@ -42,6 +42,7 @@ The server binds to `127.0.0.1` only and rejects foreign `Host` and `Origin` hea
    ```
 6. **Static:** serve `web/dist` with `@fastify/static` in production. In dev, Vite proxies `/api` to the server.
 7. **Audit:** log login success and failure.
+   **Logger redaction (moved from W1-03):** the pino config redacts `authorization`, `x-api-key`, `*.apiKey` and `*.token`.
 8. **Firewall (manual, admin, you run it):** documented in README:
    `New-NetFirewallRule -DisplayName "AgenticOS block inbound" -Direction Inbound -LocalPort 3000,8009 -Protocol TCP -Action Block`
 
