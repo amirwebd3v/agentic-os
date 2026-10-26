@@ -6,7 +6,7 @@ import type { Database } from 'better-sqlite3';
 import { audit } from '../db/audit.ts';
 import { noteKey, sha256 } from './writer.ts';
 
-const IGNORED_DIRS = new Set(['.git', '.obsidian', 'attachments', '.trash', 'node_modules']);
+const IGNORED_DIRS = new Set(['.git', '.obsidian', 'attachments', '.trash']);
 
 /**
  * Records notes edited outside the app (Obsidian): a hash that differs from the stored one marks the note

@@ -53,7 +53,8 @@ test('rewrites its own note atomically, keeping id and created', () => {
 });
 
 test('rejects path traversal and protected folders', () => {
-  for (const p of ['../outside.md', 'wiki/../../outside.md', join(tmpdir(), 'abs.md'), 'C:evil.md', '.git/hooks/x.md', '.obsidian/x.md', 'wiki/a.txt', '']) {
+  for (const p of ['../outside.md', 'wiki/../../outside.md', join(tmpdir(), 'abs.md'), 'C:evil.md', '.git/hooks/x.md', '.obsidian/x.md', 'wiki/a.txt', '',
+    '.GIT/x.md', 'GIT~1/x.md', 'inbox/a.txt:evil.md', '.git::$INDEX_ALLOCATION/z.md', 'NUL.md', 'con.txt.md', '.git./x.md', 'wiki /x.md']) {
     expect(() => w.writeNote(p, 'x', { area: 'career' }), p).toThrow();
   }
   expect(count(db, 'SELECT count(*) n FROM vault_notes')).toBe(0);
@@ -136,6 +137,7 @@ test('removed areas are archived, never deleted, and come back when re-listed', 
 
 test('a malformed or empty area list stops the sync instead of archiving', () => {
   expect(() => parseAreas(template.replace('- `health` | Health | do |', '- health | Health | do |'))).toThrow(/Malformed/);
+  expect(() => parseAreas(template.replace('- `health`', '* `health`'))).toThrow(/Malformed/);
   expect(() => parseAreas('# Rules\n\n## Areas\n\n## Other\n- `x` | X | do | y')).toThrow(/no areas/);
   expect(() => parseAreas('# Rules')).toThrow(/no "## Areas"/);
 });
@@ -155,4 +157,27 @@ test('vault git ignores an inherited GIT_DIR (git hooks export one)', async () =
     vi.unstubAllEnvs();
     rmSync(other, { recursive: true, force: true });
   }
+});
+
+test('a note the user deleted is not brought back', () => {
+  w.writeNote('wiki/a.md', 'v1', { area: 'career' });
+  rmSync(join(dir, 'wiki/a.md'));
+  expect(w.writeNote('wiki/a.md', 'v2', { area: 'career' })).toBe('conflict');
+  expect(existsSync(join(dir, 'wiki/a.md'))).toBe(false);
+});
+
+test('repeated conflicts on one path keep a single pending approval with the latest proposal', () => {
+  w.writeNote('wiki/a.md', 'v1', { area: 'career' });
+  writeFileSync(join(dir, 'wiki/a.md'), 'edited');
+  w.writeNote('wiki/a.md', 'v2', { area: 'career' });
+  w.writeNote('wiki/a.md', 'v3', { area: 'career' });
+  const rows = db.prepare("SELECT payload FROM approvals WHERE action_type = 'vault_conflict'").all() as { payload: string }[];
+  expect(rows).toHaveLength(1);
+  expect(parseNote(JSON.parse(rows[0]!.payload).content).body.trim()).toBe('v3');
+});
+
+test('a rewrite keeps sensitivity and tags unless the caller changes them', () => {
+  w.writeNote('wiki/a.md', 'v1', { area: 'health', sensitivity: 2, tags: ['x'] });
+  w.writeNote('wiki/a.md', 'v2', { area: 'health' });
+  expect(parseNote(readFileSync(join(dir, 'wiki/a.md'), 'utf8')).fm).toMatchObject({ sensitivity: 2, tags: ['x'] });
 });

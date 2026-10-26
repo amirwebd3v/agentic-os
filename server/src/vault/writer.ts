@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import type { Database } from 'better-sqlite3';
@@ -22,23 +22,32 @@ const isInside = (child: string, parent: string): boolean => {
 /** Vault-relative key with forward slashes, shared by writer and watcher so both address the same row. */
 export const noteKey = (vaultDir: string, absPath: string): string => relative(vaultDir, absPath).split(sep).join('/');
 
+// Per segment: drive letters and NTFS streams (`:`), 8.3 aliases like GIT~1, names Windows trims (`.git.`), device names.
+const BAD_SEGMENT = /[:\0]|~\d|[. ]$|^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i;
+
+/** True when an existing directory, after following junctions/symlinks, is the vault or inside it. */
+const dirInVault = (dir: string, root: string): boolean => {
+  const real = realpathSync(dir);
+  const realRoot = realpathSync(root);
+  return real === realRoot || isInside(real, realRoot);
+};
+
 /**
- * Resolves a vault-relative `.md` path, refusing anything that could land outside the vault:
- * absolute or drive paths, `..`, protected folders, and symlinked/junctioned parents that point elsewhere.
+ * Resolves a vault-relative `.md` path, refusing anything that could land outside the vault or in a hidden alias:
+ * absolute paths, `..`, Windows name tricks, protected folders, and parents that link elsewhere.
  */
 export function resolveNotePath(vaultDir: string, relPath: string): string {
   const root = resolve(vaultDir);
   const abs = resolve(root, relPath);
-  if (isAbsolute(relPath) || /^[a-zA-Z]:/.test(relPath) || relPath.includes('\0') || !isInside(abs, root)) {
-    throw new Error(`Path escapes the vault: ${relPath}`);
+  const segments = relPath.split(/[\\/]/).filter(Boolean);
+  if (isAbsolute(relPath) || segments.some((s) => BAD_SEGMENT.test(s)) || !isInside(abs, root)) {
+    throw new Error(`Path escapes the vault or has an unsafe name: ${relPath}`);
   }
   if (!abs.endsWith('.md')) throw new Error(`Only .md notes can be written: ${relPath}`);
-  if (PROTECTED_DIRS.has(noteKey(root, abs).split('/')[0]!)) throw new Error(`Protected vault folder: ${relPath}`);
+  if (PROTECTED_DIRS.has(noteKey(root, abs).split('/')[0]!.toLowerCase())) throw new Error(`Protected vault folder: ${relPath}`);
   let existing = dirname(abs);
   while (!existsSync(existing)) existing = dirname(existing);
-  const realRoot = realpathSync(root);
-  const realExisting = realpathSync(existing);
-  if (realExisting !== realRoot && !isInside(realExisting, realRoot)) throw new Error(`Path escapes the vault: ${relPath}`);
+  if (!dirInVault(existing, root)) throw new Error(`Path escapes the vault: ${relPath}`);
   return abs;
 }
 
@@ -53,13 +62,12 @@ export const vaultGit = async (vaultDir: string, ...args: string[]): Promise<str
 
 /** Stages everything and commits if anything changed. Never pushes: the vault has no remote. */
 export async function gitCommit(vaultDir: string, message: string): Promise<boolean> {
-  const git = (...args: string[]) => vaultGit(vaultDir, ...args);
-  await git('add', '-A');
+  await vaultGit(vaultDir, 'add', '-A');
   try {
-    await git('diff', '--cached', '--quiet');
+    await vaultGit(vaultDir, 'diff', '--cached', '--quiet');
     return false; // exit 0: nothing staged
   } catch {
-    await git('-c', 'user.name=Agentic OS', '-c', 'user.email=agentic-os@localhost', 'commit', '-q', '-m', message);
+    await vaultGit(vaultDir, '-c', 'user.name=Agentic OS', '-c', 'user.email=agentic-os@localhost', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message);
     return true;
   }
 }
@@ -95,10 +103,15 @@ export function createWriter({ db, vaultDir, commit = true }: { db: Database; va
      ON CONFLICT(path) DO UPDATE SET content_hash = excluded.content_hash, last_written_by = 'app'`,
   );
 
+  const refreshConflict = db.prepare(
+    `UPDATE approvals SET payload = ? WHERE action_type = 'vault_conflict' AND status = 'pending' AND json_extract(payload, '$.path') = ?`,
+  );
+  const insertConflict = db.prepare(`INSERT INTO approvals (action_type, payload, proposed_by) VALUES ('vault_conflict', ?, 'app')`);
+
   /**
-   * Writes a note unless it was changed outside the app. A note counts as changed when it exists but is untracked,
-   * was last written by the user (the watcher saw an edit), or no longer matches the hash the app last wrote.
-   * Then nothing is written: the proposal goes to the review queue as a `vault_conflict` approval.
+   * Writes a note only if the app is its last known author: a new path, or the app's own note still matching
+   * the hash it wrote. Anything else (untracked file, user edit seen by the watcher, changed hash, note deleted
+   * or renamed by the user) writes nothing and queues a `vault_conflict` approval, one pending per path.
    */
   function writeNote(relPath: string, body: string, input: NoteInput): 'written' | 'conflict' {
     const abs = resolveNotePath(root, relPath);
@@ -107,38 +120,39 @@ export function createWriter({ db, vaultDir, commit = true }: { db: Database; va
     const current = existsSync(abs) ? readFileSync(abs) : undefined;
     const now = new Date().toISOString();
 
-    const conflict = current && (!row || row.last_written_by === 'user' || row.content_hash !== sha256(current));
+    const ownedByApp = row?.last_written_by === 'app' && current !== undefined && row.content_hash === sha256(current);
+    const conflict = (row || current) && !ownedByApp;
     let previous: Partial<Frontmatter> = {};
-    if (current && !conflict) {
+    if (ownedByApp) {
       try {
-        previous = parseNote(current.toString('utf8')).fm; // keep id and created across rewrites
+        previous = parseNote(current.toString('utf8')).fm; // keeps id, created, sensitivity, tags across rewrites
       } catch {
         // the app's own note without valid frontmatter: start fresh
       }
     }
-    const text = stringifyNote(body, {
-      id: previous.id ?? randomUUID(),
-      tags: [],
-      sensitivity: 1,
-      source: 'app',
-      created: previous.created ?? now,
-      ...input,
-      updated: now,
-    });
+    const text = stringifyNote(body, { id: randomUUID(), tags: [], sensitivity: 1, source: 'app', created: now, ...previous, ...input, updated: now });
 
     if (conflict) {
-      db.prepare(`INSERT INTO approvals (action_type, payload, proposed_by) VALUES ('vault_conflict', ?, 'app')`).run(
-        JSON.stringify({ path: key, current_hash: sha256(current), content: text }),
-      );
-      audit(db, { actor: 'app', action: 'vault.conflict', args: { path: key } });
+      const payload = JSON.stringify({ path: key, current_hash: current ? sha256(current) : null, content: text });
+      db.transaction(() => {
+        if (refreshConflict.run(payload, key).changes === 0) insertConflict.run(payload);
+        audit(db, { actor: 'app', action: 'vault.conflict', args: { path: key } });
+      })();
       return 'conflict';
     }
 
-    const tmp = `${abs}.tmp`;
     mkdirSync(dirname(abs), { recursive: true });
-    // ponytail: an Obsidian save between the hash check and the rename is lost; add a re-check under a lock if that ever bites
+    if (!dirInVault(dirname(abs), root)) throw new Error(`Path escapes the vault: ${relPath}`); // a parent swapped for a link meanwhile
+    const tmp = `${abs}.${randomUUID()}.tmp`; // unique + 'wx': never follows or clobbers an existing file
+    // ponytail: an Obsidian save between the hash check and the rename is lost (sync code, microseconds); re-check under a lock if it ever bites
     try {
-      writeFileSync(tmp, text);
+      const fd = openSync(tmp, 'wx');
+      try {
+        writeFileSync(fd, text);
+        fsyncSync(fd); // a crash after rename must not leave an empty note
+      } finally {
+        closeSync(fd);
+      }
       db.transaction(() => {
         upsert.run(key, sha256(text));
         renameSync(tmp, abs); // throws → row rolls back

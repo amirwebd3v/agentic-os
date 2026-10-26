@@ -22,7 +22,7 @@ export function parseAreas(markdown: string): AreaDef[] {
   const areas: AreaDef[] = [];
   for (const raw of section.replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line.startsWith('-')) continue;
+    if (!/^([-*+]|\d+\.)\s/.test(line)) continue; // any list item, so a bullet in another style throws instead of archiving
     const m = LINE.exec(line);
     if (!m) throw new Error(`Malformed area line in CLAUDE.md (expected "- \`slug\` | Name | mode | description"): ${line}`);
     if (areas.some((a) => a.slug === m[1])) throw new Error(`Duplicate area slug in CLAUDE.md: ${m[1]}`);
