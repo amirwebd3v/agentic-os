@@ -36,8 +36,9 @@ Because nothing is calibrated yet, **every model filing is `flagged`** (M12). Th
 3. **Stage 1, decider:**
    ```ts
    questions: { area: { type: 'choice', instructions: 'Which life area is this conversation mainly about?',
-                        criteria: { ...activeTopLevelAreas /* slug → description */, none: 'None of these fit well' } } }
+                        criteria: { ...activeTopLevelAreas /* slug → description */ } } }
    ```
+   **No `none` / catch-all option** (verified live 2026-10-26: with one, Laya picked `none` at ~0.45 for clear EN/DE cases; without it, EN/DE/FA were all correct). "Doesn't fit" is expressed by low confidence, and Claude decides about new areas.
    Record the result in `decisions`. If the decider is down, skip to stage 2 with no hint.
 4. **Stage 2, Claude** (`tier: 'work'`, structured output). The system prompt contains the taxonomy and filing rules from `CLAUDE.md` and the decider's hint with its confidence. Schema:
    ```ts
@@ -53,7 +54,7 @@ Because nothing is calibrated yet, **every model filing is `flagged`** (M12). Th
      open_questions: z.array(z.string()), lessons: z.array(z.string()),
    });
    ```
-   When the decider says `none` or its confidence is under `escalateBelow` (0.6), the prompt explicitly asks Claude whether a new area is needed.
+   When the decider's confidence is under `escalateBelow` (0.6), the prompt explicitly asks Claude whether a new area is needed.
 5. **Apply the result:**
    - Set `sessions.area_id`, `area_confidence` (the decider confidence when Claude agrees, else null), `filing_status='flagged'`, and `title` if it's still the default.
    - **New top level:** an `approvals` row (`propose_category`). The session waits in `inbox` until you decide.
@@ -84,7 +85,7 @@ test('files session as flagged and writes summary note', async () => {
   expect(t.noteText()).toContain('use pinia');
 });
 test('new top-level area becomes an approval, never auto-created', async () => {
-  const t = await setupCategorize({ decider: { area: { choice: 'none', confidence: 0.7 } },
+  const t = await setupCategorize({ decider: { area: { choice: 'career', confidence: 0.3 } },
     llm: { area_slug: null, subarea: null, propose_top_level: { name: 'Job search', description: 'd', reason: 'r' }, title: 't',
            summary: 's', tags: [], decisions: [], todos: [], facts_about_me: [], preferences: [], open_questions: [], lessons: [] } });
   await t.run();
