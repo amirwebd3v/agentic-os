@@ -1,0 +1,11 @@
+{
+  "vaultDir": "E:/AgenticOS/vault",
+  "dataDir": "E:/AgenticOS/data",
+  "server": { "port": 3000 },
+  "llm": {
+    "baseURL": "https://api.anthropic.com",
+    "models": { "fast": "claude-haiku-5-5", "work": "claude-sonnet-5-5", "deep": "claude-opus-5-5" }
+  },
+  "decider": { "baseURL": "http://127.0.0.1:8009", "model": "multilingual", "escalateBelow": 0.6 },
+  "session": { "idleMinutes": 15 }
+}
