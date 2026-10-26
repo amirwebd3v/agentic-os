@@ -1,6 +1,7 @@
 // `pnpm smoke`: checks what the configured provider really supports (plan-review.md §2b) and writes
 // <dataDir>/provider-capabilities.json, which feature flags (cache, batch, structured) read.
 // Re-run whenever the provider or a model changes. Never prints the key.
+import assert, { AssertionError } from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
@@ -38,9 +39,6 @@ const { models } = config.llm;
 const TIMEOUT = { timeout: 60_000, maxRetries: 1 };
 
 const textOf = (m: Anthropic.Message) => m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
-const assert = (ok: unknown, why: string) => {
-  if (!ok) throw new Error(why);
-};
 
 const tools: Anthropic.Tool[] = [
   { name: 'get_weather', description: 'Current weather for a city', input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] } },
@@ -139,7 +137,7 @@ for (const name of CHECKS) {
       console.log(`${ICON.skip} ${name.padEnd(10)} ${err.message}`);
       continue;
     }
-    const e = mapError(err);
+    const e = err instanceof AssertionError ? { kind: 'assert', status: undefined, message: err.message } : mapError(err);
     results[name] = { result: 'fail', note: `${e.kind}${e.status ? ` ${e.status}` : ''}: ${e.message.slice(0, 160)}` };
   }
   console.log(`${ICON[results[name].result]} ${name.padEnd(10)} ${results[name].note ?? ''}`);

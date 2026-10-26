@@ -25,7 +25,7 @@ const kindOf = (status: number | undefined): LlmErrorKind => {
 /** Maps SDK errors (or anything with a numeric `status`) to a typed LlmError. No status means a network failure. */
 export function mapError(err: unknown): LlmError {
   if (err instanceof LlmError) return err;
-  if (err instanceof APIUserAbortError || (err instanceof Error && err.name === 'AbortError')) {
+  if (err instanceof APIUserAbortError) {
     return new LlmError('aborted', 'request aborted', undefined, { cause: err });
   }
   const status = (err as { status?: unknown } | null)?.status;
