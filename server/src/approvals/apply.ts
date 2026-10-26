@@ -49,7 +49,7 @@ const oneLine = (s: string) => s.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim(
 const maskComments = (s: string) => s.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '));
 
 /** Inserts an area line after the last item of `## Areas`, in the `- \`slug\` | Name | mode | description` form `parseAreas` reads. */
-export function appendAreaLine(markdown: string, slug: string, name: string, description: string): string {
+function appendAreaLine(markdown: string, slug: string, name: string, description: string): string {
   const lines = markdown.split('\n');
   const masked = maskComments(markdown).split('\n');
   const start = masked.findIndex((l) => /^## Areas[ \t]*\r?$/.test(l));
