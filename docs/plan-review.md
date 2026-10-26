@@ -582,7 +582,7 @@ data/                       # NOT in any git repo
 ### Scope moves
 - The summary note's decisions, to-dos and facts are written as **Markdown sections** in Week 1. The `items` table and its review flow arrive in Month 1.
 - Chat has **no tools** in Week 1. Brain tools come with the index in Month 1.
-- `eval_cases` and `eval_runs` were moved forward to Week 1 (migration `0002`) for the categorization eval.
+- `eval_cases` and `eval_runs` were moved forward to Week 1 (migration `0003`; `0002` went to W1-04 login tokens) for the categorization eval.
 
 ### New dependencies
 - W1-10 is blocked by W1-09 (decider) and W1-08 (vault writer).

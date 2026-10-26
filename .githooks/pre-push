@@ -1,4 +1,7 @@
 #!/bin/sh
 # Lesson 2026-10-26: a grep-filtered check once let a failing lint get pushed.
 # Every push must pass the full verify. Never bypass with --no-verify.
+# Lesson 2026-10-26: git exports GIT_DIR etc. to hooks; a test that spawned git inherited it
+# and set core.bare=true on the shared repo. Tests must never see git's hook environment.
+for v in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 pnpm verify || { echo "pre-push: 'pnpm verify' failed, push blocked." >&2; exit 1; }

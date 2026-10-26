@@ -61,13 +61,13 @@ Because nothing is calibrated yet, **every model filing is `flagged`** (M12). Th
    - `area_slug=null` with no proposal → `filing_status='inbox'`.
    - **Never** overwrite `filing_status='user'`.
 6. **Summary note:** `writeNote('wiki/<area>/sessions/<yyyy-mm-dd>-<slug>.md', …)` with frontmatter (`id`, `area`, `tags`, `sensitivity: 1`, `source: session:<id>`), sections for Summary, Decisions, To-dos, Facts about me, Preferences, Open questions, Lessons, and a `[[wikilink]]` to the area index note `wiki/<area>/_index.md` (created if missing). Re-categorizing the same session updates the same note, still under the conflict guard.
-7. **Eval script** `pnpm eval:categorize` runs on 10 fixture chats in `server/test/fixtures/sessions/*.json`, each `{ messages, expected_area }`. Write them in EN/DE, plus one Persian and one that should trigger a "new area" proposal. It calls the real decider and Claude and prints a confusion table. It also writes `eval_runs`, so add `eval_cases` and `eval_runs` to migration `0002`.
+7. **Eval script** `pnpm eval:categorize` runs on 10 fixture chats in `server/test/fixtures/sessions/*.json`, each `{ messages, expected_area }`. Write them in EN/DE, plus one Persian and one that should trigger a "new area" proposal. It calls the real decider and Claude and prints a confusion table. It also writes `eval_runs`, so add `eval_cases` and `eval_runs` to migration `0003` (`0002` is W1-04's login tokens).
 
 ## Files
 | File | Action |
 |---|---|
 | `server/src/jobs/{runner,categorize-session}.ts`, `server/src/chat/filing-schema.ts`, `server/src/vault/session-note.ts` | Create |
-| `server/migrations/0002_evals.sql`, `server/test/fixtures/sessions/*.json` (10), `scripts/eval-categorize.ts` | Create |
+| `server/migrations/0003_evals.sql`, `server/test/fixtures/sessions/*.json` (10), `scripts/eval-categorize.ts` | Create |
 | `server/test/categorize.test.ts` | Create (fake decider + fake LLM) |
 
 ## Tests — `server/test/categorize.test.ts`

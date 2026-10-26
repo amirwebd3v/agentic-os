@@ -92,6 +92,6 @@ describe('local hardening', () => {
 ```
 
 ## Acceptance criteria
-- [ ] Every test above passes.
-- [ ] `netstat -ano | findstr :3000` shows only `127.0.0.1:3000`.
-- [ ] Opening the printed URL logs you in, and the cookie survives restarts until it expires.
+- [x] Every test above passes.
+- [x] `netstat -ano | findstr :3000` shows only `127.0.0.1:3000`.
+- [x] Opening the printed URL logs you in, and the cookie survives restarts until it expires.
