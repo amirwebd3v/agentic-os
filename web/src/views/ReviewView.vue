@@ -10,12 +10,7 @@ const busy = ref(false);
 const message = ref<string | null>(null);
 
 const allSelected = computed(() => review.items.length > 0 && review.items.every((a) => selected.value.has(a.id)));
-const toggle = (id: number, on: boolean) => {
-  const next = new Set(selected.value);
-  if (on) next.add(id);
-  else next.delete(id);
-  selected.value = next;
-};
+const toggle = (id: number, on: boolean) => (on ? selected.value.add(id) : selected.value.delete(id));
 const toggleAll = () => (selected.value = allSelected.value ? new Set() : new Set(review.items.map((a) => a.id)));
 
 const run = async (fn: () => Promise<string[] | void>) => {
@@ -26,9 +21,7 @@ const run = async (fn: () => Promise<string[] | void>) => {
     if (failures?.length) message.value = `Some items couldn't be applied: ${failures.join('; ')}`;
   } catch (err) {
     message.value =
-      err instanceof ApiError && err.status === 409
-        ? "That item couldn't be applied (it changed, or the vault needs a fix). It's been refreshed; check it again."
-        : "Couldn't save the decision.";
+      err instanceof ApiError && err.detail && err.status < 500 ? `Couldn't apply that: ${err.detail}` : "Couldn't save the decision.";
   } finally {
     busy.value = false;
     selected.value = new Set([...selected.value].filter((id) => review.items.some((a) => a.id === id)));
@@ -41,7 +34,10 @@ const showMore = () => {
   void run(review.load);
 };
 
-onMounted(() => run(review.load));
+onMounted(() => {
+  review.showAll = false; // the daily cap applies again on each visit
+  void run(review.load);
+});
 </script>
 
 <template>
