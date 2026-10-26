@@ -1,11 +1,15 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
+import type Anthropic from '@anthropic-ai/sdk';
 import type { FastifyInstance, FastifyPluginAsync, FastifyServerOptions, InjectOptions } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { parseConfig } from '../src/config.ts';
 import { openDb } from '../src/db/index.ts';
 import type { Database } from '../src/db/index.ts';
+import type { ChatLlm } from '../src/chat/stream.ts';
 import { createLoginToken } from '../src/http/auth.ts';
+import { LlmError } from '../src/llm/errors.ts';
 
 /** In-memory database with all migrations applied. Extend here for per-ticket fixtures. */
 export function makeTestDb(): Database {
@@ -24,6 +28,8 @@ export interface TestApp {
   loginToken: string;
   /** Adds the host, origin, cookie and `x-aos` headers a logged-in browser tab would send. */
   authed: (req: InjectOptions) => InjectOptions;
+  /** Id of an area by slug (seeded by migration 0001). */
+  areaId: (slug: string) => number;
 }
 
 /** App on an in-memory db, port 3000, logging off. `plugins` mount under `/api` like in main.ts. */
@@ -44,5 +50,41 @@ export async function buildTestApp({
     ...req,
     headers: { host: HOST, origin: ORIGIN, cookie, 'x-aos': '1', ...req.headers },
   });
-  return { app, db, cookie, loginToken: createLoginToken(db), authed };
+  const areaId = (slug: string) => (db.prepare('SELECT id FROM areas WHERE slug = ?').get(slug) as { id: number }).id;
+  return { app, db, cookie, loginToken: createLoginToken(db), authed, areaId };
+}
+
+export interface FakeLlm extends ChatLlm {
+  /** Every `stream()` request, for prompt assertions. */
+  calls: Parameters<ChatLlm['stream']>[1][];
+}
+
+/**
+ * Stand-in for the LLM client's `stream()`: yields `chunks` `delayMs` apart, then `done`.
+ * `failAfter: n` throws an `overloaded` LlmError after n chunks; `configured: false` acts like a missing key.
+ * Honours the request's abort signal like the SDK does.
+ */
+export function fakeLlm(
+  chunks: string[],
+  { delayMs = 0, failAfter, configured = true }: { delayMs?: number; failAfter?: number; configured?: boolean } = {},
+): FakeLlm {
+  const calls: FakeLlm['calls'] = [];
+  return {
+    calls,
+    configured: () => configured,
+    async *stream(_deps, req) {
+      calls.push(req);
+      for (const [i, text] of chunks.entries()) {
+        if (i === failAfter) throw new LlmError('overloaded', 'fake failure', 529);
+        try {
+          await sleep(delayMs, undefined, { signal: req.signal });
+        } catch {
+          throw new LlmError('aborted', 'request aborted');
+        }
+        yield { type: 'text', text };
+      }
+      if (failAfter !== undefined && failAfter >= chunks.length) throw new LlmError('overloaded', 'fake failure', 529);
+      yield { type: 'done', usage: { input_tokens: 10, output_tokens: chunks.length, cache_read_input_tokens: 4 } as Anthropic.Usage };
+    },
+  };
 }
