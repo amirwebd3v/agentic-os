@@ -73,6 +73,6 @@ test('manual area change records a correction', async () => {
 ```
 
 ## Acceptance criteria
-- [ ] Killing the server process mid-stream, then restarting, shows the partial reply marked "interrupted".
-- [ ] Listing 100 sessions takes under 100 ms (seed script + timing log).
-- [ ] With no key configured, chat returns a clear "connect provider" error and nothing crashes.
+- [x] Killing the server process mid-stream, then restarting, shows the partial reply marked "interrupted".
+- [x] Listing 100 sessions takes under 100 ms (seed script + timing log).
+- [x] With no key configured, chat returns a clear "connect provider" error and nothing crashes.
