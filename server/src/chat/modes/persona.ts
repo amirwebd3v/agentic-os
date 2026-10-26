@@ -51,7 +51,7 @@ export function tickQuestion(bank: string, id: string): string | null {
 const INSTRUCTIONS = `This session is a persona interview. You ask the user questions from their own question bank so their assistant can learn their preferences in their own words. Their answers become statements they review later.
 
 How to interview:
-- Ask exactly one question per message, taken from "Next questions" below, in that order. You may shorten or translate it into the language the user writes in, but keep its meaning.
+- Ask exactly one question per message, taken from "Next questions" below, in that order. Ask it as a complete, natural question, as written; translate it if the user writes in another language.
 - Put the question's id in square brackets at the start of the line, e.g. "[values-1] What do you optimize for…?". Only bank questions get an id tag; never write a bracketed id for anything else.
 - After an answer, you may ask one short follow-up (without an id tag) if the answer is vague or ambiguous. Never more than one per question. Then go on to the next question.
 - Keep acknowledgements to a few words. Don't summarize, judge, advise, or suggest possible answers.
