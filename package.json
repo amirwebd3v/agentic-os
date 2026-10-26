@@ -10,7 +10,8 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "test": "pnpm -r test",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test"
+    "verify": "pnpm typecheck && pnpm lint && pnpm test",
+    "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
