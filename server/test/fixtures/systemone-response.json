@@ -1,0 +1,68 @@
+{
+  "model": "laya-rl-agent",
+  "answers": {
+    "area": {
+      "type": "choice",
+      "choice": "admin-finance",
+      "probabilities": {
+        "admin-finance": 0.9992,
+        "career": 0.0004,
+        "health": 0.0004
+      },
+      "confidence": 0.9935,
+      "answer_confidence": 0.9992,
+      "action": {
+        "act_probability": 1
+      },
+      "x_jev_confidence": 0.9988
+    },
+    "importance": {
+      "type": "score",
+      "score": 1.6727,
+      "legend": {
+        "0": "ignorable",
+        "1": "low",
+        "2": "normal",
+        "3": "high",
+        "4": "urgent"
+      },
+      "probabilities": {
+        "0": 0.0964,
+        "1": 0.4916,
+        "2": 0.1562,
+        "3": 0.1543,
+        "4": 0.1015
+      },
+      "confidence": 0.1393,
+      "answer_confidence": 0.4916,
+      "action": {
+        "act_probability": 1
+      },
+      "x_jev_confidence": 0.2786
+    },
+    "needs_action": {
+      "type": "noul",
+      "noul": 0.7001,
+      "confidence": 0.7001,
+      "answer_confidence": 0.7001,
+      "action": {
+        "act_probability": 1
+      }
+    }
+  },
+  "usage": {
+    "input_tokens": 233,
+    "output_tokens": 0,
+    "state_tokens": 39,
+    "state_tokens_dropped": 0,
+    "truncated": false,
+    "truncated_questions": []
+  },
+  "routing": {
+    "model": "multilingual",
+    "repo": "convaiinnovations/laya/multilingual",
+    "reason": "explicit model='multilingual'",
+    "detection": null,
+    "workflow": null
+  }
+}
