@@ -21,6 +21,17 @@ export type Provider = {
   status: 'ok' | 'not_configured' | 'error'; baseURL: string;
   models: { fast: string; work: string; deep: string };
 };
+// Payload shapes from docs/week1/review-contract.md. All text in them is model- or file-supplied: render as text only.
+export type Approval = {
+  id: number; proposed_by: string; created_at: string; original_text: string | null;
+} & (
+  | { action_type: 'propose_category'; payload: { slug: string; name: string; description: string; reason?: string; parent_slug: string | null; session_ids: number[] } }
+  | { action_type: 'vault_conflict'; payload: { path: string; current_hash: string | null; content: string }; current_text: string | null }
+  | { action_type: 'persona_statement'; payload: Record<string, unknown> }
+);
+export type ApprovalPage = { items: Approval[]; more: number; total: number };
+export type Decision = 'approve' | 'reject';
+export type BatchResult = { id: number; ok: boolean; error?: string }[];
 export type StreamErrorKind = 'auth' | 'rate_limit' | 'overloaded' | 'bad_request' | 'network';
 export type StreamEnd = { kind: 'done' } | { kind: 'aborted' } | { kind: 'error'; error: StreamErrorKind };
 
@@ -28,7 +39,8 @@ export type StreamEnd = { kind: 'done' } | { kind: 'aborted' } | { kind: 'error'
 export const needsLogin = ref(false);
 
 export class ApiError extends Error {
-  constructor(readonly status: number) {
+  /** `detail` is the server's `{ error }` text, shown to the user as plain text. */
+  constructor(readonly status: number, readonly detail?: string) {
     super(`HTTP ${status}`);
   }
 }
@@ -42,7 +54,10 @@ async function call(method: string, path: string, body?: unknown, signal?: Abort
     signal: signal ?? null,
   });
   if (res.status === 401) needsLogin.value = true;
-  if (!res.ok) throw new ApiError(res.status);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+    throw new ApiError(res.status, typeof body?.error === 'string' ? body.error : undefined);
+  }
   return res;
 }
 const json = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
@@ -57,6 +72,10 @@ export const getSession = (id: number) =>
   json<{ session: SessionSummary; messages: Message[] }>('GET', `/api/sessions/${id}`);
 export const patchSession = (id: number, patch: { title?: string; area_id?: number }) =>
   json<SessionSummary>('PATCH', `/api/sessions/${id}`, patch);
+export const listApprovals = (all = false) => json<ApprovalPage>('GET', `/api/approvals?status=pending${all ? '&all=true' : ''}`);
+export const decideApproval = (id: number, decision: Decision, final_text?: string) =>
+  json<{ id: number; status: string }>('POST', `/api/approvals/${id}/decide`, final_text === undefined ? { decision } : { decision, final_text });
+export const batchApprovals = (ids: number[], decision: Decision) => json<BatchResult>('POST', '/api/approvals/batch', { ids, decision });
 
 type StreamHandlers = {
   start(ids: { user_message_id: number; assistant_message_id: number }): void;

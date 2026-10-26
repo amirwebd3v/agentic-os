@@ -14,7 +14,7 @@ The `approvals` table (migration `0001`) is the only hand-off between the parts 
 
 ## `propose_category` approval
 1. Insert the area as `status='active'`, `created_by='user'`, with `parent_id` taken from `parent_slug`. Use the payload's `slug` as-is. **W1-10 makes the slug** (lowercase, `a-z0-9-`, unique against `areas.slug`), so W1-11 never slugifies.
-2. For a **top-level** area, append `- <slug>: <description>` to the `## Areas` list of the vault's `CLAUDE.md` through the W1-08 writer (`createWriter`), so a later boot sync keeps it.
+2. For a **top-level** area, append ``- `<slug>` | <name> | do | <description>`` (the line format `parseAreas` reads; any other format stops the boot sync) to the `## Areas` list of the vault's `CLAUDE.md`, so a later boot sync keeps it. `CLAUDE.md` is user-owned and untracked, so `createWriter.writeNote` would only raise a `vault_conflict`. Instead, W1-11 writes it hash-checked (temp file + rename inside the approval's transaction), keeps `vault_notes.last_written_by='user'`, and skips the append when the slug is already listed. If `CLAUDE.md` is missing or malformed, the approval fails and stays `pending`.
 3. Re-file every session in `session_ids` that's still `filing_status='inbox'` by calling `enqueue(db, 'categorize_session', 'recategorize:<sessionId>:<approvalId>', { sessionId, upToMessageId })`, where `upToMessageId` is that session's latest message id. W1-10's job handler does the rest.
 4. **Reject** leaves those sessions in `inbox`.
 
