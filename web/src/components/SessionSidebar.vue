@@ -3,10 +3,12 @@ import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { SessionMode, SessionSummary } from '../api';
 import { useAreasStore } from '../stores/areas';
+import { useReviewStore } from '../stores/review';
 import { useSessionsStore } from '../stores/sessions';
 
 const sessions = useSessionsStore();
 const areas = useAreasStore();
+const review = useReviewStore();
 const router = useRouter();
 const mode = ref<SessionMode>('chat');
 const failed = ref<string | null>(null);
@@ -73,6 +75,9 @@ const refile = (s: SessionSummary, e: Event) => {
         </li>
       </ul>
     </section>
-    <RouterLink to="/review" class="review">Review</RouterLink>
+    <RouterLink to="/review" class="review">
+      Review
+      <span v-if="review.total" class="badge count">{{ review.total }}<span class="sr-only"> pending</span></span>
+    </RouterLink>
   </nav>
 </template>
