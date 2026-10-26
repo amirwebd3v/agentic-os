@@ -8,7 +8,7 @@ const SERVICE = 'agentic-os';
 export const SECRET_NAMES = ['anthropic', 'laya'] as const;
 export type SecretName = (typeof SECRET_NAMES)[number];
 
-export const ENV_KEYS: Record<SecretName, string> = { anthropic: 'ANTHROPIC_API_KEY', laya: 'LAYA_API_KEY' };
+const ENV_KEYS: Record<SecretName, string> = { anthropic: 'ANTHROPIC_API_KEY', laya: 'LAYA_API_KEY' };
 
 export const isSecretName = (name: string): name is SecretName => (SECRET_NAMES as readonly string[]).includes(name);
 

@@ -7,7 +7,7 @@ import { audit } from '../db/audit.ts';
 import type { Database } from '../db/index.ts';
 import type { Job } from '../db/jobs.ts';
 import { structured } from '../llm/client.ts';
-import { transcript } from './categorize-session.ts';
+import { Payload, sessionMessages, transcript } from './categorize-session.ts';
 
 export const PersonaExtraction = z.object({
   statements: z.array(
@@ -22,7 +22,6 @@ export interface ExtractDeps {
   llm?: typeof structured;
 }
 
-const Payload = z.object({ sessionId: z.number().int().positive(), upToMessageId: z.number().int().positive() });
 
 const RULES = `You turn a persona interview into short statements about the user, which the user reviews before they are kept.
 
@@ -66,12 +65,7 @@ export function extractPersona({ db, config, llm = structured }: ExtractDeps) {
         .filter((id) => bank.has(id) && !proposed.has(id))
         .map((id) => [id, bank.get(id)!]),
     );
-    const msgs = db
-      .prepare(
-        `SELECT role, content FROM messages WHERE session_id = ? AND id <= ? AND role IN ('user', 'assistant')
-           AND status != 'streaming' AND content != '' ORDER BY id`,
-      )
-      .all(sessionId, upToMessageId) as { role: 'user' | 'assistant'; content: string }[];
+    const msgs = sessionMessages(db, sessionId, upToMessageId);
     const said = norm(msgs.filter((m) => m.role === 'user').map((m) => m.content).join('\n'));
 
     let statements: z.infer<typeof PersonaExtraction>['statements'] = [];

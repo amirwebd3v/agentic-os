@@ -72,6 +72,6 @@ test('stale proposals expire, conflicts do not', async () => {
 ```
 
 ## Acceptance criteria
-- [ ] Approving a proposed top-level area activates it, updates `CLAUDE.md`, and re-files the waiting inbox sessions.
-- [ ] Editing before approving stores `edit_distance`.
-- [ ] No more than 15 items are shown per day. Batch reject works.
+- [x] Approving a proposed top-level area activates it, updates `CLAUDE.md`, and re-files the waiting inbox sessions. (See docs/week1/acceptance.md.)
+- [x] Editing before approving stores `edit_distance`. (See docs/week1/acceptance.md.)
+- [x] No more than 15 items are shown per day. Batch reject works. (See docs/week1/acceptance.md.)
