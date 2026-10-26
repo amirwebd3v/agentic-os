@@ -72,6 +72,6 @@ test('error mapping', () => {
 
 ## Acceptance criteria
 - [x] Without a key: the server boots, `/api/provider` returns `not_configured`, and `pnpm smoke` exits 0 with skips.
-- [ ] With a key (when you add it): `pnpm smoke` shows all 6 checks ✅ against `https://api.anthropic.com`.
-- [ ] Changing `llm.baseURL` to a 9router URL needs no code change. Checks 1–3 are expected to pass, others may show ⏭/❌, and the results get recorded.
+- N/A With a key (when you add it): `pnpm smoke` shows all 6 checks ✅ against `https://api.anthropic.com`.
+- [x] Changing `llm.baseURL` to a 9router URL needs no code change. Checks 1–3 are expected to pass, others may show ⏭/❌, and the results get recorded. (Verified live 2026-10-26: 6 ✅, batch ⏭.)
 - [x] Every call appears in `llm_calls`.

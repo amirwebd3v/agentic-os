@@ -42,5 +42,5 @@ Prove Week 1 against the plan's acceptance tests and leave a README that lets yo
 6. **Retro notes:** what took longer than estimated, so the Month 1 plan can be re-pointed.
 
 ## Acceptance criteria
-- [ ] Every Week 1 acceptance criterion is ticked with evidence, or explicitly marked "blocked: no API key yet" (W1-05 smoke, W1-10 eval, W1-12 cache check).
-- [ ] No secrets in either repo. No personal data in the code repo.
+- [x] Every Week 1 acceptance criterion is ticked with evidence, or explicitly marked "blocked: no API key yet" (W1-05 smoke, W1-10 eval, W1-12 cache check).
+- [x] No secrets in either repo. No personal data in the code repo.

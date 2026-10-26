@@ -22,14 +22,21 @@ const kindOf = (status: number | undefined): LlmErrorKind => {
   return 'bad_request';
 };
 
-/** Maps SDK errors (or anything with a numeric `status`) to a typed LlmError. No status means a network failure. */
+/**
+ * Maps SDK errors (or anything with a numeric `status`) to a typed LlmError. No status means a network failure.
+ * Without a status the error is local (connection, or parsing truncated model output), and its message may quote
+ * model text, i.e. personal data. So only its type name is kept, and no `cause`, because the message flows into
+ * `llm_calls.error`, the job's error and the log.
+ */
 export function mapError(err: unknown): LlmError {
   if (err instanceof LlmError) return err;
   if (err instanceof APIUserAbortError) {
     return new LlmError('aborted', 'request aborted', undefined, { cause: err });
   }
   const status = (err as { status?: unknown } | null)?.status;
-  const code = typeof status === 'number' ? status : undefined;
-  const message = err instanceof Error ? err.message : `provider error${code ? ` ${code}` : ''}`;
-  return new LlmError(kindOf(code), message, code, { cause: err });
+  if (typeof status !== 'number') {
+    return new LlmError('network', `${err instanceof Error ? err.name : 'error'} (no response from provider)`);
+  }
+  const message = err instanceof Error ? err.message.slice(0, 300) : `provider error ${status}`;
+  return new LlmError(kindOf(status), message, status, { cause: err });
 }

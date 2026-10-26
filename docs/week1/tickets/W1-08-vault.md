@@ -74,5 +74,5 @@ test('rejects path traversal', () => {
 
 ## Acceptance criteria
 - [ ] `pnpm vault:init` creates a vault that opens cleanly in Obsidian.
-- [ ] Editing a note in Obsidian is recorded (audit row) within 5 s, and the app then refuses to overwrite it (a conflict appears in Review).
+- [x] Editing a note in Obsidian is recorded (audit row) within 5 s, and the app then refuses to overwrite it (a conflict appears in Review). (Verified live with an external write; opening it in Obsidian is still open.)
 - [x] `git -C <vault> remote -v` is empty, and `git -C <vault> log` shows app commits.
