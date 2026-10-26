@@ -8,8 +8,11 @@ import { approvalRoutes } from './http/routes/approvals.ts';
 import { areaRoutes } from './http/routes/areas.ts';
 import { providerRoutes } from './http/routes/provider.ts';
 import { sessionRoutes } from './http/routes/sessions.ts';
+import { categorizeSession } from './jobs/categorize-session.ts';
+import { startRunner } from './jobs/runner.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
+import { createWriter } from './vault/writer.ts';
 
 // Feature plugins, mounted under /api behind the session check. One line per ticket.
 const plugins: FastifyPluginAsync[] = [providerRoutes, areaRoutes, sessionRoutes(), approvalRoutes()];
@@ -24,5 +27,11 @@ try {
   app.log.error(`Area sync skipped (run \`pnpm vault:init\` if the vault is missing): ${(err as Error).message}`);
 }
 watchVault({ db, vaultDir: config.vaultDir });
+const writer = createWriter({ db, vaultDir: config.vaultDir });
+const stopRunner = startRunner(db, { categorize_session: categorizeSession({ db, config, writer }) }, (err) => app.log.error(err, 'job failed'));
+app.addHook('onClose', async () => {
+  await stopRunner();
+  await writer.flush();
+});
 await app.listen({ host: '127.0.0.1', port: config.server.port });
 console.log(`Open ${loginUrl(config.server.port, createLoginToken(db))}`);

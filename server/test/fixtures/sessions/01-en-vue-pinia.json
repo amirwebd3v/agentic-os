@@ -1,0 +1,25 @@
+{
+  "expected_area": "software-development",
+  "messages": [
+    {
+      "role": "user",
+      "content": "My Vue 3 component loses its form state whenever I navigate to another route and back. I'm using the Composition API with refs inside the component."
+    },
+    {
+      "role": "assistant",
+      "content": "Component-local refs are recreated when the route component is unmounted. Either wrap the router-view in KeepAlive or move the state into a Pinia store so it outlives the component."
+    },
+    {
+      "role": "user",
+      "content": "A Pinia store sounds cleaner. Should I use the setup-store syntax or the options syntax, given the rest of the app is TypeScript?"
+    },
+    {
+      "role": "assistant",
+      "content": "Setup stores fit TypeScript and the Composition API best: define refs and functions in defineStore('form', () => {...}) and return them. Types are inferred automatically."
+    },
+    {
+      "role": "user",
+      "content": "Great, I'll go with a setup store and add a reset() action for when the form is submitted."
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "expected_area": "home-household",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Wir ziehen Ende des Monats in eine neue Wohnung. Die Waschmaschine muss mit, aber ich weiß nicht, wie man die Transportsicherung einbaut."
+    },
+    {
+      "role": "assistant",
+      "content": "Die Transportschrauben gehören hinten in die Maschine. Wasser vorher über das Flusensieb ablassen, Schläuche abklemmen und die Schrauben eindrehen, damit die Trommel fixiert ist."
+    },
+    {
+      "role": "user",
+      "content": "Und was sollte ich vor dem Umzug noch erledigen? Strom ummelden, Internet?"
+    },
+    {
+      "role": "assistant",
+      "content": "Stromzähler am Auszugs- und Einzugstag fotografieren, Internet-Umzug mindestens vier Wochen vorher beauftragen, Nachsendeauftrag stellen und Kartons pro Zimmer beschriften."
+    },
+    {
+      "role": "user",
+      "content": "Gut, ich mache eine Checkliste und bestelle heute noch die Umzugskartons."
+    }
+  ]
+}
