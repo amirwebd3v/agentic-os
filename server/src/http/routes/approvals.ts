@@ -82,14 +82,17 @@ export const approvalRoutes =
       },
     );
 
+    // One git process at a time, so a batch approve doesn't fight over index.lock.
+    // ponytail: the writer has its own chain, so the two can still collide; a failed commit is caught by the next `add -A`
+    let committing: Promise<unknown> = Promise.resolve();
     const apply = (id: number, decision: Decision, finalText?: string) => {
-      const result = decide(db, vaultDir, id, decision, finalText);
-      if (result.wrote) {
-        void gitCommit(vaultDir, `aos: approval ${id}\n\n${result.wrote}`).catch((err: unknown) =>
-          api.log.warn(`vault commit failed: ${(err as Error).message}`),
-        );
+      const { status, wrote } = decide(db, vaultDir, id, decision, finalText);
+      if (wrote) {
+        committing = committing
+          .then(() => gitCommit(vaultDir, `aos: approval ${id}\n\n${wrote}`))
+          .catch((err: unknown) => api.log.warn(`vault commit failed: ${(err as Error).message}`));
       }
-      return result.status;
+      return status;
     };
     const errorOf = (err: unknown) => {
       if (err instanceof ApprovalError) return err;

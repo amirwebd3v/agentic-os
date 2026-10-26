@@ -31,8 +31,10 @@ async function setupApprovals() {
         )
         .get(type, JSON.stringify(payload), original, createdAt ?? null) as { id: number }
     ).id;
-  const category = (slug: string, extra: object = {}) =>
-    propose('propose_category', { slug, name: 'Job search', description: 'Applying for jobs', reason: 'r', parent_slug: null, session_ids: [], ...extra }, 'Applying for jobs');
+  const category = (slug: string, extra: Record<string, unknown> = {}) => {
+    const payload = { slug, name: 'Job search', description: 'Applying for jobs', reason: 'r', parent_slug: null, session_ids: [], ...extra };
+    return propose('propose_category', payload, payload.description); // contract: original_text = description
+  };
   const decide = (id: number, body: object) => t.app.inject(t.authed({ method: 'POST', url: `/api/approvals/${id}/decide`, payload: body }));
   const row = (id: number) => db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as Record<string, unknown>;
   const area = (slug: string) => db.prepare('SELECT * FROM areas WHERE slug = ?').get(slug) as Record<string, unknown> | undefined;
@@ -206,4 +208,47 @@ test('approvals need a session', async () => {
   const t = await setupApprovals();
   const res = await t.app.inject({ url: '/api/approvals', headers: { host: '127.0.0.1:3000' } });
   expect(res.statusCode).toBe(401);
+});
+
+test('the new line never lands in a comment, and hostile text can’t break the Areas list', async () => {
+  const t = await setupApprovals();
+  const md = join(t.vault, 'CLAUDE.md');
+  writeFileSync(md, readFileSync(md, 'utf8').replace('\n## Area modes', '<!--\n- `example` | Example | do | commented out\n-->\n\n## Area modes'));
+  const id = t.category('job-search', { description: '<<!--!-- x --->-> | do | y' });
+  expect((await t.decide(id, { decision: 'approve' })).statusCode).toBe(200);
+  const areas = parseAreas(readFileSync(md, 'utf8'));
+  expect(areas).toHaveLength(11);
+  expect(areas.at(-1)).toMatchObject({ slug: 'job-search', description: '!--!-- x ---- | do | y' });
+
+  const blank = t.category('blank', { name: '   ' }); // fails the payload schema: 500, stays pending, can still be rejected
+  expect((await t.decide(blank, { decision: 'approve' })).statusCode).toBe(500);
+  expect((await t.decide(blank, { decision: 'reject' })).statusCode).toBe(200);
+});
+
+test('a CRLF CLAUDE.md keeps its line endings', async () => {
+  const t = await setupApprovals();
+  const md = join(t.vault, 'CLAUDE.md');
+  writeFileSync(md, readFileSync(md, 'utf8').replace(/\r?\n/g, '\r\n'));
+  await t.decide(t.category('job-search'), { decision: 'approve' });
+  const text = readFileSync(md, 'utf8');
+  expect(text).toContain('- `job-search` | Job search | do | Applying for jobs\r\n');
+  expect(text.replace(/\r\n/g, '')).not.toContain('\n');
+});
+
+test('a missing CLAUDE.md is a 409 with a reason, and the row stays pending', async () => {
+  const t = await setupApprovals();
+  rmSync(join(t.vault, 'CLAUDE.md'));
+  const id = t.category('job-search');
+  const res = await t.decide(id, { decision: 'approve' });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toMatch(/CLAUDE\.md is missing/);
+  expect(t.row(id).status).toBe('pending');
+});
+
+test('a malformed conflict payload can still be rejected; over-long originals can’t be edited', async () => {
+  const t = await setupApprovals();
+  const bad = t.propose('vault_conflict', { nope: true });
+  expect((await t.decide(bad, { decision: 'reject' })).json()).toEqual({ id: bad, status: 'rejected' });
+  const long = t.propose('propose_category', { slug: 'x' }, 'a'.repeat(5000));
+  expect((await t.decide(long, { decision: 'approve', final_text: 'b' })).statusCode).toBe(400);
 });

@@ -31,7 +31,7 @@ export type Approval = {
 );
 export type ApprovalPage = { items: Approval[]; more: number; total: number };
 export type Decision = 'approve' | 'reject';
-export type BatchResult = { id: number; ok: boolean; status?: string; error?: string }[];
+export type BatchResult = { id: number; ok: boolean; error?: string }[];
 export type StreamErrorKind = 'auth' | 'rate_limit' | 'overloaded' | 'bad_request' | 'network';
 export type StreamEnd = { kind: 'done' } | { kind: 'aborted' } | { kind: 'error'; error: StreamErrorKind };
 
@@ -39,7 +39,8 @@ export type StreamEnd = { kind: 'done' } | { kind: 'aborted' } | { kind: 'error'
 export const needsLogin = ref(false);
 
 export class ApiError extends Error {
-  constructor(readonly status: number) {
+  /** `detail` is the server's `{ error }` text, shown to the user as plain text. */
+  constructor(readonly status: number, readonly detail?: string) {
     super(`HTTP ${status}`);
   }
 }
@@ -53,7 +54,10 @@ async function call(method: string, path: string, body?: unknown, signal?: Abort
     signal: signal ?? null,
   });
   if (res.status === 401) needsLogin.value = true;
-  if (!res.ok) throw new ApiError(res.status);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+    throw new ApiError(res.status, typeof body?.error === 'string' ? body.error : undefined);
+  }
   return res;
 }
 const json = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
