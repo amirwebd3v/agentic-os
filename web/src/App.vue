@@ -3,6 +3,7 @@ import { onMounted } from 'vue';
 import { needsLogin } from './api';
 import { useAreasStore } from './stores/areas';
 import { useProviderStore } from './stores/provider';
+import { useReviewStore } from './stores/review';
 import { useSessionsStore } from './stores/sessions';
 import ProviderBanner from './components/ProviderBanner.vue';
 import SessionSidebar from './components/SessionSidebar.vue';
@@ -10,9 +11,10 @@ import SessionSidebar from './components/SessionSidebar.vue';
 const provider = useProviderStore();
 const areas = useAreasStore();
 const sessions = useSessionsStore();
+const review = useReviewStore();
 
 // A 401 sets needsLogin; any other failure just leaves that part empty.
-onMounted(() => Promise.allSettled([provider.load(), areas.load(), sessions.load()]));
+onMounted(() => Promise.allSettled([provider.load(), areas.load(), sessions.load(), review.load()]));
 </script>
 
 <template>
