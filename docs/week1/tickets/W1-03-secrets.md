@@ -51,5 +51,5 @@ test('missing secret is null, set secret round-trips', () => {
 ```
 
 ## Acceptance criteria
-- [ ] `pnpm secrets set anthropic` stores the key, and it appears in Windows Credential Manager under `agentic-os`.
-- [ ] `git grep -i "sk-ant"` finds nothing. Logs never show a key.
+- [x] `pnpm secrets set anthropic` stores the key, and it appears in Windows Credential Manager under `agentic-os`. (Verified with a dummy `laya` value, entry `laya.agentic-os`, since deleted. You add the real `anthropic` key.)
+- [x] `git grep -i "sk-ant"` finds nothing. Logs never show a key.

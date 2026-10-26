@@ -3,12 +3,13 @@ import { SECRET_NAMES, getSecret, isSecretName, setSecret } from '../secrets.ts'
 
 const USAGE = `Usage:
   pnpm secrets set <${SECRET_NAMES.join('|')}>   prompts for the value (hidden)
-  pnpm secrets status                  shows which secrets are set`;
+  pnpm secrets status                  shows which secrets are set
+Without a TTY (e.g. Git Bash) the value is read from stdin: pipe from a file or Get-Clipboard, never a literal.`;
 
 /** Reads one line without echoing it. The value never touches argv, so it can't land in shell history. */
 async function readHidden(prompt: string): Promise<string> {
   const { stdin, stderr } = process;
-  if (!stdin.isTTY) return (await text(stdin)).replace(/\r?\n$/, ''); // piped input: nothing to echo
+  if (!stdin.isTTY) return text(stdin); // piped input: nothing to echo; caller trims
   stderr.write(prompt);
   stdin.setRawMode(true);
   stdin.setEncoding('utf8');
@@ -23,6 +24,7 @@ async function readHidden(prompt: string): Promise<string> {
       fn();
     };
     const onData = (chunk: string) => {
+      if (chunk.startsWith('\u001b')) return; // arrow/function keys would otherwise leak "[A" into the value
       for (const ch of chunk) {
         if (ch === '\r' || ch === '\n') return done(() => resolve(value));
         if (ch === '\u0003') return done(() => reject(new Error('Cancelled')));
