@@ -41,4 +41,4 @@ Every session reads this file automatically, including parallel sessions in `.cl
 - 2026-10-26: very long temp paths break native installs. Verify a PR in the session's own worktree instead.
 - 2026-10-26: claude-mem's worker needs Bun at `~/.bun/bin/bun.exe`. If memory tools fail, check `~/.claude-mem/logs` first.
 - 2026-10-26: Claude Code's inherited `ANTHROPIC_BASE_URL` would override the app's 9router URL. → rule 3, with a test.
-- 2026-10-26: git hooks export `GIT_DIR`. A `git -C <other repo>` run inside one (vault tests under pre-push) retargeted the code repo, and `git init` set `core.bare=true` for every worktree. → `vaultGit()` strips `GIT_*`, with a test. Spawn git for any other repo with a clean env.
+- 2026-10-26: git hooks export `GIT_DIR`. A `git -C <other repo>` run inside one (vault tests under pre-push) retargeted the code repo, and `git init` set `core.bare=true` for every worktree. → `vaultGit()` strips `GIT_*` (with a test) and `pre-push` unsets `GIT_*` before verify. Spawn git for any other repo with a clean env.

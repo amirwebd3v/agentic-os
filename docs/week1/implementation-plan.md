@@ -83,7 +83,7 @@ Status lives only in the [GitHub Project](https://github.com/users/amirwebd3v/pr
 
 **Coordination notes:**
 - `server/test/helpers.ts` (`buildTestApp`, `makeTestDb`, fakes) is shared. Create it in W1-02 and extend it per ticket, so parallel tickets don't conflict.
-- Migrations are numbered. W1-02 owns `0001`, W1-10 owns `0002`. Any other schema change gets the next number. Never edit an applied migration.
+- Migrations are numbered. W1-02 owns `0001`, W1-04 owns `0002` (login tokens), W1-10 owns `0003`. Any other schema change gets the next number. Never edit an applied migration.
 - You're working solo, so the "parallel" waves mean the order is flexible, not that separate agents are needed. Run one ticket at a time by following [[Workflow]] (fullstack-dev-skills + ponytail + claude-mem).
 
 ## Skill recommendations
