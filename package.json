@@ -14,7 +14,8 @@
     "verify": "pnpm typecheck && pnpm lint && pnpm test",
     "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts",
     "dev": "pnpm --filter @agentic-os/server exec tsx watch src/main.ts --dev",
-    "login-url": "pnpm --filter @agentic-os/server exec tsx src/cli/login-url.ts"
+    "login-url": "pnpm --filter @agentic-os/server exec tsx src/cli/login-url.ts",
+    "smoke": "pnpm --filter @agentic-os/server exec tsx src/cli/provider-smoke.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
