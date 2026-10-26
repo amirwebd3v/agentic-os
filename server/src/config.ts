@@ -1,9 +1,32 @@
 import { readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseEnv } from 'node:util';
 import { z } from 'zod';
 
 export const repoRoot = resolve(fileURLToPath(import.meta.url), '../../..');
+
+export type AppEnv = Record<string, string | undefined>;
+
+/**
+ * Reads the repo-root `.env`. Only this file counts, never the inherited process env:
+ * Claude Code exports its own ANTHROPIC_BASE_URL, which must not leak into the app.
+ * `AOS_ENV_FILE` points elsewhere; empty disables it (the test runner sets that).
+ */
+export function readAppEnv(file: string = process.env.AOS_ENV_FILE ?? resolve(repoRoot, '.env')): AppEnv {
+  if (!file) return {};
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw err;
+  }
+  return parseEnv(text) as AppEnv;
+}
+
+// The SDK appends /v1/messages itself, so a base URL ending in /v1 would double it.
+const stripV1 = (url: string): string => url.replace(/\/+$/, '').replace(/\/v1$/, '');
 
 // Sync clients corrupt SQLite WAL files and fight git locks.
 const dataPath = z
@@ -44,9 +67,17 @@ const isInside = (child: string, parent: string): boolean => {
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel));
 };
 
-/** Validates raw config; personal data must live outside the code repo so it can never be committed. */
-export function parseConfig(raw: unknown, root: string = repoRoot): Config {
+/**
+ * Validates raw config, then applies `.env` overrides (they beat agentic-os.json).
+ * Personal data must live outside the code repo so it can never be committed.
+ */
+export function parseConfig(raw: unknown, root: string = repoRoot, env: AppEnv = {}): Config {
   const config = ConfigSchema.parse(raw);
+  const { llm } = config;
+  if (env.ANTHROPIC_BASE_URL) llm.baseURL = z.url().parse(stripV1(env.ANTHROPIC_BASE_URL));
+  llm.models.fast = env.ANTHROPIC_DEFAULT_HAIKU_MODEL || llm.models.fast;
+  llm.models.work = env.ANTHROPIC_MODEL || env.ANTHROPIC_DEFAULT_SONNET_MODEL || llm.models.work;
+  llm.models.deep = env.ANTHROPIC_DEFAULT_OPUS_MODEL || llm.models.deep;
   for (const key of ['vaultDir', 'dataDir'] as const) {
     if (isInside(config[key], root)) throw new Error(`${key} must be outside the code repo (${root})`);
   }
@@ -66,5 +97,5 @@ export function loadConfig(path: string = resolve(repoRoot, 'agentic-os.json')):
   } catch (err) {
     throw new Error(`Invalid JSON in ${path}: ${(err as Error).message}`, { cause: err });
   }
-  return parseConfig(raw);
+  return parseConfig(raw, repoRoot, readAppEnv());
 }
