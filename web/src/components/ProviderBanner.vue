@@ -4,11 +4,15 @@ import { useProviderStore } from '../stores/provider';
 
 const provider = useProviderStore();
 const busy = ref(false);
+const failed = ref(false);
 
 async function reload() {
   busy.value = true;
+  failed.value = false;
   try {
     await provider.reload();
+  } catch {
+    failed.value = true;
   } finally {
     busy.value = false;
   }
@@ -25,6 +29,7 @@ async function reload() {
       <strong>The provider rejected the key.</strong> Fix <code>ANTHROPIC_API_KEY</code> in <code>.env</code>, then
       Reload.
     </p>
+    <span v-if="failed" class="error">Reload failed. Is the server running?</span>
     <button type="button" :disabled="busy" @click="reload">Reload</button>
   </div>
 </template>

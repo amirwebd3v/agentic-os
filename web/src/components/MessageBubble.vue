@@ -17,7 +17,7 @@ const html = computed(() => renderMarkdown(props.message.content));
     <div
       v-else
       class="md"
-      :aria-live="message.status === 'streaming' ? 'polite' : undefined"
+      aria-live="polite"
       :aria-busy="message.status === 'streaming'"
       v-html="html"
     />

@@ -95,7 +95,7 @@ export async function streamMessage(
         else if (typeof ev.user_message_id === 'number' && typeof ev.assistant_message_id === 'number')
           on.start({ user_message_id: ev.user_message_id, assistant_message_id: ev.assistant_message_id });
         else if (ev.done === true) return { kind: 'done' };
-        else if (ev.error) return { kind: 'error', error: (ev.error as { kind: StreamErrorKind }).kind };
+        else if (ev.error) return { kind: 'error', error: (ev.error as { kind?: StreamErrorKind }).kind ?? 'network' };
       }
     }
     return { kind: 'error', error: 'network' }; // closed without done/error
