@@ -46,8 +46,8 @@ export function getLlm(config: LlmConfig): Anthropic | null {
   if (!key) return (cached = null);
   const { baseURL } = config.llm;
   if (cached?.key !== key || cached.baseURL !== baseURL) {
-    // baseURL comes from config (.env), never the SDK's ANTHROPIC_BASE_URL env fallback.
-    cached = { key, baseURL, client: new Anthropic({ apiKey: key, baseURL, maxRetries: MAX_RETRIES }) };
+    // Everything explicit: the SDK must never fall back to ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN from process.env.
+    cached = { key, baseURL, client: new Anthropic({ apiKey: key, authToken: null, baseURL, maxRetries: MAX_RETRIES }) };
     authFailed = false;
   }
   return cached.client;
