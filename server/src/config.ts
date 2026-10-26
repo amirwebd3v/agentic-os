@@ -64,7 +64,7 @@ export function loadConfig(path: string = resolve(repoRoot, 'agentic-os.json')):
   try {
     raw = JSON.parse(text);
   } catch (err) {
-    throw new Error(`Invalid JSON in ${path}: ${(err as Error).message}`);
+    throw new Error(`Invalid JSON in ${path}: ${(err as Error).message}`, { cause: err });
   }
   return parseConfig(raw);
 }

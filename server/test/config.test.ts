@@ -25,8 +25,8 @@ describe('config', () => {
     expect(() => parseConfig({ ...dirs, dataDir: './data' })).toThrow(/absolute/);
   });
 
-  test('allows a sibling dir whose name starts with ..', () => {
-    expect(() => parseConfig({ ...dirs, dataDir: resolve(repoRoot, '..data') })).not.toThrow();
+  test('a child dir whose name starts with .. is still inside the repo', () => {
+    expect(() => parseConfig({ ...dirs, dataDir: resolve(repoRoot, '..data') })).toThrow(/outside the code repo/);
   });
 
   test('example config stays valid', () => {
