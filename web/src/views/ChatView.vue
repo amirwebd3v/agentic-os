@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { ApiError } from '../api';
+import { ApiError, endSession } from '../api';
 import { useSessionsStore } from '../stores/sessions';
 import MessageBubble from '../components/MessageBubble.vue';
 
@@ -50,6 +50,19 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
+const ended = ref<string | null>(null);
+/** Files the session now (persona: proposes statements for review) instead of waiting for the idle timer. */
+async function end() {
+  const cur = open.value;
+  if (!cur) return;
+  try {
+    await endSession(cur.session.id);
+    ended.value = cur.session.mode === 'persona' ? 'Ended. Your answers will show up on the Review page shortly.' : 'Ended. The session will be filed shortly.';
+  } catch {
+    ended.value = "Couldn't end the session.";
+  }
+}
+
 function rename(e: Event) {
   const el = e.target as HTMLInputElement;
   const cur = open.value;
@@ -72,7 +85,9 @@ function rename(e: Event) {
         <label for="title" class="sr-only">Session title</label>
         <input id="title" :value="open.session.title ?? ''" placeholder="Untitled" maxlength="200" @change="rename" />
         <span class="mode">{{ open.session.mode }}</span>
+        <button type="button" :disabled="streamingHere || !open.messages.length" @click="end">End session</button>
       </header>
+      <p v-if="ended" class="placeholder" role="status">{{ ended }}</p>
       <ol ref="list" class="messages" aria-label="Messages">
         <MessageBubble v-for="(m, i) in open.messages" :key="`${i}-${m.role}`" :message="m" />
       </ol>

@@ -53,6 +53,6 @@ test('skips answered questions and respects the daily cap', () => {
 ```
 
 ## Acceptance criteria
-- [ ] A persona session asks one question at a time and stops at 10 for the day.
-- [ ] Ending it creates proposals. Approving one writes `persona/<topic>.md`, ticks the question, and creates a git commit.
-- [ ] The next normal chat's system prompt includes the accepted statement, and `cache_read_tokens > 0` on the second message (with a key).
+- [x] A persona session asks one question at a time and stops at 10 for the day.
+- [x] Ending it creates proposals. Approving one writes `persona/<topic>.md`, ticks the question, and creates a git commit.
+- [x] The next normal chat's system prompt includes the accepted statement, and `cache_read_tokens > 0` on the second message (with a key).
