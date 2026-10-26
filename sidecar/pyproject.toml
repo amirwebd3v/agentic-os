@@ -1,0 +1,21 @@
+[project]
+name = "aos-sidecar"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["laya[serve]==0.4.15", "torch==2.14.1"]
+
+# cu132 is the newest CUDA build with Windows cp312 wheels that still ships sm_75 (Turing) kernels;
+# check_gpu.py asserts that. CUDA 13.x already dropped sm_50..sm_72, so re-check on every bump.
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cuda" }
+
+[tool.uv]
+package = false
+# The default %LOCALAPPDATA%\uv is redirected to another volume on this machine, which breaks uv's
+# temp-file renames (os error 17). A project-local cache also lets uv hardlink into .venv.
+cache-dir = ".uv-cache"

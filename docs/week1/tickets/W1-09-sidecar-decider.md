@@ -88,7 +88,7 @@ test('down decider → typed error, not a hang', async () => {
 ```
 
 ## Acceptance criteria
-- [ ] `check_gpu.py` reports CUDA available on the RTX 2070, capability (7, 5).
-- [ ] `netstat` shows the sidecar only on `127.0.0.1:8009`. A request without the bearer key gets 401.
-- [ ] `decider-bench`: p50 under 200 ms, `nvidia-smi` under 7 GB used.
-- [ ] Classification works with the network disconnected.
+- [x] `check_gpu.py` reports CUDA available on the RTX 2070, capability (7, 5).
+- [x] `netstat` shows the sidecar only on `127.0.0.1:8009`. A request without the bearer key gets 401.
+- [x] `decider-bench`: p50 under 200 ms, `nvidia-smi` under 7 GB used.
+- [ ] Classification works with the network disconnected. (Runs with `HF_HUB_OFFLINE=1`, which refuses any Hub call: verified when a wrong pin failed instead of downloading. A physical unplug test is still to do.)
