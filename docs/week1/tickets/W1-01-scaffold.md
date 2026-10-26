@@ -66,6 +66,6 @@ describe('config', () => {
 ```
 
 ## Acceptance criteria
-- [ ] `pnpm i && pnpm verify` passes on a clean clone.
-- [ ] `git status` shows no `agentic-os.json` and no data files.
-- [ ] The config tests pass.
+- [x] `pnpm i && pnpm verify` passes on a clean clone.
+- [x] `git status` shows no `agentic-os.json` and no data files.
+- [x] The config tests pass.
