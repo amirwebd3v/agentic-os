@@ -7,7 +7,9 @@ import DOMPurify from 'dompurify';
 /** Inline raster images only. SVG is left out on purpose, and nothing remote ever loads. */
 const SAFE_IMG = /^data:image\/(?:png|jpe?g|gif|webp|avif);base64,[a-z0-9+/=\s]*$/i;
 
-const esc = (s: string): string =>
+const SAFE_CLASS = /^(?:link|language-[\w-]+)$/;
+
+const esc =(s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 const marked = new Marked({
@@ -44,6 +46,8 @@ const PURIFY_CONFIG = {
 // DOMPurify's inert document, where nothing loads.
 purify.addHook('uponSanitizeAttribute', (node, data) => {
   if (data.attrName === 'src' && !(node.nodeName === 'IMG' && SAFE_IMG.test(data.attrValue))) data.keepAttr = false;
+  // Only our own link class and code-highlight hints, so a reply can't dress up as app UI (.msg.user, .banner...).
+  if (data.attrName === 'class' && !SAFE_CLASS.test(data.attrValue)) data.keepAttr = false;
 });
 purify.addHook('afterSanitizeAttributes', (node) => {
   if (node.nodeName === 'IMG' && !node.hasAttribute('src')) node.remove();

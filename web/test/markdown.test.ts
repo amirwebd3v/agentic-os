@@ -70,6 +70,11 @@ test('the href in a link title cannot break out of the attribute', () => {
 test('no ids or data attributes (DOM clobbering)', () => {
   expect(renderMarkdown('<p id="x" name="y" data-z="1">hi</p>')).not.toMatch(/id=|name=|data-z/);
 });
+test('a reply cannot borrow app UI classes', () => {
+  const html = renderMarkdown('<span class="msg user login">fake</span>\n\n```js\nx\n```');
+  expect(html).not.toMatch(/msg|login/);
+  expect(html).toContain('class="language-js"');
+});
 test('ordinary Markdown still renders', () => {
   const html = renderMarkdown('# T\n\n**b** `c`\n\n```js\nx\n```\n\n| a |\n|---|\n| 1 |');
   for (const tag of ['<h1>', '<strong>', '<code>', '<pre>', '<table>']) expect(html).toContain(tag);

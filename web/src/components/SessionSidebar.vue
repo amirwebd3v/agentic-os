@@ -30,8 +30,15 @@ const run = async (what: string, fn: () => Promise<unknown>) => {
   }
 };
 const create = () => run('create a session', async () => router.push(`/s/${(await sessions.create(mode.value)).id}`));
-const refile = (id: number, e: Event) =>
-  run('re-file the session', () => sessions.update(id, { area_id: Number((e.target as HTMLSelectElement).value) }));
+const refile = (s: SessionSummary, e: Event) => {
+  const el = e.target as HTMLSelectElement;
+  void run('re-file the session', () =>
+    sessions.update(s.id, { area_id: Number(el.value) }).catch((err: unknown) => {
+      el.value = String(s.area_id ?? ''); // show the area it's still filed under
+      throw err;
+    }),
+  );
+};
 </script>
 
 <template>
@@ -58,7 +65,7 @@ const refile = (id: number, e: Event) =>
             v-if="sessions.current?.session.id === s.id"
             :aria-label="`File ${s.title ?? 'Untitled'} under area`"
             :value="s.area_id ?? ''"
-            @change="refile(s.id, $event)"
+            @change="refile(s, $event)"
           >
             <option value="" disabled>Choose area…</option>
             <option v-for="a in areas.list" :key="a.id" :value="a.id">{{ a.name }}</option>
