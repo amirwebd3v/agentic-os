@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,11 +7,10 @@ import { parseAreas, syncAreas } from '../src/vault/areas.ts';
 import { parseNote } from '../src/vault/frontmatter.ts';
 import { VAULT_FOLDERS, initVault } from '../src/vault/init.ts';
 import { watchVault } from '../src/vault/watch.ts';
-import { createWriter } from '../src/vault/writer.ts';
+import { createWriter, vaultGit as git } from '../src/vault/writer.ts';
 import { makeTestDb } from './helpers.ts';
 
 const template = readFileSync(new URL('../templates/CLAUDE.md', import.meta.url), 'utf8');
-const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
 const count = (db: Database, sql: string) => (db.prepare(sql).get() as { n: number }).n;
 
 let dir: string, db: Database, w: ReturnType<typeof createWriter>;
@@ -104,7 +102,7 @@ test('initVault is idempotent, local-only, and the writer commits to it', async 
     newLinkFormat: 'shortest',
     useMarkdownLinks: false,
   });
-  expect(git(dir, 'remote').trim()).toBe('');
+  expect((await git(dir, 'remote')).trim()).toBe('');
 
   writeFileSync(join(dir, 'CLAUDE.md'), 'my rules');
   expect(await initVault(dir)).toEqual([]);
@@ -113,9 +111,9 @@ test('initVault is idempotent, local-only, and the writer commits to it', async 
   const committing = createWriter({ db, vaultDir: dir });
   committing.writeNote('journal/2026-10-26.md', 'hello', { area: 'personal-reflection' });
   await committing.flush();
-  expect(git(dir, 'log', '--format=%s')).toMatch(/^aos: update 1 note\naos: init vault\n$/);
+  expect(await git(dir, 'log', '--format=%s')).toMatch(/^aos: update 1 note\naos: init vault\n$/);
 
-  git(dir, 'remote', 'add', 'origin', 'https://example.com/x.git');
+  await git(dir, 'remote', 'add', 'origin', 'https://example.com/x.git');
   await expect(initVault(dir)).rejects.toThrow(/remote/);
 });
 
@@ -140,4 +138,21 @@ test('a malformed or empty area list stops the sync instead of archiving', () =>
   expect(() => parseAreas(template.replace('- `health` | Health | do |', '- health | Health | do |'))).toThrow(/Malformed/);
   expect(() => parseAreas('# Rules\n\n## Areas\n\n## Other\n- `x` | X | do | y')).toThrow(/no areas/);
   expect(() => parseAreas('# Rules')).toThrow(/no "## Areas"/);
+});
+
+test('vault git ignores an inherited GIT_DIR (git hooks export one)', async () => {
+  const other = mkdtempSync(join(tmpdir(), 'other-repo-'));
+  try {
+    await git(other, 'init', '-q');
+    vi.stubEnv('GIT_DIR', join(other, '.git'));
+    vi.stubEnv('GIT_WORK_TREE', other);
+    await initVault(dir);
+    vi.unstubAllEnvs();
+    expect(await git(dir, 'log', '--format=%s')).toBe('aos: init vault\n');
+    expect((await git(other, 'config', 'core.bare')).trim()).toBe('false');
+    await expect(git(other, 'log')).rejects.toThrow(); // no commit landed in the other repo
+  } finally {
+    vi.unstubAllEnvs();
+    rmSync(other, { recursive: true, force: true });
+  }
 });

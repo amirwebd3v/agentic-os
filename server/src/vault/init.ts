@@ -1,8 +1,7 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gitCommit } from './writer.ts';
+import { gitCommit, vaultGit } from './writer.ts';
 
 const templates = fileURLToPath(new URL('../../templates/', import.meta.url));
 
@@ -23,9 +22,8 @@ const SEED_FILES: Record<string, () => string> = {
  */
 export async function initVault(vaultDir: string): Promise<string[]> {
   mkdirSync(vaultDir, { recursive: true });
-  const git = (...args: string[]) => execFileSync('git', ['-C', vaultDir, ...args], { encoding: 'utf8' });
-  if (!existsSync(join(vaultDir, '.git'))) git('init', '-q', '-b', 'main');
-  const remotes = git('remote').trim();
+  if (!existsSync(join(vaultDir, '.git'))) await vaultGit(vaultDir, 'init', '-q', '-b', 'main');
+  const remotes = (await vaultGit(vaultDir, 'remote')).trim();
   if (remotes) throw new Error(`The vault repo has a remote (${remotes.split('\n').join(', ')}). Remove it: the vault must stay local.`);
 
   for (const folder of VAULT_FOLDERS) mkdirSync(join(vaultDir, folder), { recursive: true });

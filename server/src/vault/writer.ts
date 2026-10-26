@@ -42,9 +42,18 @@ export function resolveNotePath(vaultDir: string, relPath: string): string {
   return abs;
 }
 
+/**
+ * Runs git in the vault. Inherited GIT_* vars (git hooks export GIT_DIR) would silently retarget it at another repo:
+ * a `git init` under a pre-push hook once set `core.bare=true` on the code repo.
+ */
+export const vaultGit = async (vaultDir: string, ...args: string[]): Promise<string> => {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.toUpperCase().startsWith('GIT_')));
+  return (await run('git', ['-C', vaultDir, ...args], { env, encoding: 'utf8' })).stdout;
+};
+
 /** Stages everything and commits if anything changed. Never pushes: the vault has no remote. */
 export async function gitCommit(vaultDir: string, message: string): Promise<boolean> {
-  const git = (...args: string[]) => run('git', ['-C', vaultDir, ...args]);
+  const git = (...args: string[]) => vaultGit(vaultDir, ...args);
   await git('add', '-A');
   try {
     await git('diff', '--cached', '--quiet');
