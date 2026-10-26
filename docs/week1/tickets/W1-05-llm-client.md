@@ -20,6 +20,8 @@ skills:
 Overview: [plan-review.md §2b, §2c, §0c](../../plan-review.md) · Plan: [implementation-plan.md](../implementation-plan.md)
 
 ## Summary
+> **Config source (2026-10-26):** the base URL, key and models come from the repo-root `.env` through `loadConfig()` / `getSecret('anthropic')`: `ANTHROPIC_BASE_URL` (a trailing `/v1` is stripped), `ANTHROPIC_API_KEY`, and the tier mapping fast=`ANTHROPIC_DEFAULT_HAIKU_MODEL`, work=`ANTHROPIC_MODEL`, deep=`ANTHROPIC_DEFAULT_OPUS_MODEL`. The current target is 9router (`cc/*` models), so the smoke test results decide which features (cache, batch, structured output) are flagged on. Never read `ANTHROPIC_*` from `process.env`.
+
 One wrapper around `@anthropic-ai/sdk`. The `baseURL` comes from config and the key comes from the keychain. It supports streaming, structured output through `zodOutputFormat` + `messages.parse`, and prompt-cache markers, and it records every call in `llm_calls`. With no key, the app runs and reports `provider: "not_configured"`.
 
 ## Implementation steps

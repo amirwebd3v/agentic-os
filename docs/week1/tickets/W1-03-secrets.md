@@ -18,6 +18,8 @@ skills:
 Overview: [plan-review.md](../../plan-review.md) · Plan: [implementation-plan.md](../implementation-plan.md)
 
 ## Summary
+> **Update (2026-10-26):** `getSecret()` now reads the repo-root `.env` first (`ANTHROPIC_API_KEY`, `LAYA_API_KEY`), then Credential Manager. `pnpm secrets status` shows the source.
+
 A wrapper over `@napi-rs/keyring` (service `agentic-os`) plus a tiny CLI so you can add your API key later without it ever touching a file.
 
 ⚠️ First step: confirm that `@napi-rs/keyring` is current and maintained on npm and that it works on Windows 11 (`keytar` is archived). If it fails, fall back to `cmdkey`/PowerShell `CredentialManager`. Don't fall back to a plaintext file.

@@ -17,7 +17,27 @@ vi.mock('@napi-rs/keyring', () => ({
   },
 }));
 
-import { getSecret, isSecretName, setSecret } from '../src/secrets.ts';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getSecret, isSecretName, secretSource, setSecret } from '../src/secrets.ts';
+
+test('.env key wins over Credential Manager; an empty .env value falls through', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'aos-env-')), '.env');
+  keyring.store.set('agentic-os/laya', 'from-keychain');
+  vi.stubEnv('AOS_ENV_FILE', file);
+  try {
+    writeFileSync(file, 'LAYA_API_KEY=from-env\n');
+    expect(getSecret('laya')).toBe('from-env');
+    expect(secretSource('laya')).toBe('.env');
+    writeFileSync(file, 'LAYA_API_KEY=\n');
+    expect(getSecret('laya')).toBe('from-keychain');
+    expect(secretSource('laya')).toBe('Credential Manager');
+  } finally {
+    vi.unstubAllEnvs();
+    keyring.store.delete('agentic-os/laya');
+  }
+});
 
 test('missing secret is null, set secret round-trips under service agentic-os', () => {
   expect(getSecret('anthropic')).toBeNull();

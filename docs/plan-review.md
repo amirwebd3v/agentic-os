@@ -21,7 +21,7 @@
 
 | Q | Your answer | Decision |
 |---|---|---|
-| 1 | You'll add the API key yourself later | Built for a **Claude Console API key** read from the OS keychain (`agentic-os/anthropic`). Without a key, the app starts and shows a "Connect provider" banner, and LLM features stay disabled. |
+| 1 | You'll add the API key yourself later. **Update 2026-10-26:** you chose 9router (`cc/*` subscription models) through `.env` | Built for a **Claude Console API key** read from the OS keychain (`agentic-os/anthropic`). Without a key, the app starts and shows a "Connect provider" banner, and LLM features stay disabled. |
 | 2 | (default) | Laptop only, `127.0.0.1`. |
 | 3 | Classify mail by context using Jev + Claude | **Two-stage cascade:** a local Jev-compatible decider runs first, and Claude handles the uncertain cases. See §0a. Categories stay **local** in the app, and Gmail access stays `gmail.readonly` until you explicitly turn on Gmail labels (month 3+). |
 | 4 | (default) | About 100 mails a day across all accounts, 90-day backfill. |
