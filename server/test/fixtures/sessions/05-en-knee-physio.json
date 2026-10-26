@@ -1,0 +1,25 @@
+{
+  "expected_area": "health",
+  "messages": [
+    {
+      "role": "user",
+      "content": "My right knee has been aching on the outside after my runs for about three weeks. It's worse going downstairs."
+    },
+    {
+      "role": "assistant",
+      "content": "Pain on the outer knee in runners is often IT-band syndrome. It's worth seeing a doctor or physiotherapist to rule out anything else, and reducing mileage in the meantime."
+    },
+    {
+      "role": "user",
+      "content": "I booked a physio appointment for next Tuesday. What should I do until then?"
+    },
+    {
+      "role": "assistant",
+      "content": "Swap runs for cycling or swimming if they're pain-free, do gentle hip-strengthening like clamshells and side planks, and avoid long downhill sections."
+    },
+    {
+      "role": "user",
+      "content": "OK, I'll pause running, do the hip exercises daily and ask the physio about a return-to-run plan."
+    }
+  ]
+}

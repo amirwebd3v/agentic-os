@@ -21,7 +21,8 @@
     "login-url": "pnpm --filter @agentic-os/server exec tsx src/cli/login-url.ts",
     "smoke": "pnpm --filter @agentic-os/server exec tsx src/cli/provider-smoke.ts",
     "sidecar:setup": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts setup",
-    "sidecar": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts"
+    "sidecar": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts",
+    "eval:categorize": "pnpm --filter @agentic-os/server exec tsx ../scripts/eval-categorize.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
