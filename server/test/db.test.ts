@@ -90,5 +90,9 @@ describe('db', () => {
     db.prepare("UPDATE jobs SET locked_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(stale.id);
     expect(recoverStaleLocks(db)).toBe(1);
     expect(claimNext(db)?.idempotency_key).toBe('stale');
+
+    db.prepare(`UPDATE jobs SET attempts = ${MAX_ATTEMPTS}, locked_at = '2000-01-01T00:00:00.000Z' WHERE id = ?`).run(stale.id);
+    recoverStaleLocks(db);
+    expect(db.prepare('SELECT status FROM jobs WHERE id = ?').get(stale.id)).toEqual({ status: 'failed' });
   });
 });
