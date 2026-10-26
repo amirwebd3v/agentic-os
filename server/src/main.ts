@@ -4,11 +4,12 @@ import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { openDb } from './db/index.ts';
 import { createLoginToken, loginUrl } from './http/auth.ts';
+import { providerRoutes } from './http/routes/provider.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
 
 // Feature plugins, mounted under /api behind the session check. One line per ticket.
-const plugins: FastifyPluginAsync[] = [];
+const plugins: FastifyPluginAsync[] = [providerRoutes];
 
 const config = loadConfig();
 const db = openDb(join(config.dataDir, 'brain.db'));
