@@ -32,15 +32,24 @@ export interface TestApp {
   areaId: (slug: string) => number;
 }
 
-/** App on an in-memory db, port 3000, logging off. `plugins` mount under `/api` like in main.ts. */
+/**
+ * App on an in-memory db, port 3000, logging off. `plugins` mount under `/api` like in main.ts.
+ * `webDist` defaults to a missing dir so a local `pnpm build` can't change test results.
+ */
 export async function buildTestApp({
   loggedIn = false,
   plugins = [],
   logger = false,
-}: { loggedIn?: boolean; plugins?: FastifyPluginAsync[]; logger?: FastifyServerOptions['logger'] } = {}): Promise<TestApp> {
+  webDist = join(tmpdir(), 'aos-no-web-dist'),
+}: {
+  loggedIn?: boolean;
+  plugins?: FastifyPluginAsync[];
+  logger?: FastifyServerOptions['logger'];
+  webDist?: string;
+} = {}): Promise<TestApp> {
   const db = makeTestDb();
   const config = parseConfig({ vaultDir: join(tmpdir(), 'aos-test-vault'), dataDir: join(tmpdir(), 'aos-test-data') });
-  const app = await buildApp({ db, config, plugins, logger });
+  const app = await buildApp({ db, config, plugins, logger, webDist });
   let cookie = '';
   if (loggedIn) {
     const r = await app.inject({ url: `/login?t=${createLoginToken(db)}`, headers: { host: HOST } });

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import type { FastifyInstance, FastifyPluginAsync, FastifyServerOptions } from 'fastify';
@@ -25,6 +25,8 @@ export interface AppDeps {
   /** Also allows the Vite dev server's host and origin (port 5173). */
   dev?: boolean;
   logger?: FastifyServerOptions['logger'];
+  /** Built web app to serve; tests point this at a temp dir. */
+  webDist?: string;
 }
 
 export const loggerOptions = {
@@ -57,6 +59,7 @@ export async function buildApp({
   plugins = [],
   dev = false,
   logger = loggerOptions,
+  webDist = resolve(repoRoot, 'web/dist'),
 }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger });
   app.decorate('db', db);
@@ -64,8 +67,14 @@ export async function buildApp({
   app.addHook('onSend', securityHeaders);
   app.addHook('onRequest', guards(allowedHosts(config.server.port, dev)));
 
+  const hasWeb = existsSync(join(webDist, 'index.html'));
   // Fastify's default 404 logs the raw URL, which would leak /login/?t=<token>.
-  app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 'not found' }));
+  // Page navigations (not assets) get the SPA shell so client-side routes survive a reload.
+  app.setNotFoundHandler((req, reply) =>
+    hasWeb && req.method === 'GET' && !extname(req.url.split('?')[0]!) && req.headers.accept?.includes('text/html')
+      ? reply.sendFile('index.html')
+      : reply.code(404).send({ error: 'not found' }),
+  );
   loginRoute(app, db);
 
   await app.register(
@@ -78,7 +87,7 @@ export async function buildApp({
     { prefix: '/api' },
   );
 
-  const webDist = resolve(repoRoot, 'web/dist');
-  if (existsSync(webDist)) await app.register(fastifyStatic, { root: webDist });
+  // wildcard: false registers only the built files, so unknown /api/* still reaches the session-checked 404 above.
+  if (hasWeb) await app.register(fastifyStatic, { root: webDist, wildcard: false });
   return app;
 }
