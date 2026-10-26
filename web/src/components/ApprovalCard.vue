@@ -17,6 +17,8 @@ const diff = computed(() =>
     ? lineDiff(props.approval.current_text ?? '', props.approval.payload.content)
     : [],
 );
+// A type the UI doesn't know yet (a newer server) still renders, as raw JSON.
+const unknown = computed(() => props.approval as unknown as { action_type: string; payload: unknown });
 const approve = () => emit('decide', 'approve', editing.value ? draft.value.trim() : undefined);
 </script>
 
@@ -29,7 +31,8 @@ const approve = () => emit('decide', 'approve', editing.value ? draft.value.trim
           New {{ approval.payload.parent_slug ? 'subarea' : 'area' }}: {{ approval.payload.name }}
         </template>
         <template v-else-if="approval.action_type === 'vault_conflict'">Note changed in the vault: {{ approval.payload.path }}</template>
-        <template v-else>{{ approval.action_type }}</template>
+        <template v-else-if="approval.action_type === 'persona_statement'">About you ({{ approval.payload.topic }})</template>
+        <template v-else>{{ unknown.action_type }}</template>
       </h2>
       <time :datetime="approval.created_at">{{ new Date(approval.created_at).toLocaleDateString() }}</time>
     </header>
@@ -46,6 +49,16 @@ const approve = () => emit('decide', 'approve', editing.value ? draft.value.trim
       <dt>Sessions waiting</dt><dd>{{ approval.payload.session_ids.length }}</dd>
     </dl>
 
+    <dl v-else-if="approval.action_type === 'persona_statement'">
+      <template v-if="approval.payload.question"><dt>Question</dt><dd>{{ approval.payload.question }}</dd></template>
+      <dt>You said</dt><dd><q>{{ approval.payload.in_my_words }}</q></dd>
+      <dt>Statement</dt>
+      <dd>
+        <textarea v-if="editing" v-model="draft" rows="3" maxlength="2000" aria-label="Edit the statement" />
+        <template v-else>{{ approval.payload.statement }}</template>
+      </dd>
+    </dl>
+
     <template v-else-if="approval.action_type === 'vault_conflict'">
       <p class="hint">
         Approve to replace your version with the app's (<span class="del">−</span> yours, <span class="add">+</span> app's). Reject keeps yours.
@@ -54,7 +67,7 @@ const approve = () => emit('decide', 'approve', editing.value ? draft.value.trim
 </span></pre>
     </template>
 
-    <pre v-else class="plain">{{ JSON.stringify(approval.payload, null, 2) }}</pre>
+    <pre v-else class="plain">{{ JSON.stringify(unknown.payload, null, 2) }}</pre>
 
     <footer>
       <button type="button" :disabled="busy || (editing && !draft.trim())" @click="approve">

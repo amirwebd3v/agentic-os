@@ -10,7 +10,7 @@ const HISTORY_CHARS = 400_000;
 
 const missing = (err: unknown): boolean => ['ENOENT', 'ENOTDIR'].includes((err as NodeJS.ErrnoException).code ?? '');
 
-function readOrEmpty(path: string): string {
+export function readOrEmpty(path: string): string {
   try {
     return readFileSync(path, 'utf8');
   } catch (err) {

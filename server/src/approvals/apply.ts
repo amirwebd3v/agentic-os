@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import type { Database } from 'better-sqlite3';
 import { z } from 'zod';
 import { lastMessageId } from '../chat/idle.ts';
+import { BANK_PATH, tickQuestion, TOPICS } from '../chat/modes/persona.ts';
 import { audit } from '../db/audit.ts';
 import { enqueue } from '../db/jobs.ts';
 import { parseAreas } from '../vault/areas.ts';
@@ -40,6 +41,7 @@ const CategoryPayload = z.object({
   session_ids: z.array(z.number().int()).max(1000),
 });
 const ConflictPayload = z.object({ path: z.string().min(1), current_hash: z.string().nullable(), content: z.string() });
+const PersonaPayload = z.object({ question_id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/), topic: z.enum(TOPICS) });
 
 // No `<`/`>`: model text must not open or close the HTML comment `parseAreas` strips.
 const oneLine = (s: string) => s.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
@@ -108,7 +110,7 @@ export function decide(
   const final = decision === 'approve' && row.original_text !== null ? (finalText ?? row.original_text) : null;
   const distance = final === null ? null : editDistance(row.original_text!, final);
 
-  let tmp: string | undefined;
+  const staged: string[] = [];
   let wrote: string | undefined;
   let effect = () => {};
   const payload: unknown = JSON.parse(row.payload);
@@ -127,12 +129,13 @@ export function decide(
       db.prepare('UPDATE approvals SET payload = ? WHERE id = ?').run(JSON.stringify({ ...p, current_hash: current }), id);
       throw new ApprovalError(409, 'the file changed since this conflict was raised; review it again');
     }
-    tmp = stage(abs, p.content);
+    const tmp = stage(abs, p.content);
+    staged.push(tmp);
     wrote = p.path;
     effect = () => {
       if (fileHash(abs) !== p.current_hash) throw new ApprovalError(409, 'the file changed during the write; review it again');
       upsertNote.run(p.path, sha256(p.content), 'app');
-      renameSync(tmp!, abs); // throws → everything rolls back
+      renameSync(tmp, abs); // throws → everything rolls back
     };
   } else if (row.action_type === 'vault_conflict') {
     // Keep the user's file and make it theirs, so the writer won't overwrite it without asking again.
@@ -153,7 +156,7 @@ export function decide(
       : undefined;
     if (p.parent_slug && !parent) throw new ApprovalError(409, `parent area ${p.parent_slug} is not active`);
 
-    let claudeMd: { abs: string; hash: string; text: string } | undefined;
+    let claudeMd: { abs: string; hash: string; text: string; tmp: string } | undefined;
     if (!parent) {
       // Top-level areas live in CLAUDE.md; boot sync archives any it doesn't list. The user owns that file, so it
       // is hash-checked and stays `last_written_by='user'` instead of going through the writer (which would only raise a conflict).
@@ -168,8 +171,8 @@ export function decide(
         if (listedSlugs(text)?.join() !== [...slugs, p.slug].join()) {
           throw new ApprovalError(400, 'this area can’t be written to CLAUDE.md as proposed');
         }
-        claudeMd = { abs, hash: sha256(current), text };
-        tmp = stage(abs, text);
+        claudeMd = { abs, hash: sha256(current), text, tmp: stage(abs, text) };
+        staged.push(claudeMd.tmp);
         wrote = 'CLAUDE.md';
       }
     }
@@ -189,8 +192,44 @@ export function decide(
       if (claudeMd) {
         if (fileHash(claudeMd.abs) !== claudeMd.hash) throw new ApprovalError(409, 'CLAUDE.md changed during the write; try again');
         upsertNote.run('CLAUDE.md', sha256(claudeMd.text), 'user');
-        renameSync(tmp!, claudeMd.abs);
+        renameSync(claudeMd.tmp, claudeMd.abs);
       }
+    };
+  } else if (row.action_type === 'persona_statement' && decision === 'approve') {
+    const p = PersonaPayload.parse(payload);
+    const statement = (final ?? '').replace(/\s+/g, ' ').trim();
+    if (!statement) throw new ApprovalError(400, 'the statement is empty');
+    // Both files are the user's to edit in Obsidian, so they are hash-checked like CLAUDE.md rather than going through the writer.
+    const writes: { rel: string; abs: string; hash: string | null; text: string; tmp: string }[] = [];
+    const add = (rel: string, abs: string, hash: string | null, text: string) => {
+      writes.push({ rel, abs, hash, text, tmp: stage(abs, text) });
+      staged.push(writes.at(-1)!.tmp);
+    };
+    const topicRel = `persona/${p.topic}.md`;
+    const topicAbs = resolveNotePath(vaultDir, topicRel);
+    const before = existsSync(topicAbs) ? readFileSync(topicAbs, 'utf8') : null;
+    const marker = `^${p.question_id}`;
+    // Skipped when already there: a retry after a half-applied approval must not append twice.
+    if (!before?.split('\n').some((l) => l.trimEnd().endsWith(` ${marker}`))) {
+      const head = before === null ? `---\nsensitivity: 1\n---\n\n# ${p.topic}\n\n` : before.replace(/\s*$/, '\n');
+      add(topicRel, topicAbs, fileHash(topicAbs), `${head}- ${statement}  ${marker}\n`);
+    }
+    const bankAbs = resolveNotePath(vaultDir, BANK_PATH);
+    const ticked = existsSync(bankAbs) ? tickQuestion(readFileSync(bankAbs, 'utf8'), p.question_id) : null;
+    if (ticked !== null) add(BANK_PATH, bankAbs, fileHash(bankAbs), ticked); // a question deleted from the bank has nothing to tick
+    wrote = writes[0]?.rel;
+    const keepOwner = db.prepare(
+      `INSERT INTO vault_notes (path, content_hash, last_written_by) VALUES (?, ?, 'user')
+       ON CONFLICT(path) DO UPDATE SET content_hash = excluded.content_hash`,
+    );
+    effect = () => {
+      for (const w of writes) {
+        if (fileHash(w.abs) !== w.hash) throw new ApprovalError(409, `${w.rel} changed during the write; try again`);
+        keepOwner.run(w.rel, sha256(w.text));
+      }
+      // ponytail: two renames aren't atomic together; if the second fails the first stays, and the retry skips the
+      // statement already appended (marker check) and ticks again. Needs a locked file between two renames.
+      for (const w of writes) renameSync(w.tmp, w.abs);
     };
   } else if (row.action_type !== 'propose_category' && decision === 'approve') {
     throw new ApprovalError(409, `approving ${row.action_type} is not supported yet`);
@@ -218,7 +257,7 @@ export function decide(
     // ponytail: a failed COMMIT after the rename leaves the file written but the row pending; the retry sees the new
     // hash (conflict refreshed, or the area already listed) and recovers. Needs a disk-full at commit time.
   } finally {
-    if (tmp) rmSync(tmp, { force: true });
+    for (const tmp of staged) rmSync(tmp, { force: true });
   }
   return { status, wrote };
 }

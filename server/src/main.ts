@@ -9,6 +9,7 @@ import { areaRoutes } from './http/routes/areas.ts';
 import { providerRoutes } from './http/routes/provider.ts';
 import { sessionRoutes } from './http/routes/sessions.ts';
 import { categorizeSession } from './jobs/categorize-session.ts';
+import { extractPersona } from './jobs/extract-persona.ts';
 import { startRunner } from './jobs/runner.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
@@ -28,7 +29,11 @@ try {
 }
 watchVault({ db, vaultDir: config.vaultDir });
 const writer = createWriter({ db, vaultDir: config.vaultDir });
-const stopRunner = startRunner(db, { categorize_session: categorizeSession({ db, config, writer }) }, (err) => app.log.error(err, 'job failed'));
+const stopRunner = startRunner(
+  db,
+  { categorize_session: categorizeSession({ db, config, writer }), extract_persona: extractPersona({ db, config }) },
+  (err) => app.log.error(err, 'job failed'),
+);
 app.addHook('onClose', async () => {
   await stopRunner();
   await writer.flush();
