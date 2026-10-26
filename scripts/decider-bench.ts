@@ -3,6 +3,7 @@
 import { execFileSync } from 'node:child_process';
 import { openDb } from '../server/src/db/index.ts';
 import { createDecider } from '../server/src/decider/client.ts';
+import type { Question } from '../server/src/decider/client.ts';
 import { getSecret } from '../server/src/secrets.ts';
 
 const apiKey = getSecret('laya');
@@ -15,7 +16,7 @@ const questions = {
   area: { type: 'choice', instructions: 'Which life area does this email belong to?', criteria: { 'admin-finance': 'Bills, banking, taxes', career: 'Jobs and work', health: 'Doctors and fitness' } },
   importance: { type: 'score', instructions: 'How important is this email?', criteria: ['ignorable', 'low', 'normal', 'high', 'urgent'] },
   needs_action: { type: 'noul', instructions: 'Does the reader need to do something?' },
-} as const;
+} satisfies Record<string, Question>;
 
 await d.decide(state, questions); // warm-up: first CUDA call pays kernel load
 const ms: number[] = [];

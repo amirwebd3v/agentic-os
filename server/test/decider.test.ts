@@ -83,5 +83,9 @@ describe('decider client', () => {
   test('status() is ok only for an authorized health reply', async () => {
     const d = createDecider({ db: makeTestDb(), baseURL: await fake(json({ status: 'ok', loaded: ['multilingual'] })), apiKey: 'k', model: 'm' });
     expect(await d.status()).toBe('ok');
+    srv!.close();
+    // What Laya sends a caller whose key it rejected.
+    const wrongKey = createDecider({ db: makeTestDb(), baseURL: await fake(json({ status: 'ok' })), apiKey: 'bad', model: 'm' });
+    expect(await wrongKey.status()).toBe('down');
   });
 });

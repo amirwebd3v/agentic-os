@@ -31,8 +31,10 @@ if (process.argv[2] === 'setup') {
     console.log('Generated a new laya key in Windows Credential Manager.');
   }
   // laya-serve's own defaults bind 0.0.0.0 and preload every checkpoint, so every knob is explicit.
+  // Drop inherited LAYA_* (e.g. LAYA_JEV_STRICT would change the wire format the client parses).
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('LAYA_')));
   uv(['run', '--no-sync', 'laya-serve'], {
-    ...process.env,
+    ...inherited,
     LAYA_HOST: '127.0.0.1',
     LAYA_PORT: '8009',
     LAYA_DEVICE: 'cuda',
@@ -44,7 +46,6 @@ if (process.argv[2] === 'setup') {
     LAYA_API_KEY: apiKey,
     HF_HUB_OFFLINE: '1',
     TRANSFORMERS_OFFLINE: '1',
-    HF_HUB_DISABLE_TELEMETRY: '1',
     HF_HUB_DISABLE_SYMLINKS_WARNING: '1',
   });
 }

@@ -6,8 +6,8 @@ import type { Database } from '../db/index.ts';
 // (test/fixtures/systemone-response.json) and ignores fields we don't use.
 
 export type Question =
-  | { type: 'choice'; instructions: string; criteria: Record<string, string> | string[] }
-  | { type: 'score'; instructions: string; criteria: string[] }
+  | { type: 'choice'; instructions: string; criteria: Readonly<Record<string, string>> | readonly string[] }
+  | { type: 'score'; instructions: string; criteria: readonly string[] }
   | { type: 'noul'; instructions: string; criteria?: { true?: string; false?: string } };
 
 const Probabilities = z.record(z.string(), z.number());
@@ -109,16 +109,15 @@ export function createDecider({ db, baseURL, apiKey, model, timeoutMs = 5000 }: 
     },
 
     /** For `/api/provider`. When it reports `down`, callers go straight to Claude. */
+    // Laya answers an unauthenticated /health with a bare {status:'ok'}; only an accepted key gets `loaded`.
     async status(): Promise<'ok' | 'down'> {
       try {
         const res = await fetch(`${base}/health`, { headers, signal: AbortSignal.timeout(timeoutMs) });
-        const body = res.ok ? ((await res.json()) as { status?: unknown }) : null;
-        return body?.status === 'ok' ? 'ok' : 'down';
+        const body = res.ok ? ((await res.json()) as { status?: unknown; loaded?: unknown }) : null;
+        return body?.status === 'ok' && Array.isArray(body.loaded) ? 'ok' : 'down';
       } catch {
         return 'down';
       }
     },
   };
 }
-
-export type Decider = ReturnType<typeof createDecider>;
