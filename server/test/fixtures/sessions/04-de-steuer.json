@@ -1,0 +1,25 @@
+{
+  "expected_area": "admin-finance",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Ich muss meine Steuererklärung für 2025 machen. Ich war das halbe Jahr Werkstudent und habe dann Vollzeit angefangen. Was kann ich absetzen?"
+    },
+    {
+      "role": "assistant",
+      "content": "Typisch sind Werbungskosten: Fahrtkosten zur Arbeit (Pendlerpauschale), Arbeitsmittel wie Laptop, Fachliteratur und Kontoführungsgebühren pauschal."
+    },
+    {
+      "role": "user",
+      "content": "Lohnt sich das ELSTER-Formular oder eine Steuer-App? Und bis wann muss ich abgeben?"
+    },
+    {
+      "role": "assistant",
+      "content": "Ohne Pflicht zur Abgabe hast du vier Jahre Zeit. ELSTER ist kostenlos; Apps helfen bei der Auswahl der Anlagen. Die Anlage N brauchst du für beide Arbeitsverhältnisse."
+    },
+    {
+      "role": "user",
+      "content": "Gut, dann sammle ich die Lohnsteuerbescheinigungen und die Laptop-Rechnung und mache es über ELSTER."
+    }
+  ]
+}

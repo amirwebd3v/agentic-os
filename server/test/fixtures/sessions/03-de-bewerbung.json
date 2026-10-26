@@ -1,0 +1,25 @@
+{
+  "expected_area": "career",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Ich bewerbe mich als Backend-Entwickler bei einem Fintech in Berlin. Kannst du mein Anschreiben kürzer und überzeugender machen?"
+    },
+    {
+      "role": "assistant",
+      "content": "Gern. Beginne mit einem konkreten Erfolg statt mit 'hiermit bewerbe ich mich', und nenne zwei Projekte, die zur Stellenanzeige passen."
+    },
+    {
+      "role": "user",
+      "content": "Okay. Außerdem habe ich nächste Woche das erste Vorstellungsgespräch mit der Teamleiterin. Welche Fragen sollte ich stellen?"
+    },
+    {
+      "role": "assistant",
+      "content": "Frag nach dem Onboarding, wie Code-Reviews ablaufen und woran Erfolg nach sechs Monaten gemessen wird. Bereite auch eine Gehaltsvorstellung vor."
+    },
+    {
+      "role": "user",
+      "content": "Danke, ich passe meinen Lebenslauf noch an und schicke die Bewerbung bis Freitag ab."
+    }
+  ]
+}

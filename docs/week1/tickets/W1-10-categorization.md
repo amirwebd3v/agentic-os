@@ -106,6 +106,6 @@ test('decider down → still files via Claude', async () => {
 ```
 
 ## Acceptance criteria
-- [ ] `pnpm eval:categorize` (with a key): **at least 9 of 10** sessions get the expected area. The "new area" case produces a proposal, not a new area.
-- [ ] Re-running the job for the same `(session, lastMsg)` is a no-op (idempotent).
+- [x] `pnpm eval:categorize` (with a key): **at least 9 of 10** sessions get the expected area. The "new area" case produces a proposal, not a new area.
+- [x] Re-running the job for the same `(session, lastMsg)` is a no-op (idempotent).
 - [ ] The summary note opens in Obsidian with valid frontmatter and a working wikilink.
