@@ -6,6 +6,7 @@ Every session reads this file automatically, including parallel sessions in `.cl
 - **Plan:** `docs/plan-review.md`
 - **Week 1 plan:** `docs/week1/implementation-plan.md`
 - **Ticket specs:** `docs/week1/tickets/*.md`
+- **Week 2 plan (OS layer + skill routing):** `docs/week2/implementation-plan.md`
 - **Build loop:** `docs/Workflow.md` (fullstack-dev-skills + ponytail + claude-mem)
 - **Backlog:** GitHub Project https://github.com/users/amirwebd3v/projects/1. Status lives only there.
 
