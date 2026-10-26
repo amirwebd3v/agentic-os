@@ -21,6 +21,14 @@ describe('config', () => {
     expect(() => parseConfig({ ...dirs, dataDir: resolve(repoRoot, 'data') })).toThrow(/outside the code repo/);
   });
 
+  test('rejects relative paths', () => {
+    expect(() => parseConfig({ ...dirs, dataDir: './data' })).toThrow(/absolute/);
+  });
+
+  test('allows a sibling dir whose name starts with ..', () => {
+    expect(() => parseConfig({ ...dirs, dataDir: resolve(repoRoot, '..data') })).not.toThrow();
+  });
+
   test('example config stays valid', () => {
     const example = JSON.parse(readFileSync(resolve(repoRoot, 'agentic-os.example.json'), 'utf8'));
     expect(() => parseConfig(example)).not.toThrow();

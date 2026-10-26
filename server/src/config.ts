@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
@@ -8,7 +8,7 @@ export const repoRoot = resolve(fileURLToPath(import.meta.url), '../../..');
 // Sync clients corrupt SQLite WAL files and fight git locks.
 const dataPath = z
   .string()
-  .min(1)
+  .refine(isAbsolute, 'must be an absolute path')
   .refine((p) => !/onedrive/i.test(p), 'must not be inside OneDrive or another sync folder');
 
 const ConfigSchema = z.object({
@@ -41,7 +41,7 @@ export type Config = z.infer<typeof ConfigSchema>;
 
 const isInside = (child: string, parent: string): boolean => {
   const rel = relative(resolve(parent), resolve(child));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel));
 };
 
 /** Validates raw config; personal data must live outside the code repo so it can never be committed. */
@@ -60,5 +60,11 @@ export function loadConfig(path: string = resolve(repoRoot, 'agentic-os.json')):
   } catch {
     throw new Error(`Config not found at ${path}. Copy agentic-os.example.json to agentic-os.json and edit the paths.`);
   }
-  return parseConfig(JSON.parse(text));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`Invalid JSON in ${path}: ${(err as Error).message}`);
+  }
+  return parseConfig(raw);
 }
