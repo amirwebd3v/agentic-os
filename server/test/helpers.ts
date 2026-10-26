@@ -83,7 +83,6 @@ export function fakeLlm(
         }
         yield { type: 'text', text };
       }
-      if (failAfter !== undefined && failAfter >= chunks.length) throw new LlmError('overloaded', 'fake failure', 529);
       yield { type: 'done', usage: { input_tokens: 10, output_tokens: chunks.length, cache_read_input_tokens: 4 } as Anthropic.Usage };
     },
   };

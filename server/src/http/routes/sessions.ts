@@ -145,7 +145,7 @@ export const sessionRoutes =
 
         const ids = startTurn(db, sessionId, req.body.content, config.llm.models.work);
         const out = new PassThrough();
-        const send = (ev: ChatEvent) => out.write(`data: ${JSON.stringify(ev)}\n\n`);
+        const send = (ev: ChatEvent) => out.destroyed || out.write(`data: ${JSON.stringify(ev)}\n\n`);
         const abort = new AbortController();
         // The client went away before the reply finished: stop the model call, keep the partial text.
         reply.raw.on('close', () => reply.raw.writableFinished || abort.abort());

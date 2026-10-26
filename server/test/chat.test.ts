@@ -45,6 +45,7 @@ test('streams deltas in contract order and persists both turns', async () => {
   const r = await t.say(s.id, 'hi');
   expect(r.statusCode).toBe(200);
   expect(r.headers['content-type']).toMatch(/^text\/event-stream/);
+  expect(r.headers['x-content-type-options']).toBe('nosniff'); // security headers still apply to the stream
   const evs = events(r.body);
   expect(evs[0]).toEqual({ user_message_id: expect.any(Number), assistant_message_id: expect.any(Number) });
   expect(evs.slice(1)).toEqual([
@@ -74,6 +75,14 @@ test('error mid-stream keeps the partial text and ends with the error kind', asy
   const evs = events((await t.say(s.id, 'hi')).body);
   expect(evs.at(-1)).toEqual({ error: { kind: 'overloaded' } });
   expect(reply(t.db)).toMatchObject({ status: 'error', content: 'Hello ' });
+});
+
+test('a stream that ends without a final message is an error, not a hang', async () => {
+  const llm: FakeLlm = { calls: [], configured: () => true, async *stream() { yield { type: 'text', text: 'x' }; } };
+  const t = await setup(llm);
+  const s = await t.newSession();
+  expect(events((await t.say(s.id, 'hi')).body).at(-1)).toEqual({ error: { kind: 'network' } });
+  expect(reply(t.db)).toMatchObject({ status: 'error', content: 'x' });
 });
 
 test('partial content is flushed to the DB while streaming', async () => {
