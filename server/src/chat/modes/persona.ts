@@ -102,8 +102,9 @@ export function personaTurn(db: Database, vaultDir: string, sessionId: number): 
   return {
     context: `${INSTRUCTIONS}\n\n${state.join('\n\n')}`,
     record(reply) {
-      // Only offered ids count, so a reply can't push past the cap or tag a question the bank doesn't have.
-      for (const [, id] of reply.matchAll(/\[([A-Za-z0-9-]{1,64})\]/g)) if (offered.has(id!)) insert.run(sessionId, id);
+      // The first offered id only: one question per message, and a tag the bank doesn't have (or past the cap) never counts.
+      const id = [...reply.matchAll(/\[([A-Za-z0-9-]{1,64})\]/g)].map((m) => m[1]!).find((i) => offered.has(i));
+      if (id) insert.run(sessionId, id);
     },
   };
 }

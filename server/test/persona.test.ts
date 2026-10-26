@@ -87,7 +87,7 @@ test(`daily cap: ${DAILY_CAP} questions per calendar day across persona sessions
   const vault = tempVault();
   const first = newSession(db);
   const ids = parseBank(readFileSync(TEMPLATE, 'utf8')).map((q) => q.id);
-  personaTurn(db, vault, first)!.record(ids.slice(0, DAILY_CAP).map((id) => `[${id}]`).join(' '));
+  for (const id of ids.slice(0, DAILY_CAP)) personaTurn(db, vault, first)!.record(`[${id}] …?`); // one question per turn
   expect(asked(db, first)).toHaveLength(DAILY_CAP);
   const second = newSession(db);
   const turn = personaTurn(db, vault, second)!;
@@ -136,9 +136,7 @@ test('persona sessions are never categorized: /end and the idle timer queue extr
 type Statements = z.infer<typeof PersonaExtraction>['statements'];
 
 /** A persona session that asked values-1 and writing-style-3, a temp vault, and a fake `structured()`. */
-function setupExtract(statements: Statements) {
-  const db = makeTestDb();
-  const vault = tempVault();
+function setupExtract(statements: Statements, db: Database = makeTestDb(), vault = tempVault()) {
   const config = parseConfig({ vaultDir: vault, dataDir: join(vault, 'data') });
   const s = newSession(db);
   say(db, s, 'assistant', '[values-1] What do you optimize for?');
@@ -194,19 +192,17 @@ test('extract: one approval per answered question; invented quotes and unasked q
 });
 
 async function setupApprove() {
-  const t = setupExtract([
-    { question_id: 'values-1', topic: 'values', statement: 'Optimizes for time with family.', in_my_words: 'for time with my family' },
-    { question_id: 'writing-style-3', topic: 'writing-style', statement: 'Uses Sie except with classmates.', in_my_words: 'Immer Sie, außer bei Kommilitonen.' },
-  ]);
+  const vault = tempVault();
+  const app = await buildTestApp({ loggedIn: true, plugins: [approvalRoutes({ vaultDir: vault })] });
+  const t = setupExtract(
+    [
+      { question_id: 'values-1', topic: 'values', statement: 'Optimizes for time with family.', in_my_words: 'for time with my family' },
+      { question_id: 'writing-style-3', topic: 'writing-style', statement: 'Uses Sie except with classmates.', in_my_words: 'Immer Sie, außer bei Kommilitonen.' },
+    ],
+    app.db,
+    vault,
+  );
   await t.run();
-  const app = await buildTestApp({ loggedIn: true, plugins: [approvalRoutes({ vaultDir: t.vault })] });
-  // The approvals live in the extract db; copy them into the app's db so the route applies them.
-  for (const a of t.approvals()) {
-    app.db.prepare(`INSERT INTO approvals (action_type, payload, proposed_by, original_text) VALUES ('persona_statement', ?, 'persona', ?)`).run(
-      JSON.stringify(a.payload),
-      a.original_text,
-    );
-  }
   const decide = (id: number, body: object) => app.app.inject(app.authed({ method: 'POST', url: `/api/approvals/${id}/decide`, payload: body }));
   const file = (rel: string) => readFileSync(join(t.vault, rel), 'utf8');
   const row = (id: number) => app.db.prepare('SELECT status, final_text, edit_distance FROM approvals WHERE id = ?').get(id);
@@ -247,4 +243,33 @@ test('a statement already in the file is not appended twice (retry after a half-
   expect((await t.decide(1, { decision: 'approve' })).statusCode).toBe(200);
   expect(t.file('persona/values.md')).toBe('# values\n\n- Optimizes for time with family.  ^values-1\n');
   expect(t.file('persona/_questions.md')).toContain('- [x] (values)');
+});
+
+test('a re-answered question is appended next to the old statement; a missing bank still approves', async () => {
+  const t = await setupApprove();
+  writeFileSync(join(t.vault, 'persona/values.md'), '# values\n\n- Used to optimize for speed.  ^values-1\n');
+  rmSync(join(t.vault, 'persona/_questions.md'));
+  expect((await t.decide(1, { decision: 'approve' })).json()).toEqual({ id: 1, status: 'approved' });
+  expect(t.file('persona/values.md')).toBe(
+    '# values\n\n- Used to optimize for speed.  ^values-1\n- Optimizes for time with family.  ^values-1\n',
+  );
+});
+
+test('only the first offered tag in a reply is recorded; a pending question is skipped, a rejected one comes back', () => {
+  const db = makeTestDb();
+  const vault = tempVault();
+  const s = newSession(db);
+  personaTurn(db, vault, s)!.record('[values-1] and next [values-2]');
+  expect(asked(db, s)).toEqual(['values-1']);
+
+  const other = newSession(db);
+  const propose = (status: string) =>
+    db.prepare(`INSERT INTO approvals (action_type, payload, proposed_by, status) VALUES ('persona_statement', ?, 'persona', ?)`).run(
+      JSON.stringify({ question_id: 'values-2' }),
+      status,
+    );
+  propose('pending');
+  expect(personaTurn(db, vault, other)!.context).not.toContain('[values-2]');
+  db.prepare(`UPDATE approvals SET status = 'rejected'`).run();
+  expect(personaTurn(db, vault, other)!.context).toContain('[values-2] (values)');
 });

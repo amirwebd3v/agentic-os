@@ -61,7 +61,11 @@ export function extractPersona({ db, config, llm = structured }: ExtractDeps) {
         .pluck()
         .all() as string[],
     );
-    const open = new Map(askedIn(db, sessionId).flatMap((id) => (bank.has(id) && !proposed.has(id) ? [[id, bank.get(id)!] as const] : [])));
+    const open = new Map(
+      askedIn(db, sessionId)
+        .filter((id) => bank.has(id) && !proposed.has(id))
+        .map((id) => [id, bank.get(id)!]),
+    );
     const msgs = db
       .prepare(
         `SELECT role, content FROM messages WHERE session_id = ? AND id <= ? AND role IN ('user', 'assistant')
@@ -70,9 +74,10 @@ export function extractPersona({ db, config, llm = structured }: ExtractDeps) {
       .all(sessionId, upToMessageId) as { role: 'user' | 'assistant'; content: string }[];
     const said = norm(msgs.filter((m) => m.role === 'user').map((m) => m.content).join('\n'));
 
+    let statements: z.infer<typeof PersonaExtraction>['statements'] = [];
     if (open.size && said) {
       const questions = [...open.values()].map((q) => `- ${q.id} (${q.topic}): ${q.text}`).join('\n');
-      const out = await llm(
+      ({ statements } = await llm(
         { db, config },
         {
           pipeline: 'persona',
@@ -82,28 +87,28 @@ export function extractPersona({ db, config, llm = structured }: ExtractDeps) {
           input: transcript(session.title, msgs),
           schema: PersonaExtraction,
         },
-      );
-      const insert = db.prepare(
-        `INSERT INTO approvals (action_type, payload, proposed_by, original_text) VALUES ('persona_statement', ?, 'persona', ?) RETURNING id`,
-      );
-      db.transaction(() => {
-        for (const s of out.statements) {
-          const q = open.get(s.question_id);
-          const statement = s.statement.replace(/\s+/g, ' ').trim().slice(0, MAX_STATEMENT);
-          const quote = s.in_my_words.trim().slice(0, MAX_QUOTE);
-          // "Never invent answers": the quote must really be the user's. The topic comes from the bank, not the model.
-          if (!q || !statement || !quote || !said.includes(norm(quote))) continue;
-          open.delete(q.id); // one statement per question
-          const payload = { question_id: q.id, topic: q.topic, question: q.text, statement, in_my_words: quote };
-          const { id } = insert.get(JSON.stringify(payload), statement) as { id: number };
-          audit(db, { actor: 'app', action: 'approval.propose', args: { approval_id: id, question_id: q.id, session_id: sessionId } });
-        }
-      })();
+      ));
     }
-    // Same column as categorization: the messages handled so far, so the idle timer doesn't queue this session again.
-    db.prepare('UPDATE sessions SET last_categorized_message_id = MAX(COALESCE(last_categorized_message_id, 0), ?) WHERE id = ?').run(
-      upToMessageId,
-      sessionId,
+    const insert = db.prepare(
+      `INSERT INTO approvals (action_type, payload, proposed_by, original_text) VALUES ('persona_statement', ?, 'persona', ?) RETURNING id`,
     );
+    db.transaction(() => {
+      for (const s of statements) {
+        const q = open.get(s.question_id);
+        const statement = s.statement.replace(/\s+/g, ' ').trim().slice(0, MAX_STATEMENT);
+        const quote = s.in_my_words.trim().slice(0, MAX_QUOTE);
+        // "Never invent answers": the quote must really be the user's. The topic comes from the bank, not the model.
+        if (!q || !statement || !quote || !said.includes(norm(quote))) continue;
+        open.delete(q.id); // one statement per question
+        const payload = { question_id: q.id, topic: q.topic, question: q.text, statement, in_my_words: quote };
+        const { id } = insert.get(JSON.stringify(payload), statement) as { id: number };
+        audit(db, { actor: 'app', action: 'approval.propose', args: { approval_id: id, question_id: q.id, session_id: sessionId } });
+      }
+      // Same column as categorization: the messages handled so far, so the idle timer doesn't queue this session again.
+      db.prepare('UPDATE sessions SET last_categorized_message_id = MAX(COALESCE(last_categorized_message_id, 0), ?) WHERE id = ?').run(
+        upToMessageId,
+        sessionId,
+      );
+    })();
   };
 }
