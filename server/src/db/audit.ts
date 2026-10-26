@@ -51,7 +51,7 @@ const hashRow = (r: Omit<AuditRow, 'id' | 'hash'>): string =>
           ts: r.ts,
           actor: r.actor,
           action: r.action,
-          args_redacted: JSON.parse(r.args_redacted) as unknown,
+          args_redacted: r.args_redacted,
           decision: r.decision,
           approver: r.approver,
         }),

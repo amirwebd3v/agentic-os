@@ -38,6 +38,7 @@ export function claimNext(db: Database): Job | undefined {
   return row && { ...row, payload: JSON.parse(row.payload) as unknown };
 }
 
+// ponytail: no lock token, assumes one worker loop; add a claim token if workers run in parallel
 export function complete(db: Database, id: number): void {
   db.prepare(`UPDATE jobs SET status = 'done', locked_at = NULL, error = NULL WHERE id = ? AND status = 'running'`).run(id);
 }
@@ -56,7 +57,7 @@ export function fail(db: Database, id: number, error: string): void {
 export function recoverStaleLocks(db: Database): number {
   return db
     .prepare(
-      `UPDATE jobs SET status = 'queued', locked_at = NULL
+      `UPDATE jobs SET locked_at = NULL, status = CASE WHEN attempts < ${MAX_ATTEMPTS} THEN 'queued' ELSE 'failed' END
        WHERE status = 'running' AND locked_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${STALE_LOCK_MINUTES} minutes')`,
     )
     .run().changes;
