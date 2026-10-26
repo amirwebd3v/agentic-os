@@ -3,7 +3,7 @@ import type { Config } from '../config.ts';
 import type { Database } from '../db/index.ts';
 import { getLlm, stream } from '../llm/client.ts';
 import type { LlmConfig } from '../llm/client.ts';
-import { mapError } from '../llm/errors.ts';
+import { LlmError, mapError } from '../llm/errors.ts';
 import type { LlmErrorKind } from '../llm/errors.ts';
 import { history, systemPrompt } from './prompt.ts';
 
@@ -48,7 +48,7 @@ interface ReplyDeps {
   send: (ev: ChatEvent) => void;
 }
 
-/** Streams the reply to `send`, flushing partial text to the DB every second. Never throws for model errors. */
+/** Streams the reply to `send`, flushing partial text to the DB every second. Model errors end the stream; others also rethrow. */
 export async function streamReply({ db, config, llm, sessionId, assistantId, signal, send }: ReplyDeps): Promise<void> {
   const update = db.prepare('UPDATE messages SET content = ?, status = ? WHERE id = ?');
   let text = '';
@@ -81,6 +81,7 @@ export async function streamReply({ db, config, llm, sessionId, assistantId, sig
     if (kind === 'aborted' || signal.aborted) return save('aborted');
     save('error');
     send({ error: { kind } });
+    if (!(err instanceof LlmError)) throw err; // not a model error: a bug or an unreadable vault, so the route logs it
   } finally {
     clearInterval(timer);
   }
