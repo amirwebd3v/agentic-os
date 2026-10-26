@@ -154,6 +154,7 @@ export async function setupCategorize({ decider, deciderDown = false, llm = {}, 
   const deciderCalls: Parameters<CategorizeDecider['decide']>[] = [];
   const llmCalls: { system: SystemPrompt | undefined; input: string }[] = [];
   let filing: SessionFiling = { ...DEFAULT_FILING, ...llm };
+  let duringLlm = () => {};
   const fakeDecider: CategorizeDecider = {
     async decide(...args) {
       deciderCalls.push(args);
@@ -171,6 +172,7 @@ export async function setupCategorize({ decider, deciderDown = false, llm = {}, 
   };
   const fakeStructured = (async (_deps, req) => {
     llmCalls.push({ system: req.system, input: req.input });
+    duringLlm();
     return structuredClone(filing);
   }) as typeof structured;
   const writer = createWriter({ db, vaultDir, commit: false });
@@ -205,6 +207,8 @@ export async function setupCategorize({ decider, deciderDown = false, llm = {}, 
     areaId,
     /** Replaces Claude's answer for the next runs. */
     setLlm: (patch: Partial<SessionFiling>) => (filing = { ...DEFAULT_FILING, ...patch }),
+    /** Runs while Claude "answers", e.g. a user filing the session meanwhile. */
+    setDuringLlm: (fn: () => void) => (duringLlm = fn),
     /** Queues the job (default key `categorize:<sid>:<lastMsg>`) and runs everything due. */
     async run(id = sessionId, key?: string) {
       const upTo = lastMessageId(db, id)!;

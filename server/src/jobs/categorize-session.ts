@@ -71,7 +71,7 @@ Note content, in the language the user mostly wrote in:
 - Never copy secrets (passwords, codes, card or bank numbers, ID numbers) into any field.`;
 
 /** Laya on the configured URL; the key is read per call so `pnpm secrets set laya` needs no restart. */
-export function layaDecider(db: Database, config: Pick<Config, 'decider'>): Decider {
+function layaDecider(db: Database, config: Pick<Config, 'decider'>): Decider {
   return {
     decide(state, questions, opts) {
       const apiKey = getSecret('laya');
@@ -90,15 +90,17 @@ function deciderState(title: string | null, msgs: Msg[]) {
   return { title: title ?? '', first_user_message: clip(first, 1000), last_turns: clip(last.join('\n'), DECIDER_CHARS - 1000) };
 }
 
-/** The whole session, or the first user message plus the newest turns that fit. Tags inside it are defused. */
-function transcript(msgs: Msg[]): string {
-  const fmt = (m: Msg) => `[${m.role}]\n${m.content.replace(/<\/?transcript>/gi, '')}`;
+const defuse = (text: string): string => text.replace(/<\s*\/?\s*transcript[^>]*>/gi, '');
+
+/** Title, then the whole session or the first user message plus the newest turns that fit. Tags inside are defused. */
+function transcript(title: string | null, msgs: Msg[]): string {
+  const fmt = (m: Msg) => `[${m.role}]\n${defuse(m.content)}`;
   const parts = msgs.map(fmt);
   let total = parts.reduce((n, p) => n + p.length, 0);
   let cut = 1;
   while (total > TRANSCRIPT_CHARS && cut < parts.length - 1) total -= parts[cut++]!.length;
   const kept = cut > 1 ? [parts[0]!, `[… ${cut - 1} earlier messages omitted …]`, ...parts.slice(cut)] : parts;
-  return `<transcript>\n${clip(kept.join('\n\n'), TRANSCRIPT_CHARS)}\n</transcript>`;
+  return `<transcript>\nSession title: ${defuse(title ?? '(none)')}\n\n${clip(kept.join('\n\n'), TRANSCRIPT_CHARS)}\n</transcript>`;
 }
 
 /** First of `base`, `base-2`, … that no area uses (contract: W1-10 makes the slug, unique against `areas.slug`). */
@@ -114,6 +116,7 @@ function freeSlug(db: Database, base: string): string {
 export function categorizeSession({ db, config, writer, decider = layaDecider(db, config), llm = structured }: CategorizeDeps) {
   const areaBySlug = db.prepare('SELECT * FROM areas WHERE slug = ?');
   const areaById = db.prepare('SELECT * FROM areas WHERE id = ?');
+  const subareasOf = db.prepare<[number], Area>(`SELECT * FROM areas WHERE parent_id = ? AND status IN ('active', 'proposed')`);
 
   return async (job: Pick<Job, 'id' | 'idempotency_key' | 'payload'>): Promise<void> => {
     const { sessionId, upToMessageId } = Payload.parse(job.payload);
@@ -160,7 +163,7 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
     // Stage 2: Claude confirms or corrects, and writes the summary.
     const areaList = topLevel
       .map((a) => {
-        const subs = subareas.filter((s) => s.parent_id === a.id).map((s) => `${s.slug} (${s.name})`);
+        const subs = subareas.filter((s) => s.parent_id === a.id).map((s) => s.slug); // slugs only: model-named sub-areas are unreviewed text
         return `- ${a.slug}: ${a.description || a.name}${subs.length ? ` | sub-areas: ${subs.join(', ')}` : ''}`;
       })
       .join('\n');
@@ -174,6 +177,9 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
       escalated && !userFiled
         ? 'The decider is unsure. Decide explicitly whether a listed area fits or a new top-level area is needed.'
         : '',
+      job.idempotency_key.startsWith('recategorize:')
+        ? 'This session waited for the user to review a new top-level area; approved areas are now in the list above.'
+        : '',
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -184,7 +190,7 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
         tier: 'work',
         jobId: job.id,
         system: { rules: RULES, persona: systemPrompt(config.vaultDir).rules ?? '', context },
-        input: `Session title: ${session.title ?? '(none)'}\n\n${transcript(msgs)}`,
+        input: transcript(session.title, msgs),
         schema: SessionFiling,
       },
     );
@@ -205,25 +211,20 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
         }
       }
 
-      let filedArea: Area | null = area;
-      if (area && f.subarea && !userFiled) filedArea = subarea(db, area, f.subarea, subareas);
-
-      let status = filedArea ? 'flagged' : 'inbox';
-      let areaId = filedArea?.id ?? null;
-      let confidence = hint && area && hint.choice === area.slug ? hint.confidence : null;
-      if (userFiled) {
-        status = 'user';
-        areaId = session.area_id;
-        confidence = null;
-      }
-      return { proposal, areaId, status, confidence };
+      const filedArea = area && f.subarea && !userFiled ? subarea(area, f.subarea) : area;
+      return {
+        proposal,
+        status: userFiled ? 'user' : filedArea ? 'flagged' : 'inbox',
+        areaId: userFiled ? session.area_id : (filedArea?.id ?? null),
+        confidence: !userFiled && hint && area && hint.choice === area.slug ? hint.confidence : null,
+      };
     })();
 
     // The note goes under the session's top-level area (its own area, or a sub-area's parent).
     const filed = decision.areaId === null ? null : (areaById.get(decision.areaId) as Area | undefined) ?? null;
     const top = filed?.parent_id ? ((areaById.get(filed.parent_id) as Area | undefined) ?? null) : filed;
     const date = session.started_at.slice(0, 10);
-    const fileName = session.summary_path ? basename(session.summary_path) : `${date}-${slugify(f.title) || `session-${sessionId}`}.md`;
+    const fileName = session.summary_path ? basename(session.summary_path) : `${date}-${slugify(f.title) || 'session'}-${sessionId}.md`;
     const rel = notePath(top, fileName);
     if (top) ensureAreaIndex(db, writer, config.vaultDir, top);
     const tags = [...new Set(f.tags.map(slugify).filter(Boolean))].slice(0, 10);
@@ -236,7 +237,10 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
 
     db.transaction(() => {
       db.prepare(
-        `UPDATE sessions SET area_id = @areaId, area_confidence = @confidence, filing_status = @status, tags = @tags,
+        // A user filing made while Claude was answering wins: those columns stay as the user set them.
+        `UPDATE sessions SET area_id = IIF(filing_status = 'user', area_id, @areaId),
+           area_confidence = IIF(filing_status = 'user', area_confidence, @confidence),
+           filing_status = IIF(filing_status = 'user', 'user', @status), tags = @tags,
            title = COALESCE(title, @title), last_categorized_message_id = MAX(COALESCE(last_categorized_message_id, 0), @upTo),
            summary_path = CASE WHEN @written THEN @rel ELSE summary_path END
          WHERE id = @id`,
@@ -255,7 +259,7 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
         const final = decision.proposal ? `propose:${decision.proposal.slug}` : (top?.slug ?? null);
         db.prepare(
           `UPDATE decisions SET escalated = ?, final_answer = ?
-           WHERE id = (SELECT MAX(id) FROM decisions WHERE subject_type = 'session' AND subject_id = ? AND question = 'area')`,
+           WHERE id = (SELECT MAX(id) FROM decisions WHERE subject_type = 'session' AND subject_id = ? AND question = 'area' AND corrected_by_user = 0)`,
         ).run(escalated ? 1 : 0, final, String(sessionId));
       }
       if (filed?.status === 'proposed') activateIfUsed(db, filed.id);
@@ -263,10 +267,10 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
   };
 
   /** Sub-area under `parent`: a listed one by slug, else a new `proposed` row. Never touches top-level areas. */
-  function subarea(db: Database, parent: Area, s: NonNullable<SessionFiling['subarea']>, known: Area[]): Area {
+  function subarea(parent: Area, s: NonNullable<SessionFiling['subarea']>): Area {
     const base = slugify(s.slug) || slugify(s.name);
     if (!base) return parent;
-    const match = known.find((a) => a.parent_id === parent.id && (a.slug === base || a.slug === `${parent.slug}-${base}`));
+    const match = subareasOf.all(parent.id).find((a) => a.slug === base || a.slug === `${parent.slug}-${base}`);
     if (match) return match;
     const taken = areaBySlug.get(base) as Area | undefined;
     const slug = freeSlug(db, taken ? `${parent.slug}-${base}` : base);
