@@ -14,8 +14,10 @@
     "verify": "pnpm typecheck && pnpm lint && pnpm test",
     "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts",
     "vault:init": "pnpm --filter @agentic-os/server exec tsx src/cli/vault-init.ts",
-    "dev": "concurrently -n server,sidecar -c blue,magenta \"pnpm dev:server\" \"pnpm sidecar\"",
+    "dev": "concurrently -n server,sidecar,web -c blue,magenta,green \"pnpm dev:server\" \"pnpm sidecar\" \"pnpm dev:web\"",
     "dev:server": "pnpm --filter @agentic-os/server exec tsx watch src/main.ts --dev",
+    "dev:web": "pnpm --filter @agentic-os/web dev",
+    "build": "pnpm --filter @agentic-os/web build",
     "login-url": "pnpm --filter @agentic-os/server exec tsx src/cli/login-url.ts",
     "smoke": "pnpm --filter @agentic-os/server exec tsx src/cli/provider-smoke.ts",
     "sidecar:setup": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts setup",
@@ -25,9 +27,11 @@
     "@eslint/js": "^10.0.1",
     "concurrently": "^10.0.6",
     "eslint": "^10.13.0",
+    "eslint-plugin-vue": "^10.11.1",
     "globals": "^17.13.0",
     "typescript": "~6.0.3",
-    "typescript-eslint": "^8.72.0"
+    "typescript-eslint": "^8.72.0",
+    "vue-eslint-parser": "^10.4.1"
   },
   "pnpm": {
     "ignoredBuiltDependencies": [
