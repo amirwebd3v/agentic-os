@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test, expect, beforeEach } from 'vitest';
@@ -9,19 +9,22 @@ import { audit, verifyAuditChain } from '../src/db/audit.ts';
 import { enqueue, claimNext, complete, fail, recoverStaleLocks, MAX_ATTEMPTS } from '../src/db/jobs.ts';
 import { makeTestDb } from './helpers.ts';
 
+// Highest NNNN_*.sql, so adding a migration needs no test edit.
+const LATEST = Math.max(...readdirSync(new URL('../migrations/', import.meta.url)).map((n) => Number(n.slice(0, 4))));
+
 let db: Database;
 beforeEach(() => {
   db = makeTestDb();
 });
 
 describe('db', () => {
-  test('fresh file db is WAL, migrated to user_version 1, seeded', () => {
+  test('fresh file db is WAL, migrated to the latest user_version, seeded', () => {
     const dir = mkdtempSync(join(tmpdir(), 'aos-db-'));
     try {
       const file = openDb(join(dir, 'nested', 'brain.db'));
       expect(file.pragma('journal_mode', { simple: true })).toBe('wal');
       expect(file.pragma('foreign_keys', { simple: true })).toBe(1);
-      expect(file.pragma('user_version', { simple: true })).toBe(1);
+      expect(file.pragma('user_version', { simple: true })).toBe(LATEST);
       expect(file.prepare("SELECT count(*) n FROM areas WHERE status = 'active'").get()).toEqual({ n: 10 });
       file.close();
     } finally {
@@ -31,7 +34,7 @@ describe('db', () => {
 
   test('migrations are idempotent', () => {
     expect(() => migrate(db)).not.toThrow();
-    expect(db.pragma('user_version', { simple: true })).toBe(1);
+    expect(db.pragma('user_version', { simple: true })).toBe(LATEST);
   });
 
   test('audit log is append-only and chained', () => {
