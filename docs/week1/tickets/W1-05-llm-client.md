@@ -41,14 +41,14 @@ One wrapper around `@anthropic-ai/sdk`. The `baseURL` comes from config and the 
 3. **Ledger:** every call writes `llm_calls(pipeline, model, input_tokens, output_tokens, cache_read_tokens, latency_ms)`, including failed calls (with an error flag).
 4. **Errors:** map SDK errors to `{ kind: 'auth' | 'rate_limit' | 'overloaded' | 'bad_request' | 'network' }`. Retry with backoff only on `rate_limit`, `overloaded`, and `network`, at most 3 times.
 5. **`GET /api/provider`** returns `{ status: 'not_configured' | 'ok' | 'error', baseURL, models }`. The UI shows a "Connect provider" banner when the status isn't `ok`.
-6. **`scripts/provider-smoke.ts`** (`pnpm smoke`) runs the 6 checks from plan §2b: plain, stream, tool round trip, cache hit on the 2nd call, batches endpoint, structured output + strict tool, and error mapping. It prints a ✅/❌/⏭ table and writes `data/provider-capabilities.json`, which feature flags such as `batch` and `cache` read. **With no key it skips everything with a clear message and exits 0.**
+6. **`server/src/cli/provider-smoke.ts`** (`pnpm smoke`; lives next to `cli/secrets.ts` so it resolves the server's deps under pnpm) runs the 6 checks from plan §2b: plain, stream, tool round trip, cache hit on the 2nd call, batches endpoint, structured output + strict tool, and error mapping. It prints a ✅/❌/⏭ table and writes `data/provider-capabilities.json`, which feature flags such as `batch` and `cache` read. **With no key it skips everything with a clear message and exits 0.**
 
 ## Files
 | File | Action |
 |---|---|
 | `server/src/llm/{client,errors,ledger}.ts` | Create |
 | `server/src/http/routes/provider.ts` | Create |
-| `scripts/provider-smoke.ts` | Create |
+| `server/src/cli/provider-smoke.ts` | Create |
 | `server/test/llm.test.ts` | Create |
 
 ## Tests — `server/test/llm.test.ts`
@@ -74,4 +74,4 @@ test('error mapping', () => {
 - [ ] Without a key: the server boots, `/api/provider` returns `not_configured`, and `pnpm smoke` exits 0 with skips.
 - [ ] With a key (when you add it): `pnpm smoke` shows all 6 checks ✅ against `https://api.anthropic.com`.
 - [ ] Changing `llm.baseURL` to a 9router URL needs no code change. Checks 1–3 are expected to pass, others may show ⏭/❌, and the results get recorded.
-- [ ] Every call appears in `llm_calls`.
+- [x] Every call appears in `llm_calls`.
