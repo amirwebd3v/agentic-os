@@ -78,6 +78,19 @@ describe('guards and session, edge cases', () => {
     expect(rows.map((r) => (r as { decision: string }).decision)).toEqual(['failure', 'failure', 'failure', 'success']);
     expect(JSON.stringify(rows)).not.toContain(t);
   });
+  test('HEAD, prefetch-style and cross-site subresource requests do not burn or audit the token', async () => {
+    const { app, db, loginToken } = await buildTestApp();
+    const url = `/login?t=${loginToken}`;
+    expect((await app.inject({ method: 'HEAD', url, headers: { host: HOST } })).statusCode).toBe(404);
+    expect((await app.inject({ url, headers: { host: HOST, 'sec-fetch-dest': 'image' } })).statusCode).toBe(403);
+    expect(db.prepare('SELECT count(*) n FROM audit_log').get()).toEqual({ n: 0 });
+    expect((await app.inject({ url, headers: { host: HOST, 'sec-fetch-dest': 'document' } })).statusCode).toBe(302);
+  });
+  test('a planted decoy cookie does not log the user out', async () => {
+    const { app, authed, cookie } = await buildTestApp({ loggedIn: true });
+    const decoy = `aos_session=${'B'.repeat(43)}; ${cookie}`;
+    expect((await app.inject(authed({ url: '/api/health', headers: { cookie: decoy } }))).statusCode).toBe(200);
+  });
   test('the session survives in the db (restart) and only its hash is stored', async () => {
     const { db, cookie } = await buildTestApp({ loggedIn: true });
     const token = cookie.split('=')[1] ?? '';
@@ -105,6 +118,7 @@ describe('logger redaction', () => {
       ],
     });
     await app.inject(authed({ url: '/api/leak', headers: { 'x-api-key': 'hdr-secret' } }));
+    await app.inject({ url: `/login/?t=${loginToken}`, headers: { host: HOST } }); // 404 path
     await app.inject({ url: `/login?t=${loginToken}`, headers: { host: HOST } });
     expect(out).toContain('/login');
     for (const secret of ['tok-secret', 'key-secret', 'auth-secret', 'hdr-secret', loginToken]) expect(out).not.toContain(secret);
