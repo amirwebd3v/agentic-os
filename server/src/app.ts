@@ -64,6 +64,8 @@ export async function buildApp({
   app.addHook('onSend', securityHeaders);
   app.addHook('onRequest', guards(allowedHosts(config.server.port, dev)));
 
+  // Fastify's default 404 logs the raw URL, which would leak /login/?t=<token>.
+  app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 'not found' }));
   loginRoute(app, db);
 
   await app.register(

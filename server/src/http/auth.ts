@@ -31,6 +31,7 @@ export function redeemLoginToken(db: Database, token: string): string | null {
         .prepare('DELETE FROM login_tokens WHERE token_hash = ? AND expires_at > ? RETURNING 1')
         .get(sha256(token), isoIn(0));
       if (!hit) return null;
+      db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?').run(isoIn(0));
       const session = newToken();
       db.prepare('INSERT INTO auth_sessions (token_hash, expires_at) VALUES (?, ?)').run(
         sha256(session),
@@ -41,17 +42,18 @@ export function redeemLoginToken(db: Database, token: string): string | null {
     .immediate();
 }
 
-const readCookie = (header: string | undefined, name: string): string | undefined =>
-  header
-    ?.split(';')
+// Every value of the cookie: cookies aren't port-isolated, so another localhost page can plant a decoy aos_session.
+// ponytail: no logout or revocation yet, add DELETE FROM auth_sessions when the UI needs it
+const readCookies = (header: string | undefined, name: string): string[] =>
+  (header ?? '')
+    .split(';')
     .map((c) => c.trim())
-    .find((c) => c.startsWith(`${name}=`))
-    ?.slice(name.length + 1);
+    .filter((c) => c.startsWith(`${name}=`))
+    .map((c) => c.slice(name.length + 1));
 
 export function hasValidSession(db: Database, cookieHeader: string | undefined): boolean {
-  const token = readCookie(cookieHeader, SESSION_COOKIE);
-  if (!token || !TOKEN_SHAPE.test(token)) return false;
-  return !!db.prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ? AND expires_at > ?').get(sha256(token), isoIn(0));
+  const query = db.prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ? AND expires_at > ?');
+  return readCookies(cookieHeader, SESSION_COOKIE).some((t) => TOKEN_SHAPE.test(t) && !!query.get(sha256(t), isoIn(0)));
 }
 
 export const requireSession =
@@ -62,11 +64,15 @@ export const requireSession =
 
 /** `GET /login?t=<token>`: exchanges a one-time token for the session cookie, then redirects to `/`. */
 export function loginRoute(app: FastifyInstance, db: Database): void {
-  app.get('/login', async (req, reply) => {
+  // No HEAD route: a prefetch or link preview must not burn the one-time token.
+  app.get('/login', { exposeHeadRoute: false }, async (req, reply) => {
+    reply.header('cache-control', 'no-store');
+    // An <img> or fetch from any web page reaches this; refusing them unaudited keeps the audit log from being flooded.
+    const dest = req.headers['sec-fetch-dest'];
+    if (dest !== undefined && dest !== 'document') return reply.code(403).send({ error: 'open the login link directly' });
     const { t } = req.query as { t?: unknown };
     const session = typeof t === 'string' ? redeemLoginToken(db, t) : null;
     audit(db, { actor: 'user', action: 'auth.login', args: { ip: req.ip }, decision: session ? 'success' : 'failure' });
-    reply.header('cache-control', 'no-store');
     if (!session) return reply.code(401).send({ error: 'invalid or expired login link' });
     reply.header('set-cookie', `${SESSION_COOKIE}=${session}; Max-Age=${SESSION_TTL_S}; Path=/; HttpOnly; SameSite=Strict`);
     return reply.redirect('/');
