@@ -57,6 +57,13 @@ test('no key → null client, not_configured, calls fail as auth and are recorde
   expect(rows()).toHaveLength(1);
 });
 
+test('inherited ANTHROPIC_AUTH_TOKEN is never used', () => {
+  vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'claude-code-token');
+  const client = getLlm(config)!;
+  expect(client.authToken).toBeNull();
+  expect(client.apiKey).toBe('sk-test');
+});
+
 test('error mapping', () => {
   expect(mapError({ status: 401 }).kind).toBe('auth');
   expect(mapError({ status: 403 }).kind).toBe('auth');
