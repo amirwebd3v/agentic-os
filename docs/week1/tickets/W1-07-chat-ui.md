@@ -66,6 +66,6 @@ test('data: images survive', () => {
 ```
 
 ## Acceptance criteria
-- [ ] You can create a session, chat with streamed tokens, stop the reply, re-file a session, and see the "interrupted" state.
-- [ ] A model reply containing `![](https://example.com/x.png)` triggers **no** network request (DevTools Network tab is empty, and CSP backs it up).
-- [ ] The banner appears without a key and disappears after `pnpm secrets set anthropic` + Reload.
+- [x] You can create a session, chat with streamed tokens, stop the reply, re-file a session, and see the "interrupted" state.
+- [x] A model reply containing `![](https://example.com/x.png)` triggers **no** network request (DevTools Network tab is empty, and CSP backs it up).
+- [x] The banner appears without a key and disappears after `pnpm secrets set anthropic` + Reload. (Checked against a mock of the contract; the live provider was already configured.)
