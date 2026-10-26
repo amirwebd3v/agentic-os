@@ -3,9 +3,16 @@ import { enqueue } from '../db/jobs.ts';
 
 const TICK_MS = 60_000;
 
-/** Queues `categorize_session` up to message `lastMsgId`. Idempotent per (session, last message). */
-export const enqueueCategorize = (db: Database, sessionId: number, lastMsgId: number): boolean =>
-  enqueue(db, 'categorize_session', `categorize:${sessionId}:${lastMsgId}`, { sessionId, upToMessageId: lastMsgId });
+/**
+ * Queues the end-of-session job up to message `lastMsgId`: `categorize_session`, or `extract_persona` for a persona
+ * session (an interview is never filed). Idempotent per (session, last message).
+ */
+export function enqueueCategorize(db: Database, sessionId: number, lastMsgId: number): boolean {
+  const payload = { sessionId, upToMessageId: lastMsgId };
+  return db.prepare('SELECT mode FROM sessions WHERE id = ?').pluck().get(sessionId) === 'persona'
+    ? enqueue(db, 'extract_persona', `persona:${sessionId}:${lastMsgId}`, payload)
+    : enqueue(db, 'categorize_session', `categorize:${sessionId}:${lastMsgId}`, payload);
+}
 
 /** The newest finished message id of a session, or null. */
 export const lastMessageId = (db: Database, sessionId: number): number | null =>

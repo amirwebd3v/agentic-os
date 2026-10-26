@@ -34,6 +34,7 @@ interface Area extends NoteArea {
 }
 interface SessionRow {
   id: number;
+  mode: string;
   title: string | null;
   area_id: number | null;
   filing_status: string | null;
@@ -93,7 +94,7 @@ function deciderState(title: string | null, msgs: Msg[]) {
 const defuse = (text: string): string => text.replace(/<\s*\/?\s*transcript[^>]*>/gi, '');
 
 /** Title, then the whole session or the first user message plus the newest turns that fit. Tags inside are defused. */
-function transcript(title: string | null, msgs: Msg[]): string {
+export function transcript(title: string | null, msgs: Msg[]): string {
   const fmt = (m: Msg) => `[${m.role}]\n${defuse(m.content)}`;
   const parts = msgs.map(fmt);
   let total = parts.reduce((n, p) => n + p.length, 0);
@@ -121,7 +122,7 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
   return async (job: Pick<Job, 'id' | 'idempotency_key' | 'payload'>): Promise<void> => {
     const { sessionId, upToMessageId } = Payload.parse(job.payload);
     const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as SessionRow | undefined;
-    if (!session) return; // deleted meanwhile
+    if (!session || session.mode === 'persona') return; // deleted meanwhile; interviews are never filed
     // W1-11 re-files an approved proposal with a `recategorize:` job for the same last message, so only that may repeat.
     const repeat = (session.last_categorized_message_id ?? 0) >= upToMessageId;
     if (repeat && !job.idempotency_key.startsWith('recategorize:')) return;
