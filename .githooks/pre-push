@@ -1,0 +1,4 @@
+#!/bin/sh
+# Lesson 2026-10-26: a grep-filtered check once let a failing lint get pushed.
+# Every push must pass the full verify. Never bypass with --no-verify.
+pnpm verify || { echo "pre-push: 'pnpm verify' failed, push blocked." >&2; exit 1; }

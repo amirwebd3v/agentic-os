@@ -1,5 +1,5 @@
 import { text } from 'node:stream/consumers';
-import { SECRET_NAMES, getSecret, isSecretName, setSecret } from '../secrets.ts';
+import { SECRET_NAMES, isSecretName, secretSource, setSecret } from '../secrets.ts';
 
 const USAGE = `Usage:
   pnpm secrets set <${SECRET_NAMES.join('|')}>   prompts for the value (hidden)
@@ -39,7 +39,10 @@ async function readHidden(prompt: string): Promise<string> {
 async function main(args: string[]): Promise<number> {
   const [cmd, name, ...rest] = args;
   if (cmd === 'status' && name === undefined) {
-    for (const n of SECRET_NAMES) console.log(`${n}: ${getSecret(n) === null ? 'unset' : 'set'}`);
+    for (const n of SECRET_NAMES) {
+      const source = secretSource(n);
+      console.log(`${n}: ${source ? `set (${source})` : 'unset'}`);
+    }
     return 0;
   }
   if (cmd === 'set' && name !== undefined && rest.length === 0) {

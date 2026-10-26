@@ -4,6 +4,7 @@ agentic-os.json
 *.db
 *.db-*
 .env*
+!.env.example
 sidecar/.venv/
 # Obsidian per-user state
 docs/.obsidian/workspace*.json
