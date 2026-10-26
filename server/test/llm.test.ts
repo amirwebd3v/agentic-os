@@ -1,11 +1,10 @@
-import Fastify from 'fastify';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { z } from 'zod';
 import { parseConfig } from '../src/config.ts';
 import { providerRoutes } from '../src/http/routes/provider.ts';
 import { getLlm, providerStatus, reloadLlm, stream, structured, systemBlocks } from '../src/llm/client.ts';
 import { mapError } from '../src/llm/errors.ts';
-import { makeTestDb } from './helpers.ts';
+import { buildTestApp, makeTestDb } from './helpers.ts';
 
 const secret = vi.hoisted(() => ({ key: null as string | null }));
 vi.mock('../src/secrets.ts', () => ({ getSecret: () => secret.key }));
@@ -142,14 +141,14 @@ test('stream stopped early by the consumer is still recorded', async () => {
   expect(rows()).toEqual([expect.objectContaining({ error: expect.stringMatching(/^aborted: /) })]);
 });
 
-test('provider routes on a bare Fastify instance', async () => {
-  const app = Fastify();
-  await app.register(providerRoutes, { config });
+test('provider routes under /api, behind the session check', async () => {
+  const { app, authed } = await buildTestApp({ loggedIn: true, plugins: [providerRoutes] });
   secret.key = null;
-  expect((await app.inject({ method: 'GET', url: '/provider' })).json()).toEqual({
-    status: 'not_configured', baseURL: 'http://router.test:20128', models: config.llm.models,
+  expect((await app.inject(authed({ method: 'GET', url: '/api/provider' }))).json()).toEqual({
+    status: 'not_configured', baseURL: app.config.llm.baseURL, models: app.config.llm.models,
   });
   secret.key = 'sk-test';
-  expect((await app.inject({ method: 'POST', url: '/provider/reload' })).json()).toMatchObject({ status: 'ok' });
+  expect((await app.inject(authed({ method: 'POST', url: '/api/provider/reload' }))).json()).toMatchObject({ status: 'ok' });
+  expect((await app.inject(authed({ method: 'GET', url: '/api/provider', headers: { cookie: '' } }))).statusCode).toBe(401);
   await app.close();
 });
