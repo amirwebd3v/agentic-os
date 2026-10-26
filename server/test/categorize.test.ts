@@ -1,7 +1,11 @@
+import { copyFileSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
+import { decide } from '../src/approvals/apply.ts';
 import { verifyAuditChain } from '../src/db/audit.ts';
 import { enqueue } from '../src/db/jobs.ts';
 import { runNext, startRunner } from '../src/jobs/runner.ts';
+import { parseAreas } from '../src/vault/areas.ts';
 import { parseNote } from '../src/vault/frontmatter.ts';
 import { setupCategorize } from './helpers.ts';
 
@@ -137,6 +141,19 @@ test('recategorize after approval re-files the inbox session and moves its note'
   expect(t.session().summary_path).toBe(inboxNote.replace('inbox/', 'wiki/job-search/'));
   expect(t.noteExists(inboxNote)).toBe(false);
   expect(t.noteExists('wiki/job-search/_index.md')).toBe(true);
+});
+
+test('end to end with W1-11: propose → approve → recategorize files the session', async () => {
+  const t = await setupCategorize({ llm: { area_slug: null, propose_top_level: proposal } });
+  copyFileSync(new URL('../templates/CLAUDE.md', import.meta.url), join(t.vaultDir, 'CLAUDE.md'));
+  await t.run();
+  const [a] = t.approvals('propose_category');
+  decide(t.db, t.vaultDir, a!.id, 'approve');
+  t.setLlm({ area_slug: 'job-search' });
+  while (await runNext(t.db, { categorize_session: t.handle }));
+  expect(t.session()).toMatchObject({ area_id: t.areaId('job-search'), filing_status: 'flagged' });
+  expect(t.session().summary_path).toMatch(/^wiki\/job-search\/sessions\//);
+  expect(parseAreas(readFileSync(join(t.vaultDir, 'CLAUDE.md'), 'utf8')).map((x) => x.slug)).toContain('job-search');
 });
 
 test('new sub-area is proposed, reused, and activates at 3 sessions', async () => {
