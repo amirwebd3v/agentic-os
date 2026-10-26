@@ -10,7 +10,7 @@ The `approvals` table (migration `0001`) is the only hand-off between the parts 
 |---|---|---|---|---|
 | `propose_category` | W1-10 | `{ slug, name, description, reason, parent_slug: string \| null, session_ids: number[] }` | `description` | See below |
 | `vault_conflict` | W1-08 (merged) | `{ path, current_hash, content }` | — | Overwrite `path` with `content`, but only if the file's hash still equals `current_hash`; otherwise refresh the conflict. On reject, keep the user's file and record its hash in `vault_notes` as `last_written_by='user'`. Never expires. |
-| `persona_statement` | W1-12 (later) | `{ question_id, topic, statement, in_my_words }` | `statement` | Append to `persona/<topic>.md` (W1-12 implements the apply) |
+| `persona_statement` | W1-12 | `{ question_id, topic, question, statement, in_my_words }` (`question` is the bank text, for display) | `statement` | Append `- <final statement>  ^<question_id>` to `persona/<topic>.md` (created with `sensitivity: 1` frontmatter) and tick the question in `persona/_questions.md`, both hash-checked like `CLAUDE.md`. Reject leaves the question unticked, so it can be asked again. |
 
 ## `propose_category` approval
 1. Insert the area as `status='active'`, `created_by='user'`, with `parent_id` taken from `parent_slug`. Use the payload's `slug` as-is. **W1-10 makes the slug** (lowercase, `a-z0-9-`, unique against `areas.slug`), so W1-11 never slugifies.

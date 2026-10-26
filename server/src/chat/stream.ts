@@ -5,6 +5,7 @@ import { getLlm, stream } from '../llm/client.ts';
 import type { LlmConfig } from '../llm/client.ts';
 import { LlmError, mapError } from '../llm/errors.ts';
 import type { LlmErrorKind } from '../llm/errors.ts';
+import { personaTurn } from './modes/persona.ts';
 import { history, systemPrompt } from './prompt.ts';
 
 /** The slice of the LLM client chat uses; tests swap in `fakeLlm`. */
@@ -57,12 +58,11 @@ export async function streamReply({ db, config, llm, sessionId, assistantId, sig
     update.run(text, status, assistantId);
     saved = text;
   };
+  const persona = personaTurn(db, config.vaultDir, sessionId);
   const timer = setInterval(() => text !== saved && save('streaming'), FLUSH_MS);
   try {
-    const events = llm.stream(
-      { db, config },
-      { pipeline: 'chat', tier: 'work', system: systemPrompt(config.vaultDir), messages: history(db, sessionId), signal },
-    );
+    const system = { ...systemPrompt(config.vaultDir), ...(persona && { context: persona.context }) };
+    const events = llm.stream({ db, config }, { pipeline: 'chat', tier: 'work', system, messages: history(db, sessionId), signal });
     let usage: Anthropic.Usage | undefined;
     for await (const ev of events) {
       if (ev.type === 'text') {
@@ -84,5 +84,6 @@ export async function streamReply({ db, config, llm, sessionId, assistantId, sig
     if (!(err instanceof LlmError)) throw err; // not a model error: a bug or an unreadable vault, so the route logs it
   } finally {
     clearInterval(timer);
+    persona?.record(text); // a cut-off reply still showed its question
   }
 }

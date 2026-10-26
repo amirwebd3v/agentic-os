@@ -27,7 +27,7 @@ export type Approval = {
 } & (
   | { action_type: 'propose_category'; payload: { slug: string; name: string; description: string; reason?: string; parent_slug: string | null; session_ids: number[] } }
   | { action_type: 'vault_conflict'; payload: { path: string; current_hash: string | null; content: string }; current_text: string | null }
-  | { action_type: 'persona_statement'; payload: Record<string, unknown> }
+  | { action_type: 'persona_statement'; payload: { question_id: string; topic: string; question?: string; statement: string; in_my_words: string } }
 );
 export type ApprovalPage = { items: Approval[]; more: number; total: number };
 export type Decision = 'approve' | 'reject';
@@ -72,6 +72,7 @@ export const getSession = (id: number) =>
   json<{ session: SessionSummary; messages: Message[] }>('GET', `/api/sessions/${id}`);
 export const patchSession = (id: number, patch: { title?: string; area_id?: number }) =>
   json<SessionSummary>('PATCH', `/api/sessions/${id}`, patch);
+export const endSession = (id: number) => json<{ queued: boolean }>('POST', `/api/sessions/${id}/end`);
 export const listApprovals = (all = false) => json<ApprovalPage>('GET', `/api/approvals?status=pending${all ? '&all=true' : ''}`);
 export const decideApproval = (id: number, decision: Decision, final_text?: string) =>
   json<{ id: number; status: string }>('POST', `/api/approvals/${id}/decide`, final_text === undefined ? { decision } : { decision, final_text });
