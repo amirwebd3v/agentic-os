@@ -14,7 +14,8 @@
     "verify": "pnpm typecheck && pnpm lint && pnpm test",
     "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts",
     "vault:init": "pnpm --filter @agentic-os/server exec tsx src/cli/vault-init.ts",
-    "dev": "pnpm --filter @agentic-os/server exec tsx watch src/main.ts --dev",
+    "dev": "concurrently -n server,sidecar -c blue,magenta \"pnpm dev:server\" \"pnpm sidecar\"",
+    "dev:server": "pnpm --filter @agentic-os/server exec tsx watch src/main.ts --dev",
     "login-url": "pnpm --filter @agentic-os/server exec tsx src/cli/login-url.ts",
     "smoke": "pnpm --filter @agentic-os/server exec tsx src/cli/provider-smoke.ts",
     "sidecar:setup": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts setup",
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.6",
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
     "typescript": "~6.0.3",
