@@ -28,7 +28,7 @@ export type StreamEnd = { kind: 'done' } | { kind: 'aborted' } | { kind: 'error'
 export const needsLogin = ref(false);
 
 export class ApiError extends Error {
-  constructor(readonly status: number, readonly body: unknown) {
+  constructor(readonly status: number) {
     super(`HTTP ${status}`);
   }
 }
@@ -42,7 +42,7 @@ async function call(method: string, path: string, body?: unknown, signal?: Abort
     signal: signal ?? null,
   });
   if (res.status === 401) needsLogin.value = true;
-  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => null));
+  if (!res.ok) throw new ApiError(res.status);
   return res;
 }
 const json = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
