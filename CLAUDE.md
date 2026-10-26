@@ -26,7 +26,7 @@ Every session reads this file automatically, including parallel sessions in `.cl
 7. **gh** is `C:\Program Files\GitHub CLI\gh.exe`.
    - Its keyring login is invisible to the sandboxed Bash, so run gh unsandboxed or from PowerShell.
    - The git protocol is https.
-8. **Merging a session's PR:** run `pnpm verify` yourself at the PR's head commit first. A session's report is not proof.
+8. **Merging a session's PR:** run `pnpm verify` yourself at the PR's head commit first. A session's report is not proof. Then merge exactly that commit: `gh pr merge <N> --squash --match-head-commit <verified-sha>`, which refuses if the head moved. After reporting a PR ready, a session pushes nothing more unless the coordinator asks.
 
 ## Learning loop: when a mistake happens
 1. Fix it.
@@ -50,3 +50,4 @@ Every session reads this file automatically, including parallel sessions in `.cl
 - 2026-10-26: `buildTestApp` used the real `web/dist`, so tests changed result after `pnpm build`, and static's wildcard returned 404 instead of 401 for unknown `/api/*`. → Test helpers never depend on build artifacts (`webDist` is injected), and static uses `wildcard: false`. Found by W1-07.
 - 2026-10-26: stopping a backgrounded `pnpm … tsx src/main.ts` left node holding its port (same as the sidecar case). → After stopping a dev server, check the port with `netstat -ano` and stop that PID once its command line confirms it is yours.
 - 2026-10-26: `/tmp` is shared by parallel sessions. A `pnpm verify > /tmp/v.log` showed a sibling worktree's failure as if it were ours. → Write logs and scratch files to the session's own scratchpad, never a fixed `/tmp` name.
+- 2026-10-26: four sessions pushed to their PR branch after it was verified and merged; the late commits were stranded and needed follow-up PRs. → rule 8: `--match-head-commit`, and no pushes after reporting ready.
