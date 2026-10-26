@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "test": "pnpm -r test",
     "verify": "pnpm typecheck && pnpm lint && pnpm test",
-    "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts"
+    "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts",
+    "vault:init": "pnpm --filter @agentic-os/server exec tsx src/cli/vault-init.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

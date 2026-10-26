@@ -9,6 +9,8 @@
   "dependencies": {
     "@napi-rs/keyring": "^2.1.2",
     "better-sqlite3": "^13.0.3",
+    "chokidar": "^6.0.0",
+    "gray-matter": "^4.0.3",
     "zod": "^4.6.7"
   },
   "devDependencies": {
