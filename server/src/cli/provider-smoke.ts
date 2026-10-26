@@ -1,8 +1,7 @@
-// `pnpm smoke`: checks what the configured provider really supports (plan-review.md §2b) and writes
-// <dataDir>/provider-capabilities.json, which feature flags (cache, batch, structured) read.
+// `pnpm smoke`: checks what the configured provider really supports (plan-review.md §2b).
 // Re-run whenever the provider or a model changes. Never prints the key.
 import assert, { AssertionError } from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
@@ -144,22 +143,6 @@ for (const name of CHECKS) {
 }
 
 const ok = (c: Check) => results[c].result === 'pass';
-const file = join(config.dataDir, 'provider-capabilities.json');
-mkdirSync(config.dataDir, { recursive: true });
-writeFileSync(
-  file,
-  JSON.stringify(
-    {
-      checkedAt: new Date().toISOString(),
-      baseURL: config.llm.baseURL,
-      models,
-      flags: { stream: ok('stream'), tools: ok('tools'), cache: ok('cache'), batch: ok('batch'), structured: ok('structured') },
-      results,
-    },
-    null,
-    2,
-  ),
-);
-console.log(`\nWrote ${file}`);
+// ponytail: results are only printed; persist them when a feature needs to read capability flags.
 // Cache and batch are capability flags, not failures: only the core path decides the exit code.
 process.exitCode = (['plain', 'stream', 'errors'] as const).every(ok) ? 0 : 1;

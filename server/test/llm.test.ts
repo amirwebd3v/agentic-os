@@ -73,6 +73,15 @@ test('error mapping', () => {
   expect(mapError(new TypeError('fetch failed')).kind).toBe('network');
 });
 
+test('local errors never carry model text into messages, the ledger or logs', () => {
+  const leak = new SyntaxError('Unexpected end of JSON input near "my therapist said I should"');
+  const e = mapError(leak);
+  expect(e.kind).toBe('network');
+  expect(e.message).toBe('SyntaxError (no response from provider)');
+  expect(e.cause).toBeUndefined();
+  expect(mapError(Object.assign(new Error('x'.repeat(1000)), { status: 400 })).message).toHaveLength(300);
+});
+
 test('system blocks: rules and persona cached, context last and uncached', () => {
   expect(systemBlocks({ context: 'c', persona: 'p', rules: 'r' })).toEqual([
     { type: 'text', text: 'r', cache_control: { type: 'ephemeral' } },

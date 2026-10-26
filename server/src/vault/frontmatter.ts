@@ -4,7 +4,7 @@ import { z } from 'zod';
 // YAML turns an unquoted 2026-10-26 into a Date; normalise either form to an ISO string.
 const isoDate = z.preprocess((v) => (v instanceof Date ? v.toISOString() : v), z.iso.datetime().or(z.iso.date()));
 
-export const FrontmatterSchema = z.object({
+const FrontmatterSchema = z.object({
   id: z.string().min(1),
   area: z.string().min(1),
   tags: z.array(z.string()).default([]),

@@ -3,7 +3,7 @@ import type { FastifyInstance, onRequestAsyncHookHandler } from 'fastify';
 import { audit } from '../db/audit.ts';
 import type { Database } from '../db/index.ts';
 
-export const SESSION_COOKIE = 'aos_session';
+const SESSION_COOKIE = 'aos_session';
 const LOGIN_TTL_MS = 10 * 60_000;
 const SESSION_TTL_S = 30 * 24 * 3600;
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/; // 32 random bytes, base64url
@@ -23,7 +23,7 @@ export function createLoginToken(db: Database): string {
 export const loginUrl = (port: number, token: string): string => `http://127.0.0.1:${port}/login?t=${token}`;
 
 /** Consumes a login token and returns a new session token, or null if it is unknown, used or expired. */
-export function redeemLoginToken(db: Database, token: string): string | null {
+function redeemLoginToken(db: Database, token: string): string | null {
   if (!TOKEN_SHAPE.test(token)) return null;
   return db
     .transaction(() => {
@@ -51,7 +51,7 @@ const readCookies = (header: string | undefined, name: string): string[] =>
     .filter((c) => c.startsWith(`${name}=`))
     .map((c) => c.slice(name.length + 1));
 
-export function hasValidSession(db: Database, cookieHeader: string | undefined): boolean {
+function hasValidSession(db: Database, cookieHeader: string | undefined): boolean {
   const query = db.prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ? AND expires_at > ?');
   return readCookies(cookieHeader, SESSION_COOKIE).some((t) => TOKEN_SHAPE.test(t) && !!query.get(sha256(t), isoIn(0)));
 }

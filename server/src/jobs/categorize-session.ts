@@ -25,7 +25,16 @@ export interface CategorizeDeps {
   llm?: typeof structured;
 }
 
-const Payload = z.object({ sessionId: z.number().int().positive(), upToMessageId: z.number().int().positive() });
+export const Payload = z.object({ sessionId: z.number().int().positive(), upToMessageId: z.number().int().positive() });
+
+/** A session's finished user/assistant messages up to `upTo`, oldest first. Shared by the filing and persona jobs. */
+export const sessionMessages = (db: Database, sessionId: number, upTo: number): Msg[] =>
+  db
+    .prepare(
+      `SELECT role, content FROM messages WHERE session_id = ? AND id <= ? AND role IN ('user', 'assistant')
+         AND status != 'streaming' AND content != '' ORDER BY id`,
+    )
+    .all(sessionId, upTo) as Msg[];
 
 interface Area extends NoteArea {
   id: number;
@@ -127,12 +136,7 @@ export function categorizeSession({ db, config, writer, decider = layaDecider(db
     const repeat = (session.last_categorized_message_id ?? 0) >= upToMessageId;
     if (repeat && !job.idempotency_key.startsWith('recategorize:')) return;
 
-    const msgs = db
-      .prepare(
-        `SELECT role, content FROM messages WHERE session_id = ? AND id <= ? AND role IN ('user', 'assistant')
-           AND status != 'streaming' AND content != '' ORDER BY id`,
-      )
-      .all(sessionId, upToMessageId) as Msg[];
+    const msgs = sessionMessages(db, sessionId, upToMessageId);
     if (!msgs.some((m) => m.role === 'user')) return;
 
     const userFiled = session.filing_status === 'user';
