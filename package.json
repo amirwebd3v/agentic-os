@@ -12,7 +12,9 @@
     "lint": "eslint .",
     "test": "pnpm -r test",
     "verify": "pnpm typecheck && pnpm lint && pnpm test",
-    "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts"
+    "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts",
+    "dev": "pnpm --filter @agentic-os/server exec tsx watch src/main.ts --dev",
+    "login-url": "pnpm --filter @agentic-os/server exec tsx src/cli/login-url.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
