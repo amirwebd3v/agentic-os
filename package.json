@@ -12,7 +12,9 @@
     "lint": "eslint .",
     "test": "pnpm -r test",
     "verify": "pnpm typecheck && pnpm lint && pnpm test",
-    "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts"
+    "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts",
+    "sidecar:setup": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts setup",
+    "sidecar": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

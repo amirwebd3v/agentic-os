@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint';
 import globals from 'globals';
 
 export default defineConfig(
-  { ignores: ['**/dist/**', '**/node_modules/**', 'docs/**', '.claude/**'] },
+  { ignores: ['**/dist/**', '**/node_modules/**', 'docs/**', '.claude/**', 'sidecar/.venv/**', 'sidecar/.uv-cache/**'] },
   js.configs.recommended,
   tseslint.configs.recommended,
   { languageOptions: { globals: globals.node } },
