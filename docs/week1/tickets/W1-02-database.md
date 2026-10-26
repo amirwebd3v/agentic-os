@@ -75,6 +75,6 @@ describe('db', () => {
 ```
 
 ## Acceptance criteria
-- [ ] A fresh `brain.db` is created on first boot with `user_version = 1`.
-- [ ] Audit log UPDATE and DELETE both fail. The chain verifies.
-- [ ] Job enqueue is idempotent, and stale locks are recovered on boot.
+- [x] A fresh `brain.db` is created on first boot with `user_version = 1`.
+- [x] Audit log UPDATE and DELETE both fail. The chain verifies.
+- [x] Job enqueue is idempotent, and stale locks are recovered on boot.
