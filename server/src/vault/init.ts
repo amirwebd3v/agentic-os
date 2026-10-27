@@ -5,14 +5,13 @@ import { gitCommit, vaultGit } from './writer.ts';
 
 const templates = fileURLToPath(new URL('../../templates/', import.meta.url));
 
-export const VAULT_FOLDERS = ['persona', 'wiki', 'journal', 'inbox', 'outputs', 'exports', 'attachments', '.obsidian'];
+export const VAULT_FOLDERS = ['career', 'wiki', 'journal', 'inbox', 'outputs', 'exports', 'attachments', '.obsidian'];
 
 const SEED_FILES: Record<string, () => string> = {
   '.gitignore': () => ['attachments/', '.obsidian/workspace*.json', '.obsidian/cache', '.trash/', ''].join('\n'),
   '.obsidian/app.json': () =>
     JSON.stringify({ attachmentFolderPath: 'attachments', newLinkFormat: 'shortest', useMarkdownLinks: false }, null, 2) + '\n',
   'CLAUDE.md': () => readFileSync(join(templates, 'CLAUDE.md'), 'utf8'),
-  'persona/_questions.md': () => readFileSync(join(templates, 'persona-questions.md'), 'utf8'),
 };
 
 /**

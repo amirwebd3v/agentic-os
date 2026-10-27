@@ -14,14 +14,14 @@ describe('local hardening', () => {
     const { app, cookie } = await buildTestApp({ loggedIn: true });
     const r = await app.inject({
       method: 'POST',
-      url: '/api/sessions',
+      url: '/api/provider/reload',
       headers: { host: HOST, origin: 'https://evil.example', cookie, 'x-aos': '1' },
     });
     expect(r.statusCode).toBe(403);
   });
   test('POST without X-AOS is rejected', async () => {
     const { app, cookie } = await buildTestApp({ loggedIn: true });
-    const r = await app.inject({ method: 'POST', url: '/api/sessions', headers: { host: HOST, origin: ORIGIN, cookie } });
+    const r = await app.inject({ method: 'POST', url: '/api/provider/reload', headers: { host: HOST, origin: ORIGIN, cookie } });
     expect(r.statusCode).toBe(403);
   });
   test('login token is single-use; CSP blocks remote images', async () => {
@@ -35,7 +35,7 @@ describe('local hardening', () => {
   });
   test('api requires session', async () => {
     const { app } = await buildTestApp();
-    expect((await app.inject({ url: '/api/sessions', headers: { host: HOST } })).statusCode).toBe(401);
+    expect((await app.inject({ url: '/api/provider', headers: { host: HOST } })).statusCode).toBe(401);
   });
 });
 

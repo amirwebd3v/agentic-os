@@ -57,7 +57,6 @@ const ConfigSchema = z.object({
       escalateBelow: z.number().min(0).max(1).default(0.6),
     })
     .prefault({}),
-  session: z.object({ idleMinutes: z.number().int().positive().default(15) }).prefault({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

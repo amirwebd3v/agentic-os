@@ -27,7 +27,7 @@ const run = async (fn: () => Promise<string[] | void>) => {
     selected.value = new Set([...selected.value].filter((id) => review.items.some((a) => a.id === id)));
   }
 };
-const decide = (id: number, decision: Decision, finalText?: string) => run(() => review.decide(id, decision, finalText));
+const decide = (id: number, decision: Decision) => run(() => review.decide(id, decision));
 const batch = (decision: Decision) => run(() => review.batch([...selected.value], decision));
 const showMore = () => {
   review.showAll = true;
@@ -58,7 +58,7 @@ onMounted(() => {
       :busy="busy"
       :selected="selected.has(a.id)"
       @update:selected="toggle(a.id, $event)"
-      @decide="(d, t) => decide(a.id, d, t)"
+      @decide="(d) => decide(a.id, d)"
     />
     <button v-if="review.more" type="button" class="more" :disabled="busy" @click="showMore">Show {{ review.more }} more</button>
   </main>
