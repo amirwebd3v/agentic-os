@@ -6,7 +6,7 @@ Every session reads this file automatically, including parallel sessions in `.cl
 - **Plan:** `docs/plan-review.md`
 - **Week 1 plan:** `docs/week1/implementation-plan.md`
 - **Ticket specs:** `docs/week1/tickets/*.md`
-- **Week 2 plan (Career slice first, skill routing):** `docs/week2/implementation-plan.md`
+- **Week 2 plan (Career slice first):** `docs/week2/implementation-plan.md`; shared shapes `docs/week2/career-contract.md`; specs `docs/week2/tickets/*.md`; which skill at which step `docs/week2/skills-map.md`
 - **Build loop:** `docs/Workflow.md` (fullstack-dev-skills + ponytail + claude-mem)
 - **Backlog:** GitHub Project https://github.com/users/amirwebd3v/projects/1. Status lives only there.
 
