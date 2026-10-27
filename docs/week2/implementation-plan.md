@@ -40,18 +40,18 @@ A private, categorised knowledge base of your life areas (career, email, social/
 |---|---|---|---|---|---|
 | W2-00 | **Cleanup + shell refactor:** remove the chat channel, session filing and persona interviews with their tests and approval types; park the decider (`pnpm dev` no longer starts the sidecar); move the "untrusted text in tags" helper to `llm/untrusted.ts`; the web shell becomes a nav (Review now, Applications in W2-08). See §6. | 3 | 1 | — | ponytail, vue-expert |
 | W2-01 | **Build-loop upgrade** (docs): handoff at ~70% context, a UAT step between waves, the skill-routing table in `Workflow.md` | 1 | 1 | — | claude-mem, ponytail |
-| W2-02 | **Design context:** `PRODUCT.md` + `DESIGN.md` from the existing `style.css` | 1 | 1 | — | impeccable |
+| W2-02 | **Design context:** `web/PRODUCT.md` and a seed `web/DESIGN.md` for a **replacement** look, chosen from research (§6, "Design system decision"). No UI code yet. | 1 | 1 | — | impeccable |
 | W2-03 | **Redaction + placeholders:** split contact details out, `{{CONTACT_*}}` placeholders, a test that captures the final prompt (inject a fake `llm`, as `CategorizeDeps.llm` does) and fails if any contact value appears | 2 | 2 | — | secure-code-guardian, typescript-pro |
 | W2-04 | **Master CV import:** LinkedIn CSV → `career/master.md` + `contact.md` (the `.docx` is the output template in W2-09; importing bullets from it is deferred, see [career-contract.md](career-contract.md) §12). New approval type `career_master_import` (branch in `approvals/apply.ts`, `Approval` union and `ApprovalCard.vue` in `web/`, `review-contract.md`), **exempt from the 14-day expiry**, written at approval time as a user-owned, hash-checked file | 4 | 2 | 03 | typescript-pro, ponytail |
 | W2-05 | **Posting intake:** paste → requirements as a strict schema (enums, short strings), quarantined, no tools; wrap the posting with `wrapUntrusted()` from `llm/untrusted.ts` (W2-00); clip lengths after the call (the schemas today have no caps); injection canary fixtures; typed errors with fixed strings only | 2 | 2 | — | secure-code-guardian, claude-api |
 | W2-06 | **Job status:** `POST /api/career/tailor` (enqueue) + `GET` status polling, a failed state in the UI, tailor jobs capped at 1 attempt. Ids only in payloads; text lives in its own table | 2 | 2 | — | typescript-pro, vue-expert |
 | W2-07 | **Tailor pipeline:** match → draft CV + cover letter → verifier → one stored retry → `applications` row in `draft_ready` (migration `0005`, append-only `application_events`) | 5 | 3 | 03–06 | claude-api, sql-pro, ponytail |
-| W2-08 | **Application page:** per-line source bullets, diff against the master, edit in place, approve = final. Markdown through the existing sanitizer, never `v-html` on raw text | 5 | 4 | 07 | vue-expert, impeccable, design-taste-frontend |
+| W2-08 | **Application page + new look:** per-line source bullets, diff against the master, edit in place, approve = final. Markdown through the existing sanitizer, never `v-html` on raw text. Starts with impeccable's direction round on this real surface; then restyles the shell and Review to the new system, and re-runs `document` to replace the seed `DESIGN.md` with real tokens | 6 | 4 | 07 | vue-expert, impeccable, design-taste-frontend |
 | W2-09 | **Render:** fill your Word template (docx library chosen and checked for prebuilt binaries in the ticket), PDF through Word, put contact details back, check the page count, download route by id with `Content-Disposition: attachment` | 3 | 4 | 04, 07 | docx, pdf |
 | W2-10 | **Evals + UAT:** synthetic postings committed as fixtures; your real postings run from `dataDir` (CLAUDE.md rule 4). Reuse `eval_cases`/`eval_runs` with a `career-tailor` suite | 2 | 5 | 07 | claude-api |
 | W2-11 | **Verify + retro:** acceptance run, audit, debt, lessons | 1 | 5 | all | ponytail, impeccable, claude-mem |
 
-**Total: 31 pts** (28 for the career flow + 3 for W2-00). **Later:** tracker beyond draft/final/applied and the dashboard card (~5 pts), then S2 and S3.
+**Total: 32 pts** (29 for the career flow + 3 for W2-00). **Later:** tracker beyond draft/final/applied and the dashboard card (~5 pts), then S2 and S3.
 
 **Contract first:** the coordinator writes `docs/week2/career-contract.md` before Wave 2: the `master.md` format, the requirements schema, application statuses, the job/status API, the download route and the error codes.
 
@@ -107,6 +107,21 @@ The first version of this plan didn't audit what the new direction makes redunda
 | Migrations `0001`–`0004` | **Kept.** They are forward-only, so the `sessions`, `messages` and `persona_questions` tables stay in the schema, unused. |
 
 Everything removed is still in `main` at commit `fe1b1dd` (`git show fe1b1dd:<path>`). The one piece saved first is the untrusted-text wrapper from `categorize-session.ts`, now `server/src/llm/untrusted.ts`.
+
+### Design system decision (2026-10-27)
+You asked for a complete change of look, chosen by research. Result, recorded in `web/DESIGN.md` (seed): **"The Quiet Ledger"**, an Operate-mode, text-first, flat, restrained-accent system whose structure and colour tokens follow GitHub's Primer, with our own components.
+
+| Option | Verdict | Why |
+|---|---|---|
+| **Primer** (GitHub) | **Reference and token source** | It is the review-and-diff interface this app most resembles, and its guidance centres on a fast, compact, accessible UI ([primer.style](https://primer.style/product/getting-started/foundations/)). [`@primer/primitives`](https://github.com/primer/primitives) is MIT and ships CSS variables with light, dark, high-contrast and colour-blind themes. |
+| IBM Carbon | Not chosen | The sources rank it best for dense, data-heavy tools with charts ([overview](https://webpixels.io/blog/best-design-systems), [dashboards](https://duply.ai/blog/best-design-systems-for-dashboards-reddit)). This app is a queue plus document pages, not a chart dashboard. |
+| Cloudscape, Ant Design | Not chosen | Strong for table-and-chart dashboards; React-based. |
+| [Reka UI](https://github.com/unovue/reka-ui) (MIT, formerly Radix Vue) | **Only if a ticket needs a complex widget** | Unstyled, accessible Vue primitives. No dependency until then. |
+| Nuxt UI, PrimeVue, Naive UI | Not chosen | Styled kits that would bring their own look. |
+
+**Not verified:** the sources are mostly listicles and vendor-adjacent blogs, with no benchmark. The Primer page doesn't say whether the token package needs React, and doesn't show its diff-colour tokens. The Reka UI page showed neither its components, its current version, nor whether it needs Nuxt or Tailwind. W2-08 checks each before adding anything. The fallback for Primer is to copy the roughly 20 token values we use, with no dependency. WCAG 2.2 AA is my adopted target (it became ISO/IEC 40500:2025 per [arc42](https://quality.arc42.org/standards/wcag-2-2)); you haven't stated an accessibility requirement.
+
+**Process:** impeccable's full direction round (cards, comps) hasn't run. I treated your "Quiet Ledger", "no heavy decoration or motion" and "decide from research" as the pinned direction. If you want the round, it runs at the start of W2-08 and replaces this seed.
 
 ## 7. Assumptions (tell me to change any)
 1. You apply in EN and DE. Language is chosen per posting, and bullets are reworded within that language only.
