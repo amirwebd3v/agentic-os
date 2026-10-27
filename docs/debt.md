@@ -53,8 +53,5 @@ The chat channel, session categorization and persona interviews were removed (se
 - **Review-queue editing** (`final_text`, `edit_distance`) still works on the server, but no UI sends it: the application page (W2-08) has its own edit flow.
 - **The decider** (`server/src/decider`, `sidecar/`, `scripts/sidecar.ts`, `scripts/decider-bench.ts`) is parked: `pnpm dev` doesn't start it. Its `status()` and `model`/`maxLen` options were already flagged as "delete if unused"; decide at the Email slice.
 
-### If you already use a Week 1 vault (a manual step for the owner)
-`pnpm vault:init` never touches existing files, so an existing vault keeps its old text:
-- Run `pnpm vault:init` once: it creates the new `career/` folder.
-- In the vault's `CLAUDE.md`, under "Filing rules", the lines about subareas proposed by the app and "every session has one primary area" no longer describe the app. Replace them with the two lines in `server/templates/CLAUDE.md`. In "Folders", replace the `persona/` line with the `career/` one.
-- The `persona/` folder and its notes can stay (they are yours) or be deleted. Nothing reads them now.
+### If you already use a Week 1 vault
+Run the cleanup tool instead of editing by hand: stop the server, then `pnpm vault:retire` (a dry run that changes nothing), read the list, then `pnpm vault:retire --apply`, then `pnpm vault:init` once to create `career/`. It deletes `persona/` and the app-written session notes and area indexes you haven't edited, patches the stale `CLAUDE.md` lines (only where they match verbatim), and clears the chat-era database rows. It first backs up `brain.db` next to itself and commits the vault in git before and after. `server/src/vault/retire.ts` is a one-shot: delete it, its CLI and its test once you have run it (W2-12).
