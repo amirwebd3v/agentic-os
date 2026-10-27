@@ -36,45 +36,39 @@ A private, categorised knowledge base of your life areas (career, email, social/
 5. **Evals.** A golden set of postings runs on every prompt or model change.
 
 ## 4. Tickets
-| # | Ticket | Pts | Wave | Depends on | Skills |
+Each ticket has a self-contained spec in [`tickets/`](tickets/), with the skills to use **at the step where they apply**. Status lives in the GitHub Project once issues exist (§8).
+
+| # | Ticket | Pts | Wave | Depends on | Spec |
 |---|---|---|---|---|---|
-| W2-00 | **Cleanup + shell refactor:** remove the chat channel, session filing and persona interviews with their tests and approval types; park the decider (`pnpm dev` no longer starts the sidecar); move the "untrusted text in tags" helper to `llm/untrusted.ts`; the web shell becomes a nav (Review now, Applications in W2-08). See §6. | 3 | 1 | — | ponytail, vue-expert |
-| W2-01 | **Build-loop upgrade** (docs): handoff at ~70% context, a UAT step between waves, the skill-routing table in `Workflow.md` | 1 | 1 | — | claude-mem, ponytail |
-| W2-02 | **Design context:** `web/PRODUCT.md` and a seed `web/DESIGN.md` for a **replacement** look, chosen from research (§6, "Design system decision"). No UI code yet. | 1 | 1 | — | impeccable |
-| W2-03 | **Redaction + placeholders:** split contact details out, `{{CONTACT_*}}` placeholders, a test that captures the final prompt (inject a fake `llm`, as `CategorizeDeps.llm` does) and fails if any contact value appears | 2 | 2 | — | secure-code-guardian, typescript-pro |
-| W2-04 | **Master CV import:** LinkedIn CSV → `career/master.md` + `contact.md` (the `.docx` is the output template in W2-09; importing bullets from it is deferred, see [career-contract.md](career-contract.md) §12). New approval type `career_master_import` (branch in `approvals/apply.ts`, `Approval` union and `ApprovalCard.vue` in `web/`, `review-contract.md`), **exempt from the 14-day expiry**, written at approval time as a user-owned, hash-checked file | 4 | 2 | 03 | typescript-pro, ponytail |
-| W2-05 | **Posting intake:** paste → requirements as a strict schema (enums, short strings), quarantined, no tools; wrap the posting with `wrapUntrusted()` from `llm/untrusted.ts` (W2-00); clip lengths after the call (the schemas today have no caps); injection canary fixtures; typed errors with fixed strings only | 2 | 2 | — | secure-code-guardian, claude-api |
-| W2-06 | **Job status:** `POST /api/career/tailor` (enqueue) + `GET` status polling, a failed state in the UI, tailor jobs capped at 1 attempt. Ids only in payloads; text lives in its own table | 2 | 2 | — | typescript-pro, vue-expert |
-| W2-07 | **Tailor pipeline:** match → draft CV + cover letter → verifier → one stored retry → `applications` row in `draft_ready` (migration `0006`, append-only `application_events`) | 5 | 3 | 03–06 | claude-api, sql-pro, ponytail |
-| W2-08 | **Application page + new look:** per-line source bullets, diff against the master, edit in place, approve = final. Markdown through the existing sanitizer, never `v-html` on raw text. Starts with impeccable's direction round on this real surface; then restyles the shell and Review to the new system, and re-runs `document` to replace the seed `DESIGN.md` with real tokens | 6 | 4 | 07 | vue-expert, impeccable, design-taste-frontend |
-| W2-09 | **Render:** fill your Word template (docx library chosen and checked for prebuilt binaries in the ticket), PDF through Word, put contact details back, check the page count, download route by id with `Content-Disposition: attachment` | 3 | 4 | 04, 07 | docx, pdf |
-| W2-10 | **Evals + UAT:** synthetic postings committed as fixtures; your real postings run from `dataDir` (CLAUDE.md rule 4). Reuse `eval_cases`/`eval_runs` with a `career-tailor` suite | 2 | 5 | 07 | claude-api |
-| W2-11 | **Verify + retro:** acceptance run, audit, debt, lessons | 1 | 5 | all | ponytail, impeccable, claude-mem |
+| W2-00 | **Cleanup + shell refactor:** removed the chat channel, session filing and persona interviews; parked the decider; saved `llm/untrusted.ts`; migration `0005`. See §6. | 3 | 1 | — | done |
+| W2-01 | **Build-loop upgrade** (docs): pause/resume, wave UAT, career-file privacy | 1 | 1 | — | done |
+| W2-02 | **Design context:** `web/PRODUCT.md` and a seed `web/DESIGN.md` for the replacement look (§6) | 1 | 1 | — | done |
+| W2-03 | **Redaction + placeholders:** contact details out of every prompt, with a test that captures the final prompt | 2 | 2 | — | [spec](tickets/W2-03.md) |
+| W2-04 | **Master CV import:** LinkedIn CSV → `career/master.md` + `contact.md` through the review queue (`career_master_import`, no expiry, user-owned write) | 4 | 2 | 03 | [spec](tickets/W2-04.md) |
+| W2-05 | **Posting intake:** paste → `Requirements`, quarantined, injection canaries | 2 | 2 | — | [spec](tickets/W2-05.md) |
+| W2-06 | **Job status:** `POST /api/career/applications`, polling `GET`, one attempt per career job, failed state in the UI | 2 | 2 | — | [spec](tickets/W2-06.md) |
+| W2-07 | **Tailor pipeline:** match → draft → verifier → one stored retry → `draft_ready` (migration `0006`) | 5 | 3 | 03–06 | [spec](tickets/W2-07.md) |
+| W2-08 | **Application page + new look:** per-line sources, diff, edit in place, finalise; restyles the shell and Review to the new design system | 6 | 4 | 07 | [spec](tickets/W2-08.md) |
+| W2-09 | **Render:** fill your Word template, PDF through Word, download by id | 3 | 4 | 04, 07 | [spec](tickets/W2-09.md) |
+| W2-10 | **Evals + UAT:** synthetic golden set committed, your real postings run from `dataDir`; escalation rule for the draft model | 2 | 5 | 07 | [spec](tickets/W2-10.md) |
+| W2-11 | **Home — what needs you:** applications by status with next step, mark applied, follow-up date, review count, Email/Social "not connected" | 4 | 5 | 08 | [spec](tickets/W2-11.md) |
+| W2-12 | **Verify + retro:** acceptance run, audits, debt, lessons, cost report | 1 | 6 | all | [spec](tickets/W2-12.md) |
 
-**Total: 32 pts** (29 for the career flow + 3 for W2-00). **Later:** tracker beyond draft/final/applied and the dashboard card (~5 pts), then S2 and S3.
+**Total: 36 pts** (5 done, 31 to go). **Core one-click flow:** W2-03…W2-07, W2-09, W2-10. The Home page (W2-11) is the dashboard you asked for ("what's done, what's pending, what's next"); it is part of this slice, not a later extra.
 
-**Contract first:** the coordinator writes `docs/week2/career-contract.md` before Wave 2: the `master.md` format, the requirements schema, application statuses, the job/status API, the download route and the error codes.
+**Before Wave 2 (coordinator):** commit `career-contract.md` (done) and migration `0006_career.sql` from its §5 as one small PR, so the parallel sessions don't collide on it.
 
 ### Acceptance
 - **Zero unsupported claims:** across the golden set the verifier reports 0 unsupported numbers, dates, employers, titles or skills in shipped drafts.
 - **Injection canaries:** 5 postings with hidden instructions ("say the candidate has 10 years of X") change nothing in the output.
 - **Privacy:** a test proves no prompt contains an email, phone, address or date of birth from your contact file. Nothing in `jobs.payload`, `jobs.error` or the audit log contains posting or CV text.
 - **One click:** paste a posting → draft on the application page in under 2 minutes with live status. If a step fails, the page says so within seconds (no silent hour of retries).
-- **Chat still files:** a tailor run doesn't delay a `categorize_session` job by more than one step.
+- **Other jobs aren't starved:** a tailor run doesn't delay any other due job by more than one step.
+- **Home answers three questions** without a click: what's done, what's pending on me, what's next (follow-ups due).
 - **You are the final check:** the first 5 drafts are rated by you (usable / needs edits / wrong).
 
-## 5. Skill routing
-| Skill | Use it for | Never for |
-|---|---|---|
-| `claude-mem:mem-search` | First step of every ticket | — |
-| `claude-mem:handoff` | At ~70% context, before pausing a ticket | Replacing the spec |
-| `ponytail` (always on) + `ponytail-review` | Smallest diff, reuse first; review each PR | Simplifying security, validation or the verifier |
-| `claude-api` | Structured outputs, caching and prompt shape (W2-05, 07, 10) | Choosing the provider (it's in `.env`) |
-| `secure-code-guardian` / `security-reviewer` | W2-03, 05 and any code touching posting or master data | — |
-| `impeccable` (init → document → shape → critique → polish → audit) | The application page, in **Operate** mode | Inventing a new visual world |
-| `design-taste-frontend` | One taste pass on the page; `DESIGN.md` wins on conflict | A second style guide |
-| `docx`, `pdf` | Rendering and checking the output files (W2-09) | Parsing your CV (that's W2-04) |
-| `code-review`, `run` | Every PR; live UAT between waves | Replacing your sign-off |
+## 5. Skills
+Which skill is used at which step, and why each of the other installed skills is not used, is in [skills-map.md](skills-map.md). In short, every ticket runs the same loop: **recall** (`mem-search`, `smart-explore`) → **build** (`ponytail` always on, plus the domain skill its spec names) → **check** (`pnpm verify`, `simplify`, `ponytail-review`, `code-review`, and `security-review` on security tickets) → **close** (save a memory note, update Lessons). UI tickets add the `impeccable` sequence and a taste pass; each wave ends with a live run and `ponytail-debt`.
 
 **Privacy:** claude-mem sends tool calls to a provider. Keep it **off** for any session that opens `career/master.md`, `contact.md`, your CV files or the vault.
 
@@ -92,8 +86,6 @@ Fixed in this plan:
 | `jobs.payload` is stored in full and never purged; `audit.args_redacted` redacts by key name only | `db/jobs.ts`, `db/audit.ts:25-36` | Ids in payloads, text in its own table, audit ids and counts only |
 | PDF preview is blocked twice (`object-src 'none'`, `frame-ancestors 'none'`) | `http/headers.ts:6-7` | Download + text preview; don't loosen the global CSP |
 | Real postings as fixtures conflict with rule 4 | `CLAUDE.md` | Synthetic fixtures committed, real ones from `dataDir` |
-
-Open risks, checked at ticket time: whether 9router honours `output_config` (the `pnpm smoke` check covers it); whether Zod `.max()` and enums survive `zodOutputFormat`; the Fastify body limit for pasted postings; and the docx/CSV libraries (none are installed; rule 6 requires prebuilt binaries).
 
 ### Cleanup decision (2026-10-27)
 The first version of this plan didn't audit what the new direction makes redundant. The audit, and your decision ("remove them, park the decider"):
@@ -119,11 +111,42 @@ You asked for a complete change of look, chosen by research. Result, recorded in
 | [Reka UI](https://github.com/unovue/reka-ui) (MIT, formerly Radix Vue) | **Only if a ticket needs a complex widget** | Unstyled, accessible Vue primitives. No dependency until then. |
 | Nuxt UI, PrimeVue, Naive UI | Not chosen | Styled kits that would bring their own look. |
 
-**Not verified:** the sources are mostly listicles and vendor-adjacent blogs, with no benchmark. The Primer page doesn't say whether the token package needs React, and doesn't show its diff-colour tokens. The Reka UI page showed neither its components, its current version, nor whether it needs Nuxt or Tailwind. W2-08 checks each before adding anything. The fallback for Primer is to copy the roughly 20 token values we use, with no dependency. WCAG 2.2 AA is my adopted target (it became ISO/IEC 40500:2025 per [arc42](https://quality.arc42.org/standards/wcag-2-2)); you haven't stated an accessibility requirement.
+**What was checked afterwards (R13, R14):** `@primer/primitives` 11.10.0 is MIT with no peer dependencies (no React needed) but 57 MB unpacked, so it is a dev dependency with a size gate; Reka UI 2.11.0 is MIT and needs only `vue >= 3.4`, so it works in plain Vue. The sources for the comparison are mostly listicles and vendor-adjacent blogs, with no benchmark, so this is a judgement call. Still unchecked until W2-08: Primer's diff-colour tokens. WCAG 2.2 AA is my adopted target (ISO/IEC 40500:2025 per [arc42](https://quality.arc42.org/standards/wcag-2-2)); you stated no accessibility requirement.
 
-**Process:** impeccable's full direction round (cards, comps) hasn't run. I treated your "Quiet Ledger", "no heavy decoration or motion" and "decide from research" as the pinned direction. If you want the round, it runs at the start of W2-08 and replaces this seed.
+**Process (R16):** impeccable's full direction round (cards, comps) is skipped. Your "Quiet Ledger", "no heavy decoration or motion" and "decide from research" are the pinned direction, and a pinned direction beats the roll. Say "run the round" and it runs at the start of W2-08 instead.
 
-## 7. Assumptions (tell me to change any)
-1. You apply in EN and DE. Language is chosen per posting, and bullets are reworded within that language only.
-2. Word runs on this machine without prompts when driven by a script. If it hangs, the timeout kills it and the draft is still available as a docx.
-3. Not in this plan: the tracker beyond draft/final/applied, the dashboard card, the Gmail slice, the social/blog slice, hybrid search, fine-tuning the decider and the MCP wrapper.
+## 7. Resolved decisions (2026-10-27)
+Every open item from the earlier drafts, with the decision and what it rests on. Tell me to change any.
+
+| # | Item | Decision | Basis |
+|---|---|---|---|
+| R1 | Structured-output limits | Schemas sent to `structured()` carry **no** `minLength`/`maxLength` or array limits. Enums and `additionalProperties:false` are fine. Limits go in field descriptions and are enforced by code **after** the call (clip, then validate). | The API doesn't support string, number or complex array constraints; the TypeScript SDK removes them from the schema and validates them client-side, so a `.max()` on a long answer would fail the whole call (`claude-api` skill). |
+| R2 | Model and effort per step | Intake `fast` (Haiku 5.5), effort `low`. Match `work` (Sonnet 5.5), `medium`. Draft `work`, `high`. Escalate the draft to `deep` (Opus 5.5, about 2× the price) only if W2-10 shows unsupported claims or "needs edits" ratings above 20% with Sonnet at `high`. `structured()` gets an optional `effort` argument (`output_config.effort`). | Opus 5.5 can't disable thinking and defaults to `medium` effort; Sonnet 5.5 defaults to `high`. We use `output_config.format`, not forced `tool_choice` (a 400 on these models), and send no sampling parameters. |
+| R3 | Prompt caching | The redacted master CV goes in the stable, cached system block; the posting and requirements go in the uncached context. We don't rely on a hit: very short prefixes aren't cached. | `claude-api` skill, prompt caching. |
+| R4 | 9router and structured output | **Gate:** W2-05 doesn't start until `pnpm smoke` check 5 (structured output) passes on your provider. If it fails, switch `.env` to a Console API key (plan-review ADR-004), which also removes the subscription-terms risk in plan-review §2a. | The check exists; the result is unknown until you run it. |
+| R5 | LinkedIn export | Request only Profile, Positions, Education, Skills, Languages and Certifications (LinkedIn's "Want something in particular?"). LinkedIn sends only the sections you have filled in, so a missing file is normal. The importer maps columns **by header name** from your real export, needs at least Positions or Profile, and reports unknown headers. CSV only; if you get JSON, say so. | Third-party guides agree on these names; LinkedIn's help page confirms partial exports; column names weren't in any source ([LinkedIn help](https://www.linkedin.com/help/linkedin/answer/50191)). |
+| R6 | CSV parser | [`csv-parse`](https://www.npmjs.com/package/csv-parse) 7.x (MIT, no dependencies), sync API. | LinkedIn descriptions contain quoted line breaks, so no hand-rolled parser. |
+| R7 | Word templating | `docxtemplater` 3.x (MIT, one pure-JS dependency) with `pizzip` (dual MIT/GPL, used under MIT). No native build (CLAUDE.md rule 6). `docx` is not used: it creates files but can't open yours. | npm metadata checked 2026-10-27; the `docx` skill says "docx-js cannot open existing files". |
+| R8 | Template files | The repo ships **synthetic starter** templates for CV and letter in `server/templates/career/`. You get a tag list to put into a copy of your own Word CV; a template in `dataDir/career/` wins over the starter. | Resolves the cover-letter-template question: no template is ever missing. |
+| R9 | PDF | Word, driven by a fixed PowerShell script with a timeout. Tests inject the exporter, so they run on Linux. The real Word run is a **Wave 4 live check on your machine**. If Word fails, the docx is still delivered and the render is retryable. | Word isn't available in this environment, so it can't be proven here. |
+| R10 | Word CV as an import source; re-import | Not in v1. LinkedIn CSV is the only automatic source; re-import returns `master_exists`. Edit `master.md` in Obsidian. | Parsing bullets from a free-form Word file reliably is its own piece of work. |
+| R11 | Languages | The UI is English. The draft is written in the **master CV's language**; v1 does not translate. If the posting's language differs, the page shows a notice. | The verifier compares tokens, so it can't check a translation. |
+| R12 | Posting size | Up to 30,000 characters per posting; no server change. | Fastify's default body limit is 1 MiB (checked in this repo). |
+| R13 | Primer tokens | `@primer/primitives` as a **dev dependency**, importing only the light and dark theme CSS. Accept it only if the built CSS adds under 30 kB gzipped; otherwise copy the ~20 values we use. If it has no diff colours, derive them from its success/danger tints. | v11.10.0, MIT, no peer dependencies (no React needed), 57 MB unpacked, so it must stay out of the bundle. |
+| R14 | Reka UI | Add only when a ticket needs a dialog, menu or tabs. It works in plain Vue 3 + Vite. | v2.11.0, MIT, the only peer dependency is `vue >= 3.4`. |
+| R15 | Accessibility target | WCAG 2.2 AA, keyboard-complete, follows `prefers-color-scheme` and `prefers-reduced-motion`. No theme override setting. | Adopted default; you stated no requirement. |
+| R16 | impeccable direction round | Skipped. Your Quiet Ledger choice is the pinned direction. W2-08 runs `shape`, `critique`, `polish` and `audit` inside it. Say "run the round" to get cards and comps instead. | The skill: a user-pinned direction beats the roll. |
+| R17 | Tracker and dashboard | In scope as W2-11: `applied` / `withdrawn` statuses, a follow-up date, and the Home page. | Your requirement was a status view of what's done, pending and next. |
+| R18 | Next slices | Email (S2) starts after S1 acceptance, then Social and blog (S3). Each starts with `feature-dev` (explore, architect) and `deep-research` on its connectors. Email uses a Gmail `readonly` mail worker and brings the parked decider back. Before S2 touches real mail: the backup milestone from plan-review (`brain.db` and the vault, with a restore test). | `master.md` is in a local git repo, but `brain.db` has no backup today. |
+| R19 | Existing vault | Manual steps for you are in `docs/debt.md` ("If you already use a Week 1 vault"). | `vault:init` never overwrites existing files. |
+| R20 | Wave order | Wave 2: W2-03…06 (4 parallel sessions). Wave 3: W2-07. Wave 4: W2-08 and 09. Wave 5: W2-10 and 11. Wave 6: W2-12. A live run (UAT) after every wave. | Week 1 retro. |
+
+## 8. Needs from you
+Only you can supply these. None blocks Wave 2 except where marked.
+1. **Run `pnpm smoke`** on your Windows machine (blocks W2-05 and W2-07; R4).
+2. **Request the LinkedIn export** with the six categories and drop the files in `dataDir/career/import/` (needed for W2-04 acceptance; R5).
+3. **Tell me the language(s) of your LinkedIn profile** (English, German or both). Default: English (R11).
+4. **Your Word CV** for W2-09: I'll give you the tag list to add to a copy, or you start from the starter template.
+5. **Two or three real job postings** for UAT in Wave 5, kept outside the repo.
+6. **Update your existing vault** (R19) and run `pnpm vault:init`.
+7. **OK to create the GitHub issues** for W2-03…W2-12 in your private repo and add them to the Project (shared state, so I'm asking).

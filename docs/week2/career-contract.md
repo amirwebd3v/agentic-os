@@ -1,4 +1,4 @@
-# Career contract (W2-03 … W2-10)
+# Career contract (W2-03 … W2-12)
 
 The shapes every Wave 2–5 ticket builds against, so the sessions can run in parallel. Plan: [implementation-plan.md](implementation-plan.md). Same rule as Week 1: if you change a shape, edit this file **in the same PR** and tell the sibling sessions.
 
@@ -55,7 +55,7 @@ Standard vault frontmatter (`id: career-master`, `area: career`, `sensitivity: 2
 - **No contact values** in this file (§3.2 is the only place).
 
 ### 3.2 `career/contact.md`
-Frontmatter fields only: `name`, `email`, `phone`, `address`, `url` (all strings, optional), `dob` (`YYYY-MM-DD`, optional), plus the standard keys with `sensitivity: 2`. Body empty.
+Frontmatter fields only: `name`, `email`, `phone`, `address`, `url` (all strings, optional), `dob` (`YYYY-MM-DD`, optional), plus the standard keys with `sensitivity: 2`. Body empty. The import fills `name` from `Profile.csv`; the six requested LinkedIn categories contain no email, phone or address, so **you add those in Obsidian**. A field that is empty simply renders as nothing.
 
 ### 3.3 Placeholders
 `{{CONTACT_NAME}}`, `{{CONTACT_EMAIL}}`, `{{CONTACT_PHONE}}`, `{{CONTACT_ADDRESS}}`, `{{CONTACT_URL}}`, `{{CONTACT_DOB}}`. `redactContact(text, contact)` (W2-03) replaces any literal occurrence of a contact value, with whitespace and phone-format variants normalised, by its placeholder. Every prompt-building function calls it last. The only code that reads `contact.md` values back is the render step (§7).
@@ -66,9 +66,9 @@ One **job per step**, so no job runs longer than one model call. Each step reads
 
 | Step | Job `kind` | Payload | Model | Output (`application_texts.kind`) |
 |---|---|---|---|---|
-| 1 intake | `career_intake` | `{ applicationId }` | `fast`, pipeline `career-intake`, no tools | `requirements` (§4.1) |
-| 2 match | `career_match` | `{ applicationId }` | `work`, `career-match` | `selection` (§4.2) |
-| 3 draft | `career_draft` | `{ applicationId, attempt: 1 \| 2 }` | `work`, `career-draft` | `draft` (§4.3) |
+| 1 intake | `career_intake` | `{ applicationId }` | `fast`, effort `low`, pipeline `career-intake`, no tools | `requirements` (§4.1) |
+| 2 match | `career_match` | `{ applicationId }` | `work`, effort `medium`, `career-match` | `selection` (§4.2) |
+| 3 draft | `career_draft` | `{ applicationId, attempt: 1 \| 2 }` | `work`, effort `high`, `career-draft` | `draft` (§4.3) |
 | 4 verify | `career_verify` | `{ applicationId, attempt: 1 \| 2 }` | none (plain code) | `verify_report` (§6) |
 | 5 render | `career_render` | `{ applicationId }` | none | files (§7) |
 
@@ -92,7 +92,7 @@ type Requirements = {
 };
 type Requirement = { id: string; text: string /* ≤ 160 */; kind: 'skill' | 'experience' | 'education' | 'language' | 'other' };
 ```
-The Zod schema is the source of truth, but constrained decoding may not enforce `.max()`. **Re-validate and clip after the call** (as `extract-persona.ts` does). Stored with `trust: untrusted`; the UI shows `company` and `role_title` as plain text. `injection_suspected` shows a banner and changes nothing else.
+**The schema sent to `structured()` has no `.max()` / `.min()` / array limits**: the API doesn't support them, and the SDK would remove them from the schema and then fail the whole call client-side on a long answer. Keep enums and `additionalProperties:false`; write the limits in the field descriptions; then **clip and validate in code after the call** (a second, stricter Zod schema applied to the parsed result). Add an optional `effort` argument to `structured()` (`output_config.effort`) for the per-step levels above. Stored with `trust: untrusted`; the UI shows `company` and `role_title` as plain text. `injection_suspected` shows a banner and changes nothing else.
 
 ### 4.2 `Selection` (output of match)
 ```ts
@@ -131,6 +131,7 @@ CREATE TABLE applications (
                CHECK (status IN ('processing', 'draft_ready', 'flagged', 'failed', 'final', 'applied', 'withdrawn')),
   step         TEXT CHECK (step IN ('intake', 'match', 'draft', 'verify', 'render')),
   fail_code    TEXT,
+  follow_up_on TEXT CHECK (follow_up_on IS NULL OR date(follow_up_on) IS NOT NULL),   -- YYYY-MM-DD
   master_hash  TEXT NOT NULL,   -- sha256 of master.md when the run started
   created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -161,14 +162,14 @@ CREATE TABLE application_events (
   id             INTEGER PRIMARY KEY,
   application_id INTEGER NOT NULL REFERENCES applications(id),
   ts             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  kind           TEXT NOT NULL CHECK (kind IN ('created', 'step', 'failed', 'retry', 'edited', 'final', 'rendered')),
+  kind           TEXT NOT NULL CHECK (kind IN ('created', 'step', 'failed', 'retry', 'edited', 'final', 'rendered', 'status')),
   detail         TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail))   -- ids, counts, codes only
 );
 CREATE TRIGGER application_events_no_update BEFORE UPDATE ON application_events BEGIN SELECT RAISE(ABORT, 'application_events is append-only'); END;
 CREATE TRIGGER application_events_no_delete BEFORE DELETE ON application_events BEGIN SELECT RAISE(ABORT, 'application_events is append-only'); END;
 ```
 - **Applications are never deleted in v1** (the append-only trigger would block a cascade). `withdrawn` is the end state. A purge ticket comes later.
-- `applied` and `withdrawn` are reserved for the tracker. No v1 code sets them.
+- `applied` and `withdrawn` are set only by `PATCH …/:id` (W2-11), which adds a `status` event with the old and new status.
 - Update `server/test/db.test.ts` (it pins `user_version` and the table list).
 
 ## 6. Verifier (plain code, no model)
@@ -235,6 +236,7 @@ Web: add the case to the `Approval` union in `web/src/api.ts` and to `ApprovalCa
 | `PATCH /api/career/applications/:id/draft` | `{ edits: { ref: string; text: string }[] }` (1–50 edits, each text ≤ 700) | `ApplicationDetail`. `409 wrong_status` unless `draft_ready` or `flagged`. `400 bad_ref`. |
 | `POST /api/career/applications/:id/final` | `{ acknowledge_flagged?: boolean }` | `202 ApplicationDetail` with `status:'final', step:'render'`. `409 flagged_not_acknowledged` when `flagged` and not acknowledged. |
 | `POST /api/career/applications/:id/render` | — | `202`. Retries a failed render. `409 wrong_status` unless `final`. |
+| `PATCH /api/career/applications/:id` | `{ status?: 'applied' \| 'withdrawn' \| 'final'; follow_up_on?: string \| null }` (W2-11) | `ApplicationDetail`. Allowed moves: `final → applied`, `final \| applied → withdrawn`, `applied → final` (undo). `follow_up_on` is `YYYY-MM-DD` or `null`. `409 wrong_status` for any other move, `400 bad_date`. |
 | `GET /api/career/applications/:id/files/:kind` | — | The file (`kind` ∈ `cv_docx`, `cv_pdf`, `letter_docx`, `letter_pdf`). `404 not_found` / `409 files_not_ready`. |
 
 **Polling:** the UI polls `GET …/:id` every 1.5 s while `status` is `processing` or `step` is `render`, and stops on any other state. There is no SSE and no generic jobs API.
@@ -249,6 +251,7 @@ type ApplicationStep = 'intake' | 'match' | 'draft' | 'verify' | 'render';
 type ApplicationSummary = {
   id: number; company: string | null; role_title: string | null; language: 'en' | 'de' | null;
   status: ApplicationStatus; step: ApplicationStep | null; fail_code: FailCode | null;
+  follow_up_on: string | null;
   created_at: string; updated_at: string;
 };
 type ApplicationDetail = ApplicationSummary & {
@@ -263,7 +266,7 @@ type ApplicationDetail = ApplicationSummary & {
 ```
 
 ### 8.3 Errors
-Fixed codes only: `provider_not_configured`, `master_missing`, `master_exists`, `import_empty`, `posting_too_long`, `not_found`, `wrong_status`, `bad_ref`, `flagged_not_acknowledged`, `files_not_ready`.
+Fixed codes only: `provider_not_configured`, `master_missing`, `master_exists`, `import_empty`, `posting_too_long`, `not_found`, `wrong_status`, `bad_ref`, `bad_date`, `flagged_not_acknowledged`, `files_not_ready`.
 
 `FailCode` (stored in `applications.fail_code`): `provider_error`, `selection_invalid`, `no_match` (nothing selected), `verify_failed`, `render_failed`, `internal`.
 
@@ -278,11 +281,12 @@ Through `audit()`, with ids, counts and codes only (the redaction there works by
 | W2-03 | A fake `llm` captures the final prompt of every step; no contact value appears (inject `llm` as a dependency whose default is `structured`, as the removed `categorizeSession` did: `git show fe1b1dd:server/src/jobs/categorize-session.ts`). Variants: phone with spaces, e-mail in a different case. |
 | W2-04 | Parse → serialise round-trips `master.md`; ids are stable; a bad grammar is rejected; approval writes both files hash-checked; the import approval doesn't expire; a second import returns `master_exists`. |
 | W2-05 | 5 injection-canary postings (`server/test/fixtures/career/canary-*.txt`) produce a valid `Requirements`, `injection_suspected` where applicable, and no other change. Closing tags in the posting are defused. |
-| W2-06 | `career_*` jobs run once; an unexpected throw sets `failed/internal`; `jobs.error` contains no posting text; a `categorize_session` job enqueued during a run starts before the run's next step. |
+| W2-06 | `career_*` jobs run once; an unexpected throw sets `failed/internal`; `jobs.error` contains no posting text; a due job of another kind starts before the run's next step. |
 | W2-07 | Each verifier rule, one fixture each; attempt 2 then `flagged`; no third attempt; the audit and event rows contain no text. |
 | W2-08 | Edits, `flagged` acknowledgement, polling states; all text rendered as text (no `v-html` on raw text). |
 | W2-09 | Placeholders replaced only at render; the download route serves by id, wrong kind → 404, headers as in §8.2; the Word step times out cleanly. |
 | W2-10 | The golden set (synthetic fixtures committed; your real postings run from `dataDir`) reports 0 unsupported claims; the `career-tailor` suite reuses `eval_cases` / `eval_runs`. |
+| W2-11 | Allowed and refused status moves; a follow-up date round-trips; Home lists what needs the owner (draft_ready, flagged, failed, follow-ups due) and nothing else; Email/Social cards say "not connected". |
 
 ## 11. File ownership (to avoid conflicts, as in Week 1)
 | Ticket | Owns |
@@ -293,13 +297,18 @@ Through `audit()`, with ids, counts and codes only (the redaction there works by
 | W2-05 | `server/src/career/intake.ts`, `jobs/career-intake.ts`, canary fixtures |
 | W2-06 | `db/jobs.ts` (per-kind attempts), `routes/career.ts` (endpoints in §8.2 except files), `web/src/stores/career.ts`, the career section of `web/src/api.ts` |
 | W2-07 | `jobs/career-{match,draft,verify}.ts`, `server/src/career/verify.ts`, prompts |
-| W2-08 | `web/src/views/ApplicationView.vue`, `web/src/components/*` for it, router entry |
-| W2-09 | `jobs/career-render.ts`, `scripts/word-export.ps1`, the files route |
+| W2-08 | `web/src/views/ApplicationView.vue`, `web/src/components/*` for it, router entry, `web/src/style.css` and the shell nav (the new look), `web/DESIGN.md` at finish |
+| W2-09 | `jobs/career-render.ts`, `scripts/word-export.ps1`, the files route, `server/templates/career/` (starter templates) |
+| W2-10 | `scripts/eval-career.ts`, `server/test/fixtures/career/` golden set (with W2-05's canaries kept separate) |
+| W2-11 | `web/src/views/HomeView.vue`, the `PATCH` handler in `routes/career.ts`, router entry for `/` |
 | Shared, mechanical | `main.ts` plugin and handler lines, `pnpm-lock.yaml`, `CLAUDE.md` Lessons: resolve on merge, as in Week 1 |
 
-## 12. Open items (decide at ticket time)
-1. **Word `.docx` as an import source** (bullets from your Word CV) is not in v1. LinkedIn CSV is the only automatic source. If your Word CV has better bullets than LinkedIn, say so and I'll add an import path.
-2. **Letter template:** do you have a separate Word cover-letter template? If not, the built-in plain layout is used.
-3. **Re-importing** after you've edited `master.md` is not supported in v1 (`master_exists`). Edit the file in Obsidian.
-4. **docx and CSV libraries** aren't chosen. Each must be pure JS or a prebuilt binary (CLAUDE.md rule 6) and have its licence checked in the ticket.
-5. **Whether 9router honours `output_config`** is covered by `pnpm smoke`. Run it before W2-05.
+## 12. Decisions that were open
+All resolved on 2026-10-27; the reasons are in [implementation-plan.md](implementation-plan.md) §7. In brief:
+1. **Word CV as an import source:** not in v1 (R10). The Word file is the output template.
+2. **Letter template:** a synthetic starter ships in `server/templates/career/`; yours in `dataDir/career/` wins (R8).
+3. **Re-import:** `master_exists` in v1; edit `master.md` in Obsidian (R10).
+4. **Libraries:** `csv-parse` for the LinkedIn CSVs, `docxtemplater` + `pizzip` for the Word template (R6, R7).
+5. **9router and structured output:** `pnpm smoke` check 5 gates W2-05 (R4).
+6. **Schema limits:** none in the schema sent to the API; enforced in code afterwards (R1).
+7. **Languages:** the draft is in the master CV's language; no translation (R11).

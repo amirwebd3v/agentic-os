@@ -24,7 +24,7 @@ How every ticket is built. Three plugins are used together, each for a different
 
 1. **Pick:** the lowest-Wave issue with no open blockers. Set it to **In Progress** and create the branch `w1-0X-<slug>`.
 2. **Recall:** `/claude-mem:mem-search <ticket topic>` for earlier decisions and gotchas. From the second session on, relevant context is also injected automatically.
-3. **Build:** follow the ticket steps with its `skills`. Under ponytail, reuse what already exists, add no new dependency the ticket doesn't name, and mark every deliberate shortcut with a `// ponytail: <ceiling>, <upgrade path>` comment. For Week 2, read the wave's contract first ([[career-contract]]) and use the skills the ticket's row names in the plan's skill-routing table ([[implementation-plan#5. Skill routing]]).
+3. **Build:** follow the ticket steps with its `skills`. Under ponytail, reuse what already exists, add no new dependency the ticket doesn't name, and mark every deliberate shortcut with a `// ponytail: <ceiling>, <upgrade path>` comment. For Week 2, read the wave's contract first ([[career-contract]]) and follow the ticket spec in `week2/tickets/`, which names the skill for each step; [[skills-map]] explains every installed skill, including the ones not used.
 4. **Check:** run the ticket's tests, then `pnpm verify` (typecheck + lint + test).
 5. **Review:** open a pull request with `Closes #<issue>` in its body, then run:
    - `/ponytail-review` on the diff for over-engineering.
