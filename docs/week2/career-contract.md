@@ -66,9 +66,9 @@ One **job per step**, so no job runs longer than one model call. Each step reads
 
 | Step | Job `kind` | Payload | Model | Output (`application_texts.kind`) |
 |---|---|---|---|---|
-| 1 intake | `career_intake` | `{ applicationId }` | `fast`, effort `low`, pipeline `career-intake`, no tools | `requirements` (§4.1) |
-| 2 match | `career_match` | `{ applicationId }` | `work`, effort `medium`, `career-match` | `selection` (§4.2) |
-| 3 draft | `career_draft` | `{ applicationId, attempt: 1 \| 2 }` | `work`, effort `high`, `career-draft` | `draft` (§4.3) |
+| 1 intake | `career_intake` | `{ applicationId }` | `fast` (never an effort), pipeline `career-intake`, no tools | `requirements` (§4.1) |
+| 2 match | `career_match` | `{ applicationId }` | `work`, effort per `career.effort.match`, `career-match` | `selection` (§4.2) |
+| 3 draft | `career_draft` | `{ applicationId, attempt: 1 \| 2 }` | `work`, effort per `career.effort.draft`, `career-draft` | `draft` (§4.3) |
 | 4 verify | `career_verify` | `{ applicationId, attempt: 1 \| 2 }` | none (plain code) | `verify_report` (§6) |
 | 5 render | `career_render` | `{ applicationId }` | none | files (§7) |
 
@@ -92,7 +92,7 @@ type Requirements = {
 };
 type Requirement = { id: string; text: string /* ≤ 160 */; kind: 'skill' | 'experience' | 'education' | 'language' | 'other' };
 ```
-**The schema sent to `structured()` has no `.max()` / `.min()` / array limits**: the API doesn't support them, and the SDK would remove them from the schema and then fail the whole call client-side on a long answer. Keep enums and `additionalProperties:false`; write the limits in the field descriptions; then **clip and validate in code after the call** (a second, stricter Zod schema applied to the parsed result). Add an optional `effort` argument to `structured()` (`output_config.effort`) for the per-step levels above. Stored with `trust: untrusted`; the UI shows `company` and `role_title` as plain text. `injection_suspected` shows a banner and changes nothing else.
+**The schema sent to `structured()` has no `.max()` / `.min()` / array limits**: the API doesn't support them, and the SDK would remove them from the schema and then fail the whole call client-side on a long answer. Keep enums and `additionalProperties:false`; write the limits in the field descriptions; then **clip and validate in code after the call** (a second, stricter Zod schema applied to the parsed result). Add an optional `effort` argument to `structured()` (`output_config.effort`), sent only when the step's `career.effort.*` setting is configured (plan R2: Haiku 4.5 rejects it). Stored with `trust: untrusted`; the UI shows `company` and `role_title` as plain text. `injection_suspected` shows a banner and changes nothing else.
 
 ### 4.2 `Selection` (output of match)
 ```ts
