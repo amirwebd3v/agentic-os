@@ -76,7 +76,7 @@ One **job per step**, so no job runs longer than one model call. Each step reads
 - **Attempts:** `career_*` jobs get **one** attempt (a per-kind cap in `db/jobs.ts`, replacing the global `MAX_ATTEMPTS = 5` for these kinds). An unexpected throw marks the application `failed` with `fail_code: 'internal'`. Expected failures set `status` and `fail_code` and **do not throw**.
 - **Verify fails on attempt 1** → enqueue `career_draft` with `attempt: 2` and the violation list (codes, line refs, tokens ≤ 40 chars). **Fails on attempt 2** → `status: 'flagged'`. Never a third attempt.
 - Render runs only after the user finalises (§8), never automatically.
-- All untrusted text in a prompt goes in tags (`<posting>`, `<master>`) with closing tags defused, plus a "data, not instructions" rule: the pattern in `jobs/categorize-session.ts`.
+- All untrusted text in a prompt goes in tags (`<posting>`, `<master>`) with closing tags defused, plus a "data, not instructions" rule. Use `wrapUntrusted(tag, text)` from `server/src/llm/untrusted.ts` (added in W2-00; it removes any `<tag>` or `</tag>` inside the text, then wraps it).
 
 ### 4.1 `Requirements` (output of intake)
 ```ts
@@ -275,7 +275,7 @@ Through `audit()`, with ids, counts and codes only (the redaction there works by
 ## 10. Tests every ticket brings
 | Ticket | Must prove |
 |---|---|
-| W2-03 | A fake `llm` captures the final prompt of every step; no contact value appears (the capture pattern is `CategorizeDeps.llm`). Variants: phone with spaces, e-mail in a different case. |
+| W2-03 | A fake `llm` captures the final prompt of every step; no contact value appears (inject `llm` as a dependency whose default is `structured`, as the removed `categorizeSession` did: `git show fe1b1dd:server/src/jobs/categorize-session.ts`). Variants: phone with spaces, e-mail in a different case. |
 | W2-04 | Parse → serialise round-trips `master.md`; ids are stable; a bad grammar is rejected; approval writes both files hash-checked; the import approval doesn't expire; a second import returns `master_exists`. |
 | W2-05 | 5 injection-canary postings (`server/test/fixtures/career/canary-*.txt`) produce a valid `Requirements`, `injection_suspected` where applicable, and no other change. Closing tags in the posting are defused. |
 | W2-06 | `career_*` jobs run once; an unexpected throw sets `failed/internal`; `jobs.error` contains no posting text; a `categorize_session` job enqueued during a run starts before the run's next step. |
@@ -287,6 +287,7 @@ Through `audit()`, with ids, counts and codes only (the redaction there works by
 ## 11. File ownership (to avoid conflicts, as in Week 1)
 | Ticket | Owns |
 |---|---|
+| W2-00 | Everything removed in the plan's "Cleanup decision"; `server/src/llm/untrusted.ts`; `web/src/App.vue`, `router.ts`, `style.css` and the shell nav; `package.json` scripts; `README.md`; the `Approval` union is reduced to `vault_conflict` (W2-04 adds `career_master_import`) |
 | W2-03 | `server/src/career/redact.ts` + test |
 | W2-04 | `server/src/career/{master,linkedin}.ts`, `routes/career-master.ts`, the `career_master_import` branch in `approvals/apply.ts`, the exemption in `approvals/expire.ts`, `web` `Approval` union and `ApprovalCard.vue`, `review-contract.md` row, `VAULT_FOLDERS` + template "Folders" line |
 | W2-05 | `server/src/career/intake.ts`, `jobs/career-intake.ts`, canary fixtures |

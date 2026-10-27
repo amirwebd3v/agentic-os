@@ -38,11 +38,12 @@ A private, categorised knowledge base of your life areas (career, email, social/
 ## 4. Tickets
 | # | Ticket | Pts | Wave | Depends on | Skills |
 |---|---|---|---|---|---|
+| W2-00 | **Cleanup + shell refactor:** remove the chat channel, session filing and persona interviews with their tests and approval types; park the decider (`pnpm dev` no longer starts the sidecar); move the "untrusted text in tags" helper to `llm/untrusted.ts`; the web shell becomes a nav (Review now, Applications in W2-08). See §6. | 3 | 1 | — | ponytail, vue-expert |
 | W2-01 | **Build-loop upgrade** (docs): handoff at ~70% context, a UAT step between waves, the skill-routing table in `Workflow.md` | 1 | 1 | — | claude-mem, ponytail |
 | W2-02 | **Design context:** `PRODUCT.md` + `DESIGN.md` from the existing `style.css` | 1 | 1 | — | impeccable |
 | W2-03 | **Redaction + placeholders:** split contact details out, `{{CONTACT_*}}` placeholders, a test that captures the final prompt (inject a fake `llm`, as `CategorizeDeps.llm` does) and fails if any contact value appears | 2 | 2 | — | secure-code-guardian, typescript-pro |
 | W2-04 | **Master CV import:** LinkedIn CSV → `career/master.md` + `contact.md` (the `.docx` is the output template in W2-09; importing bullets from it is deferred, see [career-contract.md](career-contract.md) §12). New approval type `career_master_import` (branch in `approvals/apply.ts`, `Approval` union and `ApprovalCard.vue` in `web/`, `review-contract.md`), **exempt from the 14-day expiry**, written at approval time as a user-owned, hash-checked file | 4 | 2 | 03 | typescript-pro, ponytail |
-| W2-05 | **Posting intake:** paste → requirements as a strict schema (enums, short strings), quarantined, no tools; defuse closing tags as `categorize-session.ts` does; clip lengths after the call (the schemas today have no caps); injection canary fixtures; typed errors with fixed strings only | 2 | 2 | — | secure-code-guardian, claude-api |
+| W2-05 | **Posting intake:** paste → requirements as a strict schema (enums, short strings), quarantined, no tools; wrap the posting with `wrapUntrusted()` from `llm/untrusted.ts` (W2-00); clip lengths after the call (the schemas today have no caps); injection canary fixtures; typed errors with fixed strings only | 2 | 2 | — | secure-code-guardian, claude-api |
 | W2-06 | **Job status:** `POST /api/career/tailor` (enqueue) + `GET` status polling, a failed state in the UI, tailor jobs capped at 1 attempt. Ids only in payloads; text lives in its own table | 2 | 2 | — | typescript-pro, vue-expert |
 | W2-07 | **Tailor pipeline:** match → draft CV + cover letter → verifier → one stored retry → `applications` row in `draft_ready` (migration `0005`, append-only `application_events`) | 5 | 3 | 03–06 | claude-api, sql-pro, ponytail |
 | W2-08 | **Application page:** per-line source bullets, diff against the master, edit in place, approve = final. Markdown through the existing sanitizer, never `v-html` on raw text | 5 | 4 | 07 | vue-expert, impeccable, design-taste-frontend |
@@ -50,7 +51,7 @@ A private, categorised knowledge base of your life areas (career, email, social/
 | W2-10 | **Evals + UAT:** synthetic postings committed as fixtures; your real postings run from `dataDir` (CLAUDE.md rule 4). Reuse `eval_cases`/`eval_runs` with a `career-tailor` suite | 2 | 5 | 07 | claude-api |
 | W2-11 | **Verify + retro:** acceptance run, audit, debt, lessons | 1 | 5 | all | ponytail, impeccable, claude-mem |
 
-**Total: 28 pts.** (I earlier said "about 20" for the core flow. That was too low.) **Later:** tracker beyond draft/final/applied and the dashboard card (~5 pts), then S2 and S3.
+**Total: 31 pts** (28 for the career flow + 3 for W2-00). **Later:** tracker beyond draft/final/applied and the dashboard card (~5 pts), then S2 and S3.
 
 **Contract first:** the coordinator writes `docs/week2/career-contract.md` before Wave 2: the `master.md` format, the requirements schema, application statuses, the job/status API, the download route and the error codes.
 
@@ -93,6 +94,19 @@ Fixed in this plan:
 | Real postings as fixtures conflict with rule 4 | `CLAUDE.md` | Synthetic fixtures committed, real ones from `dataDir` |
 
 Open risks, checked at ticket time: whether 9router honours `output_config` (the `pnpm smoke` check covers it); whether Zod `.max()` and enums survive `zodOutputFormat`; the Fastify body limit for pasted postings; and the docx/CSV libraries (none are installed; rule 6 requires prebuilt binaries).
+
+### Cleanup decision (2026-10-27)
+The first version of this plan didn't audit what the new direction makes redundant. The audit, and your decision ("remove them, park the decider"):
+
+| Group | Decision |
+|---|---|
+| Chat backend, streaming, session routes, idle auto-filing, chat page, session sidebar, message bubble, session summary notes | **Removed.** Your inputs are CVs, postings, email and social data, not conversations. |
+| Session categorization (`categorize_session`) and persona interviews (`extract_persona`), their approval types `propose_category` and `persona_statement`, `eval:categorize`, the 10 session fixtures | **Removed.** Both only work on chat sessions. Add a life area by editing the `## Areas` list in the vault's `CLAUDE.md`; it is read at every boot. |
+| Laya decider (`server/src/decider`), `sidecar/`, `scripts/sidecar.ts`, `scripts/decider-bench.ts` | **Parked.** The code stays and `pnpm sidecar` still works, but `pnpm dev` no longer starts it. The Email slice needs it. |
+| Vault writer, approvals/review queue (`vault_conflict`), LLM client, jobs, auth and security, audit, review UI, `markdown.ts`, `diff.ts` | **Kept.** The career slice is built on them. |
+| Migrations `0001`–`0004` | **Kept.** They are forward-only, so the `sessions`, `messages` and `persona_questions` tables stay in the schema, unused. |
+
+Everything removed is still in `main` at commit `fe1b1dd` (`git show fe1b1dd:<path>`). The one piece saved first is the untrusted-text wrapper from `categorize-session.ts`, now `server/src/llm/untrusted.ts`.
 
 ## 7. Assumptions (tell me to change any)
 1. You apply in EN and DE. Language is chosen per posting, and bullets are reworded within that language only.
