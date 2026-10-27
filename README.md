@@ -50,6 +50,7 @@ Check where a key is coming from with `pnpm secrets status`.
 |---|---|
 | `pnpm verify` | Typecheck, lint, and all tests (server + web). The pre-push hook runs it; never bypass it. |
 | `pnpm build` | Builds the web UI into `web/dist`, which the server serves at :3000 |
+| `pnpm vault:retire` | One-time cleanup of Week 1 content in an existing vault and database. Dry run by default; `--apply` does it. Stop the server first. |
 | `pnpm sidecar:setup` / `pnpm sidecar` | The parked Laya decider (Python, CUDA). Not part of `pnpm dev`; the Email slice will use it. |
 | `pnpm secrets status` | Shows which secrets are set and where they come from |
 
