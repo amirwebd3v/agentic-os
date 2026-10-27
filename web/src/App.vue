@@ -21,7 +21,7 @@ onMounted(() => Promise.allSettled([provider.load(), review.load()]));
     <ProviderBanner />
     <div class="layout">
       <AppNav />
-      <RouterView />
+      <RouterView :key="$route.fullPath" />
     </div>
   </template>
 </template>

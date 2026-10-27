@@ -14,6 +14,7 @@ const diff = computed(() =>
     ? lineDiff(props.approval.current_text ?? '', props.approval.payload.content)
     : [],
 );
+const known = computed(() => props.approval.action_type === 'vault_conflict');
 // A type the UI doesn't know yet (a newer server) still renders, as raw JSON.
 const unknown = computed(() => props.approval as unknown as { action_type: string; payload: unknown });
 </script>
@@ -37,10 +38,13 @@ const unknown = computed(() => props.approval as unknown as { action_type: strin
 </span></pre>
     </template>
 
-    <pre v-else class="plain">{{ JSON.stringify(unknown.payload, null, 2) }}</pre>
+    <template v-else>
+      <p class="hint">This version can't apply this item. Reject it to clear it.</p>
+      <pre class="plain">{{ JSON.stringify(unknown.payload, null, 2) }}</pre>
+    </template>
 
     <footer>
-      <button type="button" :disabled="busy" @click="emit('decide', 'approve')">Approve</button>
+      <button type="button" :disabled="busy || !known" @click="emit('decide', 'approve')">Approve</button>
       <button type="button" :disabled="busy" @click="emit('decide', 'reject')">Reject</button>
     </footer>
   </article>

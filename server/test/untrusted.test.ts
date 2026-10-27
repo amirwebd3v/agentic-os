@@ -16,6 +16,11 @@ test('the wrapped text can only end where the wrapper ends', () => {
   expect(out.match(/<\/posting>/g)).toHaveLength(1);
 });
 
+test('an unterminated tag at the end of the text is removed too', () => {
+  expect(wrapUntrusted('posting', 'text <posting')).toBe('<posting>\ntext \n</posting>');
+  expect(wrapUntrusted('posting', 'text </ posting x="')).toBe('<posting>\ntext \n</posting>');
+});
+
 test('a tag name that is not a plain constant is refused', () => {
   expect(() => defuse('a|b', 'x')).toThrow('invalid tag name');
   expect(() => defuse('.*', 'x')).toThrow('invalid tag name');

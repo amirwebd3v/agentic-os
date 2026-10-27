@@ -31,6 +31,9 @@ test('payload text renders as text, never as HTML', () => {
     expect(e.querySelector('img')).toBeNull();
     expect(e.textContent).toContain(evil);
   }
+  const approve = (e: HTMLElement) => [...e.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Approve')!;
+  expect(approve(unknown).disabled).toBe(true); // this UI can't apply a type it doesn't know
+  expect(approve(conflict).disabled).toBe(false);
 });
 
 test('Approve and Reject emit the decision', () => {

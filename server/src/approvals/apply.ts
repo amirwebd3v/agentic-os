@@ -113,7 +113,7 @@ export function decide(
         };
       }
     } else if (decision === 'approve') {
-      throw new ApprovalError(409, `approving ${row.action_type} is not supported yet`);
+      throw new ApprovalError(409, `this version can't approve ${row.action_type}; reject it to clear it`);
     }
 
     db.transaction(() => {
