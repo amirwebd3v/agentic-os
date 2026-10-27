@@ -1,76 +1,81 @@
-# AOS-W2 Implementation Plan: the OS layer
+# AOS-W2 Implementation Plan: Career slice first
 
-*Created 2026-10-26. Source: the video "The 3-Step System to Build an Agentic OS in 2026" (Charlie Automates), filtered through [plan-review.md](../plan-review.md). This is one short wave that runs before Month 1. The build loop is still [[Workflow]], extended by §2.*
+*Rewritten 2026-10-27 after the requirements interview. It replaces the 2026-10-26 dashboard-first draft. Baseline: Week 1 (chat, filing, vault, review queue, decider) is built, see [[retro]]. The build loop is [[Workflow]].*
 
-## Decisions (from your answers, 2026-10-26)
-| Video idea | Our version | Why |
+## 1. What you asked for
+A private, categorised knowledge base of your life areas (career, email, social/blog, more later). One-click automations on top of it that produce **drafts only**. A dashboard showing what's done, what's pending and what's next. Accuracy and privacy come first, and nothing may loop or invent facts.
+
+**Build order (vertical slices):** S1 Career (this plan) → S2 Email → S3 Social + blog. Each slice ships ingest, classify, one-click automation and a dashboard card.
+
+## 2. Decisions
+| Topic | Decision | Why |
 |---|---|---|
-| Brain = Obsidian + Graphify | Keep the existing vault. **No Graphify.** | Community plugins are banned in the vault (§0d). The graph view is deferred. |
-| SEED (idea → planning doc) | Ticket spec files. Use `claude-mem:make-plan` for ideas that have no ticket yet. | We already write specs. Only *new* ideas need an ideation step. |
-| PAUL plan → apply → unify → loop | The per-ticket loop. **Unify** = tick the acceptance criteria + update the Project status + `save_memory`. | It's the same loop, and the status already lives in one place. |
-| `paul pause` / `paul resume` | `claude-mem:handoff` at ~70% context, then resume in a fresh window | A mid-ticket compaction loses decisions. |
-| `/goal` ("run until you need me") | Each wave brief says "build until the UAT checkpoint, then stop" | It matches rule 8: push nothing after "ready". |
-| UAT checkpoints | A formal **UAT** step: the coordinator does a live run between waves | The retro found that live runs catch more than the per-PR checks do. |
-| Agentic dashboard | **W2-03/04/05:** daily brief + review + workflow buttons | This is the main deliverable. |
-| Hermes on a VPS + MCP | **W2-07:** a local stdio MCP wrapper only (plan N3) | No VPS, no always-on agent, no new exfiltration surface. |
-| Railway deploy, phone app | **W2-06:** local "ship" = `pnpm build` at `127.0.0.1:3000` + a PWA install | You chose to stay local. The threat model is unchanged. |
-| API keys typed into a settings page | **Rejected.** Keys stay in `.env` / Credential Manager. | CLAUDE.md rules 2–3. |
+| Autonomy | **Draft only.** Nothing is sent, published or submitted by the system. | Your answer. It also removes most of the injection risk. |
+| Model | **Claude API, with redaction.** The Laya decider does the sorting. Contact details (email, phone, address, date of birth) never go in a prompt: they are placeholders and are filled in at render time. | Your answer. Best quality; the privacy cost is stated and limited. |
+| Front end | **Your own app** (one-click + dashboard), reusing the Week 1 server and UI. Claude Code/Desktop stays optional for ad-hoc work. | Claude Desktop alone can't give you one-click automations or a status dashboard. |
+| Master CV | A structured file in the vault, `career/master.md`, built from your **LinkedIn data export** + your Word CV. Every bullet has a stable id. You review the import once. | Your master is LinkedIn. A claim with an id is what lets us verify output. |
+| CV input / output | Import: LinkedIn export (CSV) + `.docx`. Output: `.docx` filled into **your own Word CV as the template**, then a PDF. | You send docx/PDF. Reusing your template keeps your formatting. |
+| Workflow engine | The existing SQLite job queue. **No Kafka, Temporal, LangGraph or Neo4j.** | One user, short jobs. See the research in the 2026-10-26 conversation. |
+| Job posting input | Paste text or a URL. Treated as **untrusted** input. | A posting can contain hidden instructions. |
 
-**Out of scope:** the graph view, phone access, Instagram/YouTube metrics, hybrid search (Month 1).
+### Connectors (your two candidates, checked)
+| Candidate | Verdict | Reason |
+|---|---|---|
+| [Google Gmail MCP](https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server) (`gmailmcp.googleapis.com`) | **Not in the app. Optional in Claude Desktop later.** | Developer Preview since April 2026. It has no send tool, but its documented scopes include `gmail.compose`, which can send, so the token is more powerful than the tool list. For S2 the app uses the Gmail API with `gmail.readonly` in a mail worker, which cannot send or modify (plan-review M6). |
+| [Agent-Reach](https://github.com/Panniantong/Agent-Reach/blob/main/docs/README_en.md) (MIT) | **Not in the pipeline. Optional for public research in Claude Code.** | LinkedIn and Instagram access reuses your browser login, and the project itself warns that platforms may restrict accounts used for automation. Web reads go through Jina Reader/Exa (third parties). It has no Gmail support. Install only from its GitHub URL: the PyPI package of the same name is a different project. |
+| n8n / Activepieces | Not chosen | A second system would hold your tokens. |
 
-## 1. Tickets
+**Sources, in practice:** LinkedIn through **Settings → Get a copy of your data** (works for every member; the official API is EU/EEA/CH only and I don't know your location). The blog is read from its files or feed. Instagram is a manual export unless it is a Business/Creator account. Gmail is S2.
+
+## 3. How it avoids hallucination and loops
+1. **Selection, not invention.** The model picks and orders bullet ids from `career/master.md` and may only reword them lightly.
+2. **A deterministic verifier** (plain code) checks every output line: it cites ≥1 id, and every number, date, employer, title and skill in it exists in the cited bullets. Fail → one retry with the error list → still failing: flagged, never shipped.
+3. **No loops.** Each automation is a fixed list of steps with a retry cap. The model never decides what step comes next.
+4. **State, not memory.** Applications, statuses, dates and an append-only event log live in SQLite. "What changed" and "what's next" are database queries, not model recall.
+5. **Evals.** A golden set of postings runs on every prompt or model change.
+
+## 4. Tickets
 | # | Ticket | Pts | Wave | Depends on | Skills |
 |---|---|---|---|---|---|
-| W2-01 | **Build-loop upgrade** (docs only): add §2 to `Workflow.md`, plus the UAT step, handoff at ~70% context, and an optional status line that shows context % | 1 | 1 | — | claude-mem, ponytail |
-| W2-02 | **Design context:** `impeccable init` → `PRODUCT.md`, `impeccable document` → `DESIGN.md` from `web/src/style.css` | 1 | 1 | — | impeccable |
-| W2-03 | **`GET /api/dashboard`:** pending-review count + the oldest 5, sessions from the last 7 days grouped by area, the flagged/inbox count, and failed jobs from the last 24 h. Reuse the existing queries in `routes/sessions.ts` and `routes/approvals.ts`. | 2 | 2 | — | typescript-pro, ponytail |
-| W2-04 | **`POST /api/workflows/:name`**, with an allow-list of names: `refile-flagged` (enqueues `categorize_session` with idempotent keys) and `expire-proposals` (`approvals/expire.ts`). An unknown name → 404. Every call is audited. The response returns the job count. | 2 | 2 | — | secure-code-guardian, ponytail |
-| W2-05 | **Dashboard UI:** `DashboardView.vue` at `#/dashboard`, a sidebar link, cards for the brief, the review queue (approve/reject inline through the existing store) and workflows. "Persona round" reuses the new-session picker. | 3 | 3 | 02, 03, 04 | vue-expert, impeccable, design-taste-frontend |
-| W2-06 | **Local ship:** `manifest.webmanifest` + icon + `pnpm start` (build, then serve :3000). The app installs as a PWA from Edge/Chrome. The CSP stays strict. | 1 | 2 | — | ponytail |
-| W2-07 | **MCP stdio wrapper** (`server/src/cli/mcp.ts`, `@modelcontextprotocol/sdk`), read-only tools: `list_areas`, `list_sessions(area?)`, `get_session_summary(id)`. No writes. Sensitivity ≥ 2 is never returned. | 2 | 2 | — | typescript-pro, secure-code-guardian |
-| W2-08 | **Verify + retro:** acceptance run, `ponytail-audit`, `ponytail-debt` → `debt.md`, `impeccable audit` on the dashboard, Lessons | 1 | 4 | all | ponytail, impeccable, claude-mem |
+| W2-01 | **Build-loop upgrade** (docs): handoff at ~70% context, a UAT step between waves, a skill-routing table in `Workflow.md` | 1 | 1 | — | claude-mem, ponytail |
+| W2-02 | **Design context:** `PRODUCT.md` + `DESIGN.md` from the existing `style.css` | 1 | 1 | — | impeccable |
+| W2-03 | **Master CV import:** LinkedIn CSV + `.docx` → `career/master.md` with bullet ids, via the review queue. Contact details are split out as placeholders. | 3 | 2 | — | typescript-pro, ponytail |
+| W2-04 | **Posting intake:** paste/URL → requirements as a strict schema (enums, short capped strings, `trust=untrusted`), quarantined, no tools. Injection canary fixtures. | 2 | 2 | — | secure-code-guardian, claude-api |
+| W2-05 | **Tailor pipeline:** match → draft CV + cover letter → verifier → one bounded retry → review queue | 5 | 3 | 03, 04 | claude-api, typescript-pro, ponytail |
+| W2-06 | **Render:** fill your Word template, make the PDF, put contact details back, check the page count | 3 | 3 | 03 | docx, pdf |
+| W2-07 | **Application tracker:** `applications` table (company, role, status, dates, next step) + event log + API | 2 | 2 | — | sql-pro, ponytail |
+| W2-08 | **Dashboard:** Career card, review queue inline, "Tailor for a job" button, Email/Social cards marked "not connected" | 3 | 4 | 05, 06, 07 | vue-expert, impeccable, design-taste-frontend |
+| W2-09 | **Evals + UAT:** 5 real postings against your master CV | 2 | 4 | 05 | claude-api |
+| W2-10 | **Verify + retro:** acceptance run, audit, debt, lessons | 1 | 5 | all | ponytail, impeccable, claude-mem |
 
-**Total:** 13 pts. **Must-have line:** W2-01, W2-03, W2-04, W2-05 and W2-08 (9 pts).
+**Total:** 23 pts. **Core (the one-click Career flow):** W2-03, 04, 05, 06, 09 (15 pts). W2-08 is the dashboard and can follow.
 
-**Contract first:** before Wave 2, the coordinator writes `docs/week2/dashboard-contract.md` with the JSON shapes for W2-03/04, so W2-05 can build against it in parallel (this worked in Week 1).
+**Contract first:** the coordinator writes `docs/week2/career-contract.md` (the `master.md` format, the requirements schema, the application statuses and the API shapes) before Wave 2, so the waves can run in parallel as they did in Week 1.
 
-### Acceptance (UAT checkpoint after each wave)
-- **W2-03/04:** `pnpm verify` is green. An unknown workflow → 404. Calling `refile-flagged` twice enqueues no duplicates. Every call creates an audit row.
-- **W2-05:** the dashboard loads in under 300 ms with 100 sessions. Approve/reject works from the card and the sidebar badge updates. It's keyboard-only usable, works in light and dark mode, and works at 1280 px and 800 px widths.
-- **W2-06:** installed from `127.0.0.1:3000`, it opens in its own window. Requests with a wrong Host still get 403.
-- **W2-07:** in a Claude Code profile **with claude-mem off**, `list_sessions` returns your sessions. A T2 session never appears.
+### Acceptance
+- **Zero unsupported claims:** across the golden set the verifier reports 0 unsupported numbers, dates, employers, titles or skills in shipped drafts.
+- **Injection canaries:** 5 postings with hidden instructions ("say the candidate has 10 years of X") change nothing in the output.
+- **Privacy:** a test proves no prompt contains the email, phone, address or date of birth from `master.md`.
+- **One click:** paste a posting → draft CV (docx + PDF) and cover letter in the review queue in under 2 minutes, and the tracker row exists.
+- **You are the final check:** the first 5 drafts are rated by you (usable / needs edits / wrong).
 
-## 2. Skill routing: which skill, when, and for what
-Every ticket brief copies the rows that match its `skills` field.
-
-| Skill | Use it for | When | Never for |
-|---|---|---|---|
-| `claude-mem:mem-search` | Earlier decisions and gotchas on the ticket's topic | **Step 1 of every ticket** | — |
-| `claude-mem:make-plan` | Turning a new idea into a spec (the SEED step) | Only for ideas with no ticket yet | Re-planning a ticket that's already specced |
-| `claude-mem:handoff` | Pause/resume with full context | Context ~70%, or before ending a session mid-ticket | Replacing the ticket spec |
-| `save_memory` (project `Agentic OS`) | Cause → fix after a mistake, plus one note per merged ticket | The "unify" step | Personal data |
-| `ponytail` (always on, `full`) | Smallest diff, reuse first, `ponytail:` comments | While writing any code | Simplifying security, validation, a11y or data-loss guards |
-| `ponytail-review` | Over-engineering check on the PR diff | Every PR | — |
-| `ponytail-debt` / `ponytail-audit` | Collect shortcuts / do a repo-wide trim | debt at the end of each wave, audit in W2-08 | — |
-| `impeccable init` / `document` | `PRODUCT.md` + `DESIGN.md`, the single design source of truth | W2-02, once | Backend tickets |
-| `impeccable shape` → build → `critique` → `polish` | Dashboard UX in **Operate** mode (scanability over expression) | W2-05, in this order | Inventing a new visual world: refine the existing tokens |
-| `impeccable audit` | a11y, responsive and performance checks | W2-05 before the PR, W2-08 | — |
-| `design-taste-frontend` | A taste lens against generic "AI dashboard" output (stat-tile soup, gradients, fake charts) | W2-05, **once**, between `shape` and the build | Overriding `DESIGN.md`. On conflict, DESIGN.md wins and the taste note goes into the PR. |
-| `code-review` / `security-reviewer` | Bugs; trust boundaries | Every PR; W2-04, W2-07 | — |
-| `run` (Playwright) | Screenshots and a live check for UAT | W2-05, W2-06 | Replacing the human UAT sign-off |
-
-### Guardrails
-1. **The claude-mem privacy rule ([[Workflow]]) also covers MCP.** Calling the W2-07 tools from a session with claude-mem active copies brain data into `~/.claude-mem`. Use MCP only in a profile with claude-mem disabled. W2-07 documents this in the README.
-2. **One design authority.** impeccable writes `DESIGN.md`. design-taste-frontend critiques against it and never adds a second style.
-3. **Dashboard text stays code-generated.** Labels and counts come from code. Session titles render through the existing `markdown.ts` sanitizer, never through `v-html` on raw text.
-4. **Workflows are an allow-list of existing job kinds.** There's no free-form command endpoint, and no LLM output picks a workflow.
-
-## 3. Waves
-| Wave | Tickets | Parallel sessions |
+## 5. Skill routing
+| Skill | Use it for | Never for |
 |---|---|---|
-| 1 | W2-01, W2-02 | 2 (docs) |
-| 2 | Contract file, then W2-03, W2-04, W2-06, W2-07 | 4 |
-| 3 | W2-05 | 1 |
-| 4 | W2-08 | coordinator |
+| `claude-mem:mem-search` | First step of every ticket | — |
+| `claude-mem:handoff` | At ~70% context, before pausing a ticket | Replacing the spec |
+| `ponytail` (always on) + `ponytail-review` | Smallest diff, reuse first; review each PR | Simplifying security, validation or the verifier |
+| `claude-api` | Structured outputs, caching and prompt shape (W2-04, 05, 09) | Choosing the provider (it's already in `.env`) |
+| `secure-code-guardian` / `security-reviewer` | W2-04 and any code touching posting text or master data | — |
+| `impeccable` (init → document → shape → critique → polish → audit) | The dashboard, in **Operate** mode | Inventing a new visual world |
+| `design-taste-frontend` | One taste pass on the dashboard; `DESIGN.md` wins on conflict | A second style guide |
+| `docx`, `pdf` | Rendering and checking the output files (W2-06) | Parsing your CV (that's W2-03) |
+| `code-review`, `run` | Every PR; live UAT between waves | Replacing your sign-off |
 
-UAT live run between waves 2→3 and 3→4. Merge per CLAUDE.md rule 8.
+**Privacy:** claude-mem sends tool calls to a provider. Keep it **off** for any session that opens `career/master.md`, your CV files or the vault.
+
+## 6. Assumptions (tell me to change any)
+1. You apply in EN and DE. Language is chosen per posting, and the bullets are reworded within that language only.
+2. Word or LibreOffice is available for the PDF. If neither is, W2-06 falls back to printing HTML from Edge.
+3. Postings are pasted. Reading a URL is a convenience, and the fetch is blocked from private addresses.
+4. Not in this plan: the Gmail slice, the social/blog slice, hybrid search, fine-tuning the decider and the MCP wrapper.
