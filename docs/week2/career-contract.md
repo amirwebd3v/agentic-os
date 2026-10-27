@@ -118,7 +118,7 @@ type Draft = {
 ```
 **Employer, title, dates and location are never model output.** The render step copies them from the master by `entry_id`. Contact values appear only as placeholders (§3.3).
 
-## 5. Database: migration `0005_career.sql`
+## 5. Database: migration `0006_career.sql`
 Committed by the coordinator before Wave 2 starts, so sessions don't collide. Conventions follow `0001_init.sql`.
 
 ```sql

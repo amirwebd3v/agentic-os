@@ -92,7 +92,9 @@ test('a conflict path outside the vault is refused', async () => {
 test('a type nobody handles can be rejected but not approved', async () => {
   const t = await setupApprovals();
   const id = t.item();
-  expect((await t.decide(id, { decision: 'approve' })).statusCode).toBe(409);
+  const refused = await t.decide(id, { decision: 'approve' });
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json().error).toMatch(/reject it to clear it/);
   expect(t.row(id).status).toBe('pending');
   expect((await t.decide(id, { decision: 'reject' })).json()).toEqual({ id, status: 'rejected' });
   expect((await t.decide(id, { decision: 'reject', final_text: 'x' })).statusCode).toBe(409); // already decided
