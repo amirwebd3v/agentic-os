@@ -14,7 +14,7 @@ const diff = computed(() =>
     ? lineDiff(props.approval.current_text ?? '', props.approval.payload.content)
     : [],
 );
-const known = computed(() => props.approval.action_type === 'vault_conflict');
+const known = computed(() => ['vault_conflict', 'career_master_import'].includes(props.approval.action_type));
 // A type the UI doesn't know yet (a newer server) still renders, as raw JSON.
 const unknown = computed(() => props.approval as unknown as { action_type: string; payload: unknown });
 </script>
@@ -25,6 +25,7 @@ const unknown = computed(() => props.approval as unknown as { action_type: strin
       <input v-model="selected" type="checkbox" :aria-label="`Select item ${approval.id}`" />
       <h2 :id="titleId">
         <template v-if="approval.action_type === 'vault_conflict'">Note changed in the vault: {{ approval.payload.path }}</template>
+        <template v-else-if="approval.action_type === 'career_master_import'">Master CV import</template>
         <template v-else>{{ unknown.action_type }}</template>
       </h2>
       <time :datetime="approval.created_at">{{ new Date(approval.created_at).toLocaleDateString() }}</time>
@@ -36,6 +37,16 @@ const unknown = computed(() => props.approval as unknown as { action_type: strin
       </p>
       <pre class="diff"><span v-for="(l, i) in diff" :key="i" :class="{ add: l.op === '+', del: l.op === '-' }">{{ l.op }} {{ l.text }}
 </span></pre>
+    </template>
+
+    <template v-else-if="approval.action_type === 'career_master_import'">
+      <p class="hint">
+        {{ approval.payload.stats.entries }} entries, {{ approval.payload.stats.bullets }} bullets, {{ approval.payload.stats.skills }} skills
+        from {{ approval.payload.source_files.join(', ') }}. Approve to create <code>career/master.md</code> and
+        <code>career/contact.md</code>; after that they're yours to edit in Obsidian.
+        <template v-if="approval.payload.contact_hash_before">This replaces your current <code>career/contact.md</code>.</template>
+      </p>
+      <pre class="plain">{{ approval.payload.master }}</pre>
     </template>
 
     <template v-else>

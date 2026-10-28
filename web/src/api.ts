@@ -8,7 +8,17 @@ export type Provider = {
 // All text in them is model- or file-supplied: render as text only.
 export type Approval = {
   id: number; proposed_by: string; created_at: string; original_text: string | null;
-} & { action_type: 'vault_conflict'; payload: { path: string; current_hash: string | null; content: string }; current_text: string | null };
+} & (
+  | { action_type: 'vault_conflict'; payload: { path: string; current_hash: string | null; content: string }; current_text: string | null }
+  | {
+      action_type: 'career_master_import';
+      payload: {
+        master: string; contact: string; source_files: string[];
+        master_hash_before: string | null; contact_hash_before: string | null;
+        stats: { entries: number; bullets: number; skills: number };
+      };
+    }
+);
 export type ApprovalPage = { items: Approval[]; more: number; total: number };
 export type Decision = 'approve' | 'reject';
 export type BatchResult = { id: number; ok: boolean; error?: string }[];
