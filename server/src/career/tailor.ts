@@ -275,7 +275,7 @@ export const saveText = (db: Database, id: number, kind: string, value: unknown)
 };
 
 /** One event row and its audit row; `detail` holds ids, counts and codes only. */
-export function event(db: Database, id: number, kind: 'step' | 'failed' | 'retry' | 'status', detail: Record<string, unknown>): void {
+export function event(db: Database, id: number, kind: 'step' | 'failed' | 'retry' | 'status' | 'rendered', detail: Record<string, unknown>): void {
   db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, ?, ?)`).run(id, kind, JSON.stringify(detail));
   audit(db, { actor: 'app', action: kind === 'failed' ? 'career.application.fail' : 'career.application.step', args: { application_id: id, event: kind, ...detail } });
 }
