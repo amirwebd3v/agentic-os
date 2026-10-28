@@ -7,6 +7,7 @@ const review = useReviewStore();
 <template>
   <nav class="sidebar" aria-label="Main">
     <strong class="brand">Agentic OS</strong>
+    <RouterLink to="/applications" :class="{ 'router-link-active': $route.path.startsWith('/applications/') }">Applications</RouterLink>
     <RouterLink to="/review">
       Review
       <span v-if="review.total" class="badge count">{{ review.total }}<span class="sr-only"> pending</span></span>

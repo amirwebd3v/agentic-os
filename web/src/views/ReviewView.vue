@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, type Decision } from '../api';
 import ApprovalCard from '../components/ApprovalCard.vue';
+import MasterImport from '../components/MasterImport.vue';
 import { useReviewStore } from '../stores/review';
 
 const review = useReviewStore();
@@ -41,7 +42,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="review-queue">
+  <main class="page review-queue">
     <h1>Review</h1>
     <div class="toolbar">
       <label><input type="checkbox" :checked="allSelected" :disabled="!review.items.length" @change="toggleAll" /> Select all</label>
@@ -49,7 +50,10 @@ onMounted(() => {
       <button type="button" :disabled="busy || !selected.size" @click="batch('reject')">Reject selected ({{ selected.size }})</button>
     </div>
     <p v-if="message" class="error" role="alert">{{ message }}</p>
-    <p v-if="!review.items.length && !review.more" class="placeholder">Nothing to review.</p>
+    <div v-if="!review.items.length && !review.more" class="placeholder">
+      <p>Nothing to review.</p>
+      <MasterImport @done="run(review.load)" />
+    </div>
     <p v-else-if="!review.items.length" class="placeholder">That's today's review done.</p>
     <ApprovalCard
       v-for="a in review.items"
