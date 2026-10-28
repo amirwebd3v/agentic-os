@@ -29,6 +29,12 @@ interface ApprovalRow {
 
 const MAX_TEXT = 2000;
 const ConflictPayload = z.object({ path: z.string().min(1), current_hash: z.string().nullable(), content: z.string() });
+const ImportPayload = z.object({
+  master: z.string(),
+  contact: z.string(),
+  master_hash_before: z.string().nullable(),
+  contact_hash_before: z.string().nullable(),
+});
 
 /** Writes `text` beside `abs` and fsyncs it; the caller renames it into place as the last step of its transaction. */
 function stage(abs: string, text: string): string {
@@ -49,7 +55,7 @@ const fileHash = (abs: string): string | null => (existsSync(abs) ? sha256(readF
 /**
  * Applies one decision atomically: the status change, the audit entry and every DB side effect commit together,
  * and a vault file is renamed into place inside that transaction, so a failed write leaves the row `pending`.
- * Returns the vault path written, if any, so the caller can commit it to the vault's git.
+ * Returns the vault path(s) written, one per line, if any, so the caller can commit them to the vault's git.
  */
 export function decide(
   db: Database,
@@ -112,6 +118,30 @@ export function decide(
           else db.prepare(`UPDATE vault_notes SET last_written_by = 'user' WHERE path = ?`).run(path);
         };
       }
+    } else if (row.action_type === 'career_master_import' && decision === 'approve') {
+      // Both files become the user's (contract §8.1). A file already holding the proposed text counts as unchanged,
+      // so a retry after a half-applied write (first rename done, then a throw) can finish instead of 409ing forever.
+      const p = ImportPayload.parse(payload);
+      const files = (
+        [
+          ['career/master.md', p.master, p.master_hash_before],
+          ['career/contact.md', p.contact, p.contact_hash_before],
+        ] as const
+      ).map(([path, text, before]) => {
+        const abs = resolveNotePath(vaultDir, path);
+        const unchanged = () => [before, sha256(text)].includes(fileHash(abs));
+        if (!unchanged()) throw new ApprovalError(409, `${path} changed since the import; reject this and import again`);
+        return { path, text, abs, unchanged, tmp: '' };
+      });
+      for (const f of files) staged.push((f.tmp = stage(f.abs, f.text)));
+      wrote = files.map((f) => f.path).join('\n');
+      effect = () => {
+        for (const f of files) {
+          if (!f.unchanged()) throw new ApprovalError(409, `${f.path} changed during the write; reject this and import again`);
+          upsertNote.run(f.path, sha256(f.text), 'user');
+          renameSync(f.tmp, f.abs);
+        }
+      };
     } else if (decision === 'approve') {
       throw new ApprovalError(409, `this version can't approve ${row.action_type}; reject it to clear it`);
     }
