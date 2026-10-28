@@ -6,67 +6,91 @@ import { contactNote } from './contact.ts';
 import { buildMaster } from './master.ts';
 import type { EntryDraft } from './master.ts';
 
-/** Columns of LinkedIn's data export ("Get a copy of your data"), lower-cased. Others are reported, not guessed at. */
+/**
+ * The columns `buildImport` reads from LinkedIn's data export ("Get a copy of your data"), lower-cased. Only the
+ * optional fast path uses these names: a known CSV missing one of them goes to the model instead.
+ */
 const KNOWN = {
-  'Profile.csv': ['first name', 'last name', 'maiden name', 'address', 'birth date', 'headline', 'summary', 'industry', 'zip code', 'geo location', 'twitter handles', 'websites', 'instant messengers'],
+  'Profile.csv': ['first name', 'last name', 'headline', 'summary'],
   'Positions.csv': ['company name', 'title', 'description', 'location', 'started on', 'finished on'],
   'Education.csv': ['school name', 'start date', 'end date', 'notes', 'degree name', 'activities'],
   'Skills.csv': ['name'],
   'Languages.csv': ['name', 'proficiency'],
-  'Certifications.csv': ['name', 'url', 'authority', 'started on', 'finished on', 'license number'],
+  'Certifications.csv': ['name', 'authority', 'started on', 'finished on'],
 } as const;
+/**
+ * Private columns of the export (contact details, §3.2): never mapped, and dropped from any table before the model
+ * sees it. Only ever removes data, so no export can fail on these names.
+ */
+export const PRIVATE_COLUMNS = ['maiden name', 'address', 'birth date', 'zip code', 'geo location', 'twitter handles', 'websites', 'instant messengers'];
+/** Export columns left out on purpose: dropped without a warning. */
+const IGNORED = [...PRIVATE_COLUMNS, 'industry', 'url', 'license number'];
 export type LinkedInFile = keyof typeof KNOWN;
 export const LINKEDIN_FILES = Object.keys(KNOWN) as LinkedInFile[];
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
-/** CV documents the import reads when there is no LinkedIn CSV. */
-export const DOCUMENT_EXTS = ['.md', '.pdf', '.docx'];
-const MAX_DEPTH = 2;
+/** Formats the import reads: documents (sent to the model first) and data files. Anything else gets a warning. */
+const DOCUMENT_EXTS = ['.md', '.txt', '.pdf', '.docx'];
+export const DATA_EXTS = ['.csv', '.tsv', '.json'];
+const MAX_DEPTH = 3;
+/**
+ * ponytail: a basename heuristic for the parts of a LinkedIn export that aren't the owner's CV: other people's names
+ * (connections, messages, contacts, endorsements…) and activity noise. Privacy rule: such a file is never even read,
+ * so third-party names can't reach the model. Data files only, so a CV document named `machine-learning.pdf` is still
+ * read; a false hit is a warning, never silent. Extend the list when an export grows a new file.
+ */
+const NOT_CV =
+  /connection|message|invitation|contact|endorsement|recommendation|follow|reaction|comment|share|vote|search.?quer|login|registration|receipt|(?<![a-z])ads?(?![a-z])|ad.?targeting|inference|saved|event|learning|job.?application|email|phone|identity|verification|security/i;
 
 type Row = Record<string, string | undefined>;
 
 /**
- * `abs` as a plain file of at most 5 MB, opened with `O_NOFOLLOW` (where the OS has it) so a swapped-in symlink
- * isn't followed; `read: false` only stats it. `undefined` (with a warning naming `label`) otherwise.
+ * `abs` as a plain file of at most 5 MB, opened with `O_NOFOLLOW` (where the OS has it) so a swapped-in symlink isn't
+ * followed. `undefined` (with a warning naming `name`) otherwise.
  */
-function plainFile(abs: string, label: string, warnings: string[], read = true): { mtimeMs: number; data?: Buffer } | undefined {
+function plainFile(abs: string, name: string, warnings: string[]): Buffer | undefined {
   let fd: number;
   try {
     fd = openSync(abs, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   } catch {
-    warnings.push(`${label}: unreadable, ignored`);
+    warnings.push(`${name}: skipped: unreadable`);
     return undefined;
   }
   try {
     const st = fstatSync(fd);
-    if (!st.isFile()) return undefined;
-    if (st.size > MAX_FILE_BYTES) {
-      warnings.push(`${label}: larger than 5 MB, ignored`);
-      return undefined;
-    }
-    return { mtimeMs: st.mtimeMs, ...(read ? { data: readFileSync(fd) } : {}) };
+    if (!st.isFile()) warnings.push(`${name}: skipped: not a plain file`);
+    else if (st.size > MAX_FILE_BYTES) warnings.push(`${name}: skipped: larger than 5 MB`);
+    else return readFileSync(fd);
+    return undefined;
   } finally {
     closeSync(fd);
   }
 }
 
+/** A file of the import folder. `name` is relative to it and never goes to the model (it can hold your name). */
+export interface ImportFile {
+  name: string;
+  data: Buffer;
+  /** Set on the first file (in scan order) with this LinkedIn name: the fast path's input. */
+  known?: LinkedInFile;
+}
+
 export interface ExportFiles {
+  /** Every readable file in a supported format that may be CV data, in scan order. */
+  sources: ImportFile[];
+  /** The `known` sources' text, for `buildImport`. */
   files: Partial<Record<LinkedInFile, string>>;
-  /** Only when no LinkedIn CSV was found: the most recently modified `.md`/`.pdf`/`.docx`. `name` is relative to `dir`. */
-  document?: { name: string; data: Buffer };
   warnings: string[];
 }
 
 /**
- * Reads the import folder `dir` (never a client path) and its subfolders up to two levels down, e.g. an extracted
- * `Basic_LinkedInDataExport_…/`. Only plain files count: symlinks and junctions are skipped, never followed, and a
- * known CSV name matches by basename, case-insensitive (the shallowest, then alphabetically first, wins).
- * Warnings name files and limits only.
+ * Reads the import folder `dir` (never a client path) and its subfolders up to three levels down, e.g. an extracted
+ * `Basic_LinkedInDataExport_…/`. Only plain files count: symlinks and junctions are skipped, never followed. Every
+ * file is either a source or named in a warning with the reason (file names and limits only, never content).
  */
 export function readExport(dir: string): ExportFiles {
+  const sources: ImportFile[] = [];
   const files: Partial<Record<LinkedInFile, string>> = {};
   const warnings: string[] = [];
-  const csvs = new Map<LinkedInFile, string>();
-  const docs: string[] = [];
   // ponytail: a subfolder swapped for a link between readdir calls would be followed (O_NOFOLLOW guards the last
   // step only); the folder is the owner's own. Open each level with O_DIRECTORY|O_NOFOLLOW if that ever matters.
   const walk = (rel: string, depth: number) => {
@@ -76,35 +100,29 @@ export function readExport(dir: string): ExportFiles {
     } catch {
       return; // no import folder yet, or a folder gone meanwhile
     }
-    for (const d of entries.filter((e) => e.isFile())) {
+    for (const d of entries.filter((e) => !e.isDirectory())) {
       const name = rel ? `${rel}/${d.name}` : d.name;
-      const lower = d.name.toLowerCase();
-      const csv = LINKEDIN_FILES.find((f) => f.toLowerCase() === lower);
-      if (csv) {
-        if (csvs.has(csv)) warnings.push(`${name}: another ${csv} is used, ignored`);
-        else csvs.set(csv, name);
-      } else if (extname(lower) === '.zip') warnings.push(`${name}: a .zip file; unzip it into this folder first`);
-      else if (DOCUMENT_EXTS.includes(extname(lower))) docs.push(name);
+      const ext = extname(d.name).toLowerCase();
+      if (!d.isFile()) warnings.push(`${name}: skipped: not a plain file`); // a link or junction: never followed
+      else if (ext === '.zip') warnings.push(`${name}: skipped: a .zip file; unzip it into this folder first`);
+      else if (!DOCUMENT_EXTS.includes(ext) && !DATA_EXTS.includes(ext)) warnings.push(`${name}: skipped: unsupported format (${ext || 'no extension'})`);
+      else if (DATA_EXTS.includes(ext) && NOT_CV.test(d.name)) warnings.push(`${name}: skipped: not CV data`);
+      else {
+        const data = plainFile(join(dir, name), name, warnings);
+        if (!data) continue;
+        const known = LINKEDIN_FILES.find((f) => f.toLowerCase() === d.name.toLowerCase() && !(f in files));
+        if (known) files[known] = data.toString('utf8');
+        sources.push({ name, data, ...(known ? { known } : {}) });
+      }
     }
-    if (depth < MAX_DEPTH) for (const d of entries.filter((e) => e.isDirectory())) walk(rel ? `${rel}/${d.name}` : d.name, depth + 1);
+    for (const d of entries.filter((e) => e.isDirectory())) {
+      const sub = rel ? `${rel}/${d.name}` : d.name;
+      if (depth < MAX_DEPTH) walk(sub, depth + 1);
+      else warnings.push(`${sub}/: skipped: more than ${MAX_DEPTH} folders deep`);
+    }
   };
   walk('', 0);
-
-  for (const [file, name] of csvs) {
-    const data = plainFile(join(dir, name), file, warnings)?.data;
-    if (data) files[file] = data.toString('utf8');
-  }
-  if (Object.keys(files).length > 0 || docs.length === 0) return { files, warnings };
-
-  const dated = docs.flatMap((name) => {
-    const f = plainFile(join(dir, name), name, warnings, false);
-    return f ? [{ name, mtimeMs: f.mtimeMs }] : [];
-  });
-  const [latest, ...rest] = dated.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  if (!latest) return { files, warnings };
-  if (rest.length) warnings.push(`using ${latest.name}, the newest; ignored ${rest.map((d) => d.name).join(', ')}`);
-  const data = plainFile(join(dir, latest.name), latest.name, warnings)?.data;
-  return data ? { files, document: { name: latest.name, data }, warnings } : { files, warnings };
+  return { sources, files, warnings };
 }
 
 export const clean = (s: string | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
@@ -139,10 +157,12 @@ export interface ImportResult {
 
 /**
  * Maps the export to `master.md` and `contact.md` text. `null` when neither `Profile.csv` nor `Positions.csv` has
- * anything to import. Warnings name files, columns and counts, never cell values.
+ * anything to import, or when a file lacks a column it reads (another export version or language: the model path
+ * takes over). Warnings name files, columns and counts, never cell values.
  */
 export function buildImport(files: Partial<Record<LinkedInFile, string>>, now = new Date()): ImportResult | null {
   const warnings: string[] = [];
+  let mismatch = false;
   const rows = (file: LinkedInFile): Row[] => {
     const text = files[file];
     if (text === undefined) return [];
@@ -159,7 +179,9 @@ export function buildImport(files: Partial<Record<LinkedInFile, string>>, now = 
       warnings.push(`${file}: not a valid CSV, ignored`); // never the parser's message: it can quote a cell
       return [];
     }
-    for (const h of headers) if (!(KNOWN[file] as readonly string[]).includes(h)) warnings.push(`${file}: unknown column "${h}" ignored`);
+    const known: readonly string[] = KNOWN[file];
+    if (!known.every((c) => headers.includes(c))) mismatch = true;
+    for (const h of headers) if (!known.includes(h) && !IGNORED.includes(h)) warnings.push(`${file}: unknown column "${h}" ignored`);
     return parsed;
   };
 
@@ -204,7 +226,7 @@ export function buildImport(files: Partial<Record<LinkedInFile, string>>, now = 
     now,
   );
   if (skipped) warnings.push(`${skipped} row(s) without a start date skipped; add them in Obsidian`);
-  if (!built) return null;
+  if (!built || mismatch) return null;
   const name = profile ? clean(`${clean(profile['first name'])} ${clean(profile['last name'])}`) : '';
   return { ...built, contact: contactNote(name, 'linkedin-import', now), warnings };
 }
