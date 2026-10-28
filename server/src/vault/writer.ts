@@ -14,7 +14,7 @@ const PROTECTED_DIRS = new Set(['.git', '.obsidian', '.trash']);
 
 export const sha256 = (text: string | Buffer): string => createHash('sha256').update(text).digest('hex');
 
-const isInside = (child: string, parent: string): boolean => {
+export const isInside = (child: string, parent: string): boolean => {
   const rel = relative(parent, child);
   return rel !== '' && rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel);
 };

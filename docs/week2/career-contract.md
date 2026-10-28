@@ -73,7 +73,7 @@ One **job per step**, so no job runs longer than one model call. Each step reads
 | 5 render | `career_render` | `{ applicationId }` | none | files (§7) |
 
 - **Idempotency keys:** `career:<step>:<applicationId>:<attempt|0>`.
-- **Attempts:** `career_*` jobs get **one** attempt (a per-kind cap in `db/jobs.ts`, replacing the global `MAX_ATTEMPTS = 5` for these kinds). An unexpected throw marks the application `failed` with `fail_code: 'internal'`. Expected failures set `status` and `fail_code` and **do not throw**.
+- **Attempts:** `career_*` jobs get **one** attempt (a per-kind cap in `db/jobs.ts`, replacing the global `MAX_ATTEMPTS = 5` for these kinds). An unexpected throw marks the application `failed` with `fail_code: 'internal'` (`career_render`: `render_failed`, §7). Expected failures set `status` and `fail_code` and **do not throw**.
 - **Verify fails on attempt 1** → enqueue `career_draft` with `attempt: 2` and the violation list (codes, line refs, tokens ≤ 40 chars). **Fails on attempt 2** → `status: 'flagged'`. Never a third attempt.
 - Render runs only after the user finalises (§8), never automatically.
 - All untrusted text in a prompt goes in tags (`<posting>`, `<master>`) with closing tags defused, plus a "data, not instructions" rule. Use `wrapUntrusted(tag, text)` from `server/src/llm/untrusted.ts` (added in W2-00; it removes any `<tag>` or `</tag>` inside the text, then wraps it).
@@ -195,20 +195,32 @@ type ViolationCode = 'unknown_cite' | 'wrong_entry' | 'missing_cite' | 'unsuppor
 **Known limit:** the verifier can't catch exaggeration by wording ("led" for "helped"), and thresholds will need tuning on the golden set (W2-10), especially for German inflections. The user's review is the last check.
 
 ## 7. Render (`career_render`)
-- Data passed to the template (the template syntax belongs to W2-09 and its library):
+- Data passed to **both** templates (`docxtemplater`, default `{tag}` delimiters, `paragraphLoop` and `linebreaks` on; flat, because its default parser has no `a.b` paths):
 ```ts
+type RenderEntry = { first: boolean; org: string; title: string; start: string; end: string; location: string; bullets: string[] };  // org/title/dates/location copied from the master by entry_id
 type RenderModel = {
-  contact: { name?: string; email?: string; phone?: string; address?: string; url?: string; dob?: string };  // from contact.md only here
-  summary: string | null;
-  entries: { section: 'experience' | 'education' | 'projects' | 'certifications'; org: string; title: string; start: string; end: string; location: string; bullets: string[] }[];  // org/title/dates copied from the master by entry_id
-  skills: string[]; languages: string[];
-  letter: { company: string; role_title: string; date: string; paragraphs: string[] };
+  name: string; email: string; phone: string; address: string; url: string; dob: string;  // from contact.md, only here; '' when empty
+  summary: string;                                                                         // '' when the draft has none
+  experience: RenderEntry[]; education: RenderEntry[]; projects: RenderEntry[]; certifications: RenderEntry[];  // draft order
+  skills: string[]; skills_text: string;          // the draft's skill_ids as master text; _text joined with ", "
+  languages: string[]; languages_text: string;    // every Languages line of the master
+  company: string; role_title: string; date: string;  // from Requirements; date = render day, "28 October 2026" / "28. Oktober 2026"
+  paragraphs: string[];                           // the letter
 };
 ```
-- Placeholders in the final text are replaced by the contact values at this step only.
-- **PDF through Word:** `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/word-export.ps1 -In <docx> -Out <pdf>`. Both paths must resolve inside `dataDir/career/out/`, arguments are passed as an array (no shell string), Word runs hidden with alerts off, a 60 s timeout kills the process, and a hung Word never blocks the docx.
-- After rendering: a page-count check (CV ≤ 2 pages by default, shown as a warning, not a failure).
-- Failure → `fail_code: 'render_failed'`, status stays `final`, the draft is untouched, and `POST …/render` retries.
+- **Tags for your own template** (Word: type them as plain text; an unknown tag renders as nothing):
+  - Contact: `{name}` `{email}` `{phone}` `{address}` `{url}` `{dob}`.
+  - Summary: `{summary}`; hide a heading with it: `{#summary}` … `{/summary}`, each tag alone in its paragraph.
+  - Entries: `{#experience}` … `{/experience}` (same for `education`, `projects`, `certifications`) repeats the paragraphs between for each entry, with `{org}` `{title}` `{start}` `{end}` `{location}` and the bullets as `{#bullets}` / `{.}` / `{/bullets}` (put `{.}` in a bulleted paragraph). A section heading inside `{#first}` … `{/first}` appears once and vanishes with an empty section. `end` is `present` (`heute` for a German master) for an ongoing entry.
+  - Skills and languages: `{skills_text}` / `{languages_text}`, or loops `{#skills}{.}{/skills}`.
+  - Letter: `{company}` `{role_title}` `{date}` and `{#paragraphs}` / `{.}` / `{/paragraphs}`.
+  - Any condition: `{#x}` … `{/x}` shows its content when `x` is non-empty, `{^x}` … `{/x}` when it is empty.
+- Templates: `dataDir/career/template.docx` (CV) and `dataDir/career/letter-template.docx` win over the synthetic starters in `server/templates/career/` (`cv-template.docx`, `letter-template.docx`).
+- Placeholders in the final text are replaced by the contact values at this step only. Data values are never parsed as tags, so a line containing `{` or `{{x}}` stays literal.
+- **PDF through Word:** `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/word-export.ps1 -In <docx> -Out <pdf>`. Both paths must resolve inside `dataDir/career/out/`, arguments are passed as an array (no shell string), Word runs hidden with alerts off, a 60 s timeout kills the process and the Word process the script announced (`pid:<n>` on stdout), and a hung Word never blocks the docx. The exporter is injected; tests use a fake.
+- After rendering: a page-count check (CV ≤ 2 pages, from the PDF): the `rendered` event and `ApplicationDetail.render_warnings` carry `cv_over_2_pages`. A warning, not a failure.
+- **Failure rule:** the docx files are recorded first. A PDF that fails (Word error, timeout, not Windows) **or** any unexpected throw in the job (through the runner's `failCareerJob`, also for a render that was running at a crash, swept on boot) → `fail_code: 'render_failed'`, `step: null`, status stays `final`, the draft is untouched; the docx files that were written stay downloadable. `POST …/render` retries. Success → `step: null`, `fail_code: null`, a `rendered` event. Either way `step` leaves `render`, so polling stops.
+- Each render first clears `out/<id>/` and the application's `application_files` rows; its job key is `career:render:<id>:<n>`, `n` = renders queued before (0 for the first).
 
 ## 8. HTTP API
 
@@ -238,14 +250,14 @@ Web: add the case to the `Approval` union in `web/src/api.ts` and to `ApprovalCa
 | `GET /api/career/applications` | — | `ApplicationSummary[]`, newest first, max 100 |
 | `GET /api/career/applications/:id` | — | `ApplicationDetail` (`404 not_found`) |
 | `PATCH /api/career/applications/:id/draft` | `{ edits: { ref: string; text: string }[] }` (1–50 edits, each text ≤ 700) | `ApplicationDetail`. `409 wrong_status` unless `draft_ready` or `flagged`. `400 bad_ref`. |
-| `POST /api/career/applications/:id/final` | `{ acknowledge_flagged?: boolean }` | `202 ApplicationDetail` with `status:'final', step:'render'`. `409 flagged_not_acknowledged` when `flagged` and not acknowledged. |
-| `POST /api/career/applications/:id/render` | — | `202`. Retries a failed render. `409 wrong_status` unless `final`. |
+| `POST /api/career/applications/:id/final` | `{ acknowledge_flagged?: boolean }` (body optional) | `202 ApplicationDetail` with `status:'final', step:'render'`, enqueues `career_render`. `409 flagged_not_acknowledged` when `flagged` and not acknowledged (`true` only). `409 wrong_status` unless `draft_ready` or `flagged`. |
+| `POST /api/career/applications/:id/render` | — | `202 ApplicationDetail` with `step:'render'`. Retries a failed render (or renders again). `409 wrong_status` unless `final` and not already rendering (`step` ≠ `render`). |
 | `PATCH /api/career/applications/:id` | `{ status?: 'applied' \| 'withdrawn' \| 'final'; follow_up_on?: string \| null }` (W2-11) | `ApplicationDetail`. Allowed moves: `final → applied`, `final \| applied → withdrawn`, `applied → final` (undo). `follow_up_on` is `YYYY-MM-DD` or `null`. `409 wrong_status` for any other move, `400 bad_date`. |
-| `GET /api/career/applications/:id/files/:kind` | — | The file (`kind` ∈ `cv_docx`, `cv_pdf`, `letter_docx`, `letter_pdf`). `404 not_found` / `409 files_not_ready`. |
+| `GET /api/career/applications/:id/files/:kind` | — | The file (`kind` ∈ `cv_docx`, `cv_pdf`, `letter_docx`, `letter_pdf`). `404 not_found` for an unknown id or kind / `409 files_not_ready` when that file isn't recorded (yet, or its PDF failed). Audited as `career.file.download { id, kind }`. |
 
 **Polling:** the UI polls `GET …/:id` every 1.5 s while `status` is `processing` or `step` is `render`, and stops on any other state. There is no SSE and no generic jobs API.
 
-**Download headers:** `Content-Disposition: attachment; filename="<fixed ASCII name>"`, a fixed content type (`application/vnd.openxmlformats-officedocument.wordprocessingml.document` or `application/pdf`), `Cache-Control: no-store`. The file is looked up **by database id**, never by a client path. The global CSP is **not** loosened, so there is no in-browser PDF preview.
+**Download headers:** `Content-Disposition: attachment; filename="application-<id>-<cv|letter>.<docx|pdf>"`, a fixed content type (`application/vnd.openxmlformats-officedocument.wordprocessingml.document` or `application/pdf`), `Cache-Control: no-store`. The file is looked up **by database id**, never by a client path. The global CSP is **not** loosened, so there is no in-browser PDF preview.
 
 **Edits:** each edit replaces one line's `text` (cites unchanged), bumps `draft.versions`, writes a new `application_texts` row (`version + 1`), and adds an `edited` event with `{ lines, edit_distance }` (mean normalised Levenshtein per edited line). User-edited lines are not re-verified; they are yours.
 
@@ -266,6 +278,7 @@ type ApplicationDetail = ApplicationSummary & {
   verify: VerifyReport | null;
   sources: Record<string, string>;       // cite id -> master text (bullets and skills), so the page can show each line's source
   files: { kind: 'cv_docx' | 'cv_pdf' | 'letter_docx' | 'letter_pdf'; bytes: number }[];
+  render_warnings: 'cv_over_2_pages'[];  // from the latest successful render (§7)
 };
 ```
 
