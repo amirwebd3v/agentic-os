@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
@@ -106,16 +106,19 @@ test('LinkedIn export maps by header name; contact gets the name only; private c
   expect(loadContact(vault)).toEqual({ name: 'Erika Mustermann' });
   expect(contact).toMatch(/^phone: ""$/m);
 
-  const odd = buildImport({ 'Positions.csv': 'COMPANY NAME,Title,Started On,Salary\nX,Y,2020,100000\n', 'Skills.csv': '"unclosed\n' }, NOW)!;
+  const positions = 'COMPANY NAME,Title,Description,Location,Started On,Finished On';
+  const odd = buildImport({ 'Positions.csv': `${positions},Salary\nX,Y,,,2020,,100000\n`, 'Skills.csv': '"unclosed\n' }, NOW)!;
   expect(odd.warnings).toEqual(['Positions.csv: unknown column "salary" ignored', 'Skills.csv: not a valid CSV, ignored']);
   expect(odd.master).not.toContain('100000');
   expect(buildImport({ 'Skills.csv': 'Name\nPython\n' })).toBeNull(); // needs Profile or Positions
+  // A column it reads is missing (another export version or language): null, so the model path takes over.
+  expect(buildImport({ 'Positions.csv': `${positions}\nX,Y,,,2020,\n`, 'Skills.csv': 'Skill\nPython\n' }, NOW)).toBeNull();
 
   expect([exportDate('Mar 2021'), exportDate('2019'), exportDate('2024-10-05'), exportDate('Spring 2020'), exportDate('')]).toEqual(['2021-03', '2019', '2024-10', null, null]);
   expect(splitBullets('* one\r\n\n– two • three')).toEqual(['one', 'two', 'three']);
 });
 
-test('the import folder: only plain files directly inside, at most 5 MB each', () => {
+test('the import folder: only plain files, links never followed, at most 5 MB each', () => {
   const data = tmp('aos-import-');
   const dir = join(data, 'career/import');
   mkdirSync(dir, { recursive: true });
@@ -127,14 +130,20 @@ test('the import folder: only plain files directly inside, at most 5 MB each', (
     symlinkSync(data, join(dir, 'Profile.csv'), 'junction'); // Windows without symlink rights: a junction is a link too
   }
   mkdirSync(join(dir, 'Positions.csv')); // a folder with a recognised name
-  writeFileSync(join(dir, '..Positions.csv'), 'Company Name,Started On\nX,2020\n'); // traversal-looking names don't match
+  writeFileSync(join(dir, '..Positions.csv'), 'Company Name,Started On\nX,2020\n'); // traversal-looking names aren't LinkedIn's
   writeFileSync(join(dir, 'Positions.csv..'), 'Company Name,Started On\nX,2020\n');
-  expect(readExport(dir)).toEqual({ files: {}, warnings: [] });
-  expect(readExport(join(data, 'missing'))).toEqual({ files: {}, warnings: [] });
+  writeFileSync(join(dir, 'README'), 'x'); // no extension
+  const first = readExport(dir);
+  expect(first.files).toEqual({});
+  expect(first.sources.map((f) => [f.name, f.known])).toEqual([['..Positions.csv', undefined]]);
+  expect(first.warnings).toEqual(['Positions.csv..: skipped: unsupported format (.)', 'Profile.csv: skipped: not a plain file', 'README: skipped: unsupported format (no extension)']);
+  expect(readExport(join(data, 'missing'))).toEqual({ sources: [], files: {}, warnings: [] });
 
   writeFileSync(join(dir, 'skills.CSV'), Buffer.alloc(5 * 1024 * 1024 + 1, 'a'));
   writeFileSync(join(dir, 'Languages.csv'), 'Name\nGerman\n');
-  expect(readExport(dir)).toEqual({ files: { 'Languages.csv': 'Name\nGerman\n' }, warnings: ['Skills.csv: larger than 5 MB, ignored'] });
+  const { files, warnings } = readExport(dir);
+  expect(files).toEqual({ 'Languages.csv': 'Name\nGerman\n' });
+  expect(warnings).toContain('skills.CSV: skipped: larger than 5 MB');
 });
 
 async function setup(llm?: typeof structured) {
@@ -214,29 +223,37 @@ const CONTACT = `---\nname: "Erika Mustermann"\nemail: "erika@example.com"\nphon
 /** Everything contact-like in the fixture CV: the listed values and the second number, address and link. */
 const CONTACT_LIKE = /Mustermann|erika|@|1234567|9876543|example\.(?:com|org|net)|https?:/i;
 
-test('the import folder: subfolders up to two levels, a .zip warns, the newest document wins', () => {
+test('the import folder: subfolders up to three levels; every file is a source or a warning with its reason', () => {
   const dir = join(tmp('aos-import-'), 'import');
   const sub = join(dir, 'Basic_LinkedInDataExport_10-28-2026');
-  mkdirSync(join(sub, 'a/b'), { recursive: true });
+  mkdirSync(join(sub, 'a/b/c'), { recursive: true });
   writeFileSync(join(sub, 'POSITIONS.CSV'), 'Company Name,Started On\nX,2020\n');
-  writeFileSync(join(sub, 'a/b/Skills.csv'), 'Name\nTooDeep\n'); // depth 3: not read
+  writeFileSync(join(sub, 'a/b/Skills.csv'), 'Name\nDeep\n'); // depth 3: read
+  writeFileSync(join(sub, 'a/b/c/Skills.csv'), 'Name\nTooDeep\n'); // depth 4: not
+  writeFileSync(join(sub, 'Connections.csv'), 'First Name\nMax\n');
+  writeFileSync(join(sub, 'Endorsement_Received_Info.csv'), 'x\n');
+  writeFileSync(join(sub, 'Learning.csv'), 'x\n');
   writeFileSync(join(dir, 'export.zip'), 'PK');
-  writeFileSync(join(dir, 'cv.md'), '# ignored while there is a CSV');
-  expect(readExport(dir)).toEqual({
-    files: { 'Positions.csv': 'Company Name,Started On\nX,2020\n' },
-    warnings: ['export.zip: a .zip file; unzip it into this folder first'],
-  });
-
-  rmSync(sub, { recursive: true });
-  mkdirSync(join(dir, 'old'));
-  writeFileSync(join(dir, 'old/cv.docx'), 'old');
-  utimesSync(join(dir, 'old/cv.docx'), new Date('2020-01-01'), new Date('2020-01-01'));
-  const { document, warnings } = readExport(dir);
-  expect(document).toEqual({ name: 'cv.md', data: Buffer.from('# ignored while there is a CSV') });
-  expect(warnings).toEqual(['export.zip: a .zip file; unzip it into this folder first', 'using cv.md, the newest; ignored old/cv.docx']);
+  writeFileSync(join(dir, 'cv.xlsx'), 'x');
+  writeFileSync(join(dir, 'machine-learning-cv.md'), '# a document is never "not CV data"');
+  const { sources, files, warnings } = readExport(dir);
+  expect(files).toEqual({ 'Positions.csv': 'Company Name,Started On\nX,2020\n', 'Skills.csv': 'Name\nDeep\n' });
+  expect(sources.map((f) => [f.name, f.known])).toEqual([
+    ['machine-learning-cv.md', undefined],
+    ['Basic_LinkedInDataExport_10-28-2026/POSITIONS.CSV', 'Positions.csv'],
+    ['Basic_LinkedInDataExport_10-28-2026/a/b/Skills.csv', 'Skills.csv'],
+  ]);
+  expect(warnings).toEqual([
+    'cv.xlsx: skipped: unsupported format (.xlsx)',
+    'export.zip: skipped: a .zip file; unzip it into this folder first',
+    'Basic_LinkedInDataExport_10-28-2026/Connections.csv: skipped: not CV data',
+    'Basic_LinkedInDataExport_10-28-2026/Endorsement_Received_Info.csv: skipped: not CV data',
+    'Basic_LinkedInDataExport_10-28-2026/Learning.csv: skipped: not CV data',
+    'Basic_LinkedInDataExport_10-28-2026/a/b/c/: skipped: more than 3 folders deep',
+  ]);
 });
 
-test('CV text: .md, .docx and .pdf extract; a broken file is null; contact-like runs go, dates stay', async () => {
+test('CV text: .md, .docx and .pdf extract; a broken file is null; Windows-1252 text reads; contact-like runs go, dates stay', async () => {
   for (const f of ['cv.md', 'cv.docx', 'cv.pdf']) {
     const text = await documentText(f, readFileSync(join(CV, f)));
     expect(text).toContain('Cut the nightly build from 12 to 4 minutes.');
@@ -244,7 +261,8 @@ test('CV text: .md, .docx and .pdf extract; a broken file is null; contact-like 
   }
   expect(await documentText('cv.pdf', Buffer.from('%PDF-1.4 not really'))).toBeNull();
   expect(await documentText('cv.docx', Buffer.from('PK nope'))).toBeNull();
-  expect(await documentText('cv.md', Buffer.from([0xff, 0xfe, 0x00]))).toBeNull();
+  // Not UTF-8: read as Windows-1252, as Excel saves a CSV ("Company,City\nAcme,München").
+  expect(await documentText('cv.csv', Buffer.from('Company,City\nAcme,M\xfcnchen', 'latin1'))).toBe('Company: Acme\nCity: München');
 
   expect(scrubContactLike('a.b@x.de, +49 (0)30 123-4567, 030/1234567, www.x.de, https://x.io/a, x.dev/me')).toBe('[email], [phone], [phone], [url], [url], [url]');
   const kept = '2019 - 2021, 03/2021 - 06/2024, 01.02.1990, 4 to 12 minutes, v1.2.3, e.g. this';
@@ -327,7 +345,7 @@ test('CV document import: an unreadable file → import_unreadable, a failing mo
   mkdirSync(t.importDir, { recursive: true });
   writeFileSync(join(t.importDir, 'cv.docx'), 'PK broken');
   const bad = await t.imp();
-  expect([bad.statusCode, bad.json()]).toEqual([400, { error: 'import_unreadable', warnings: ['cv.docx: could not be read'] }]);
+  expect([bad.statusCode, bad.json()]).toEqual([400, { error: 'import_unreadable', warnings: ['cv.docx: skipped: could not be read'] }]);
 
   rmSync(join(t.importDir, 'cv.docx'));
   cpSync(join(CV, 'cv.docx'), join(t.importDir, 'cv.docx'));
@@ -335,4 +353,72 @@ test('CV document import: an unreadable file → import_unreadable, a failing mo
   expect([res.statusCode, res.json()]).toEqual([502, { error: 'provider_error' }]);
   expect(failing.text()).not.toMatch(CONTACT_LIKE);
   expect(t.pending()).toHaveLength(0);
+});
+
+// --- Any format, no fixed file or column names ---
+test('any file and column names: tables, text and JSON reach the model as text; other people’s data, file names and the over-budget rest never do', async () => {
+  const llm = capturePrompts(answer);
+  const t = await setup(llm.llm);
+  mkdirSync(join(t.vault, 'career'));
+  writeFileSync(join(t.vault, 'career/contact.md'), CONTACT);
+  const sub = join(t.importDir, 'export');
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(t.importDir, 'Lebenslauf_Zebrafink.csv'), 'Arbeitgeber,Rolle,Zeitraum,Ort,Leer\nAcme GmbH,Senior Engineer,2021-03 bis heute,Berlin,\n');
+  writeFileSync(join(sub, 'Positions.csv'), 'Firma,Position,Beginn\nBeispiel AG,Intern,2019\n'); // LinkedIn's name, other columns
+  writeFileSync(join(sub, 'Profile.csv'), 'Headline,Address,Birth Date,Zip Code\nBackend engineer,Musterweg 5,1990-01-01,10115\n'); // private columns dropped
+  writeFileSync(join(sub, 'Connections.csv'), 'First Name,Last Name,Company\nZacharias,Quellenfeld,Foo AG\n');
+  writeFileSync(join(t.importDir, 'Zebrafink-notes.txt'), 'Cut the nightly build from 12 to 4 minutes.\n');
+  writeFileSync(join(t.importDir, 'Zebrafink-profile.json'), '{"skills":["Python","PostgreSQL"],"languages":["German (C1)"]}');
+  writeFileSync(join(t.importDir, 'Zebrafink-big.txt'), 'lorem '.repeat(9000)); // 54,000 characters: over the budget
+  writeFileSync(join(t.importDir, 'cv.xlsx'), 'PK');
+  writeFileSync(join(t.importDir, 'cv.doc'), 'old Word');
+
+  const res = await t.imp();
+  expect(res.statusCode).toBe(201);
+  expect(res.json().warnings).toEqual(
+    expect.arrayContaining([
+      'cv.doc: skipped: unsupported format (.doc)',
+      'cv.xlsx: skipped: unsupported format (.xlsx)',
+      'export/Connections.csv: skipped: not CV data',
+      'Zebrafink-big.txt: skipped: over the size budget',
+    ]),
+  );
+  expect(llm.calls).toHaveLength(1);
+  const input = llm.calls[0]!.input;
+  expect(input).toContain('--- file 1 (txt) ---\nCut the nightly build'); // documents first, then data files, smallest first
+  expect(input).toContain('Arbeitgeber: Acme GmbH\nRolle: Senior Engineer\nZeitraum: 2021-03 bis heute\nOrt: Berlin\n');
+  expect(input).not.toContain('Leer:'); // empty cells are left out
+  expect(input).toContain('Firma: Beispiel AG\nPosition: Intern\nBeginn: 2019');
+  expect(input).toContain('"skills": [\n    "Python",');
+  expect(input).toContain('Headline: Backend engineer\n');
+  expect(input).not.toMatch(/lorem|Musterweg|1990|10115|Address|Birth/);
+  expect(llm.text()).not.toMatch(/Zebrafink|Lebenslauf|Positions|Profile|Connections|Zacharias|Quellenfeld|\.csv|\.json|\.txt/);
+  expect(llm.text()).not.toMatch(CONTACT_LIKE);
+
+  const payload = JSON.parse(t.pending()[0]!.payload);
+  expect(payload.source_files.sort()).toEqual(['Lebenslauf_Zebrafink.csv', 'Zebrafink-notes.txt', 'Zebrafink-profile.json', 'export/Positions.csv', 'export/Profile.csv']);
+  expect(payload).not.toHaveProperty('contact');
+  expect(payload.master).toMatch(/^### Acme GmbH \| Senior Engineer \| 2021-03 \| present \| Berlin {2}\^exp-acme-gmbh-2021$/m);
+  expect(payload.master).toMatch(/^- Cut the nightly build from 12 to 4 minutes\. {2}\^/m);
+  const audit = t.db.prepare(`SELECT args_redacted FROM audit_log WHERE action = 'career.master_import.propose'`).pluck().get() as string;
+  expect(audit).not.toMatch(/Zebrafink|Lebenslauf|Positions/);
+});
+
+test('nothing usable: only unsupported files → import_empty, supported but empty → import_unreadable, both explained', async () => {
+  const t = await setup(capturePrompts(answer).llm);
+  mkdirSync(join(t.vault, 'career'));
+  writeFileSync(join(t.vault, 'career/contact.md'), CONTACT);
+  mkdirSync(t.importDir, { recursive: true });
+  writeFileSync(join(t.importDir, 'cv.pages'), 'x');
+  writeFileSync(join(t.importDir, 'messages.csv'), 'From,To,Content\nA,B,hi\n');
+  expect((await t.imp()).json()).toEqual({
+    error: 'import_empty',
+    warnings: ['cv.pages: skipped: unsupported format (.pages)', 'messages.csv: skipped: not CV data'],
+  });
+  writeFileSync(join(t.importDir, 'cv.json'), '  \n');
+  writeFileSync(join(t.importDir, 'table.tsv'), 'Header only\n');
+  expect((await t.imp()).json()).toEqual({
+    error: 'import_unreadable',
+    warnings: ['cv.pages: skipped: unsupported format (.pages)', 'messages.csv: skipped: not CV data', 'cv.json: skipped: no text', 'table.tsv: skipped: no text'],
+  });
 });
