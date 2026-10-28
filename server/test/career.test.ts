@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -135,4 +135,98 @@ test("a due job of another kind starts before the run's next step", async () => 
   };
   while (await runNext(t.db, handlers));
   expect(ran).toEqual(['career_intake', 'other', 'career_match']);
+});
+
+// ---------- W2-08: PATCH …/draft, edited_refs and sources ----------
+
+const N = 'exp-northwind-logistics-2021';
+const SECRET = 'Canary-9d1e my own words';
+const DRAFT = {
+  summary: { text: 'Platform engineer, 6 years.', cites: ['sum-1'] },
+  entries: [{ entry_id: N, bullets: [{ text: 'Cut deploy time to 9 minutes.', cites: [`${N}-1a2b3c`] }, { text: 'Terraform on AWS.', cites: [`${N}-4d5e6f`, 'gone-1'] }] }],
+  skill_ids: ['skill-aws'],
+  letter: { paragraphs: [{ text: 'P0', cites: ['sum-1'] }, { text: 'P1', cites: ['sum-1'] }, { text: 'P2', cites: ['sum-1'] }] },
+  versions: 1,
+};
+
+async function drafted(status = 'draft_ready') {
+  const t = await setup();
+  copyFileSync(join(import.meta.dirname, 'fixtures', 'career', 'master.md'), join(t.vault, 'career', 'master.md'));
+  const id = await t.start();
+  t.db.prepare('UPDATE applications SET status = ?, step = ? WHERE id = ?').run(status, 'verify', id);
+  t.db.prepare(`INSERT INTO application_texts (application_id, kind, body) VALUES (?, 'draft', ?)`).run(id, JSON.stringify(DRAFT));
+  const patch = (edits: unknown, app = id) =>
+    t.app.inject(t.authed({ method: 'PATCH', url: `/api/career/applications/${app}/draft`, payload: { edits } as object }));
+  return { ...t, id, patch };
+}
+
+test('the detail route gives the master text behind every cite and entry, and nothing it no longer has', async () => {
+  const t = await drafted();
+  const d = await t.get(t.id);
+  expect(d.sources).toEqual({
+    'sum-1': 'Platform engineer with 6 years in DevOps and cloud infrastructure.',
+    [N]: 'Northwind Logistics | DevOps Engineer | 2021-03 – present',
+    [`${N}-1a2b3c`]: 'Cut deploy time from 40 to 9 minutes by moving CI to GitHub Actions.',
+    [`${N}-4d5e6f`]: 'Automated AWS infrastructure (ECS, RDS, IAM) with Terraform across 3 accounts.',
+    'skill-aws': 'AWS',
+  });
+  expect(d.edited_refs).toEqual([]);
+  rmSync(join(t.vault, 'career', 'master.md'));
+  expect((await t.get(t.id)).sources).toEqual({});
+});
+
+test('PATCH …/draft validates, refuses a wrong status or ref, stores a new version, and logs no text', async () => {
+  const t = await drafted();
+  const invalid = [
+    [],
+    Array.from({ length: 51 }, () => ({ ref: 'letter.0', text: 'x' })),
+    [{ ref: 'letter.0', text: '' }],
+    [{ ref: 'letter.0', text: 'x'.repeat(701) }],
+    [{ ref: 'letter.0' }],
+  ];
+  for (const bad of invalid) expect((await t.patch(bad)).statusCode).toBe(400);
+  for (const ref of ['letter.3', 'cv.entries.exp-other-2020.0', `cv.entries.${N}.2`, 'cv.skills', 'cv', '__proto__', `cv.entries.${N}.-1`]) {
+    const res = await t.patch([{ ref: 'letter.0', text: 'fine' }, { ref, text: SECRET }]);
+    expect([res.statusCode, res.json()]).toEqual([400, { error: 'bad_ref' }]);
+  }
+  expect((await t.patch([{ ref: 'letter.0', text: 'x' }], 999)).json()).toEqual({ error: 'not_found' });
+  expect(t.db.prepare("SELECT count(*) FROM application_texts WHERE kind = 'draft'").pluck().get()).toBe(1); // nothing half-applied
+
+  const res = await t.patch([
+    { ref: `cv.entries.${N}.1`, text: SECRET },
+    { ref: 'cv.summary', text: 'Platform engineer, six years.' },
+    { ref: 'letter.2', text: 'x'.repeat(700) },
+  ]);
+  expect(res.statusCode).toBe(200);
+  const d = res.json() as { draft: typeof DRAFT; edited_refs: string[] };
+  expect(d.draft.versions).toBe(2);
+  expect(d.draft.entries[0]!.bullets[1]).toEqual({ text: SECRET, cites: [`${N}-4d5e6f`, 'gone-1'] });
+  expect(d.draft.entries[0]!.bullets[0]!.text).toBe('Cut deploy time to 9 minutes.');
+  expect(d.edited_refs).toEqual([`cv.entries.${N}.1`, 'cv.summary', 'letter.2']);
+  await t.patch([{ ref: 'letter.2', text: 'again' }, { ref: 'letter.0', text: 'P0!' }]);
+  const again = await t.get(t.id);
+  expect((again.draft as typeof DRAFT).versions).toBe(3);
+  expect(again.edited_refs).toEqual([`cv.entries.${N}.1`, 'cv.summary', 'letter.2', 'letter.0']);
+  expect(t.db.prepare("SELECT version FROM application_texts WHERE application_id = ? AND kind = 'draft' ORDER BY version").pluck().all(t.id)).toEqual([1, 2, 3]);
+
+  const event = JSON.parse(t.db.prepare("SELECT detail FROM application_events WHERE kind = 'edited' ORDER BY id LIMIT 1").pluck().get() as string);
+  expect(event).toMatchObject({ lines: 3, version: 2, refs: [`cv.entries.${N}.1`, 'cv.summary', 'letter.2'] });
+  expect(event.edit_distance).toBeGreaterThan(0);
+  expect(event.edit_distance).toBeLessThanOrEqual(1);
+  const audits = t.db.prepare("SELECT args_redacted FROM audit_log WHERE action = 'career.application.edit'").pluck().all() as string[];
+  expect(audits.map((a) => Object.keys(JSON.parse(a)).sort())).toEqual([0, 1].map(() => ['edit_distance', 'id', 'lines', 'version']));
+  const everything = t.dump() + JSON.stringify(t.db.prepare('SELECT * FROM application_events').all());
+  expect(everything).not.toContain('Canary-9d1e');
+  expect(everything).not.toContain('six years');
+});
+
+test.each(['processing', 'failed', 'final', 'applied', 'withdrawn'])('PATCH …/draft on a %s application is wrong_status', async (status) => {
+  const t = await drafted(status);
+  const res = await t.patch([{ ref: 'letter.0', text: 'x' }]);
+  expect([res.statusCode, res.json()]).toEqual([409, { error: 'wrong_status' }]);
+});
+
+test('a flagged draft can be edited', async () => {
+  const t = await drafted('flagged');
+  expect((await t.patch([{ ref: 'letter.1', text: 'mine' }])).statusCode).toBe(200);
 });
