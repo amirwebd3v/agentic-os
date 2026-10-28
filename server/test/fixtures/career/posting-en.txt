@@ -1,0 +1,20 @@
+Platform Engineer - Marlowe Freight Technologies
+
+About us: Marlowe builds route-planning software for regional freight carriers.
+
+You will:
+- Maintain our CI/CD pipelines and internal developer platform
+- Automate infrastructure with Terraform on AWS
+- Work with product teams to improve deploy times
+
+Requirements:
+- 4+ years in a DevOps or platform role
+- Terraform and AWS (ECS, RDS, IAM)
+- Scripting in Python or Bash
+- Fluent English
+
+Nice to have:
+- Experience with GitHub Actions
+- Basic German
+
+Senior level. Hybrid, Rotterdam office three days a week.
