@@ -253,7 +253,7 @@ test('the import folder: subfolders up to three levels; every file is a source o
   ]);
 });
 
-test('CV text: .md, .docx and .pdf extract; a broken file is null; contact-like runs go, dates stay', async () => {
+test('CV text: .md, .docx and .pdf extract; a broken file is null; Windows-1252 text reads; contact-like runs go, dates stay', async () => {
   for (const f of ['cv.md', 'cv.docx', 'cv.pdf']) {
     const text = await documentText(f, readFileSync(join(CV, f)));
     expect(text).toContain('Cut the nightly build from 12 to 4 minutes.');
@@ -261,7 +261,8 @@ test('CV text: .md, .docx and .pdf extract; a broken file is null; contact-like 
   }
   expect(await documentText('cv.pdf', Buffer.from('%PDF-1.4 not really'))).toBeNull();
   expect(await documentText('cv.docx', Buffer.from('PK nope'))).toBeNull();
-  expect(await documentText('cv.md', Buffer.from([0xff, 0xfe, 0x00]))).toBeNull();
+  // Not UTF-8: read as Windows-1252, as Excel saves a CSV ("Company,City\nAcme,München").
+  expect(await documentText('cv.csv', Buffer.from('Company,City\nAcme,M\xfcnchen', 'latin1'))).toBe('Company: Acme\nCity: München');
 
   expect(scrubContactLike('a.b@x.de, +49 (0)30 123-4567, 030/1234567, www.x.de, https://x.io/a, x.dev/me')).toBe('[email], [phone], [phone], [url], [url], [url]');
   const kept = '2019 - 2021, 03/2021 - 06/2024, 01.02.1990, 4 to 12 minutes, v1.2.3, e.g. this';
