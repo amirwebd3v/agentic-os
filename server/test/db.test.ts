@@ -98,4 +98,15 @@ describe('db', () => {
     recoverStaleLocks(db);
     expect(db.prepare('SELECT status FROM jobs WHERE id = ?').get(stale.id)).toEqual({ status: 'failed' });
   });
+
+  test('career: events are append-only, status and dates are checked', () => {
+    const { lastInsertRowid: id } = db.prepare("INSERT INTO applications (master_hash) VALUES ('h')").run();
+    expect(db.prepare('SELECT status FROM applications WHERE id = ?').get(id)).toEqual({ status: 'processing' });
+    db.prepare("INSERT INTO application_events (application_id, kind) VALUES (?, 'created')").run(id);
+    expect(() => db.prepare("UPDATE application_events SET kind = 'step'").run()).toThrow(/append-only/);
+    expect(() => db.prepare('DELETE FROM application_events').run()).toThrow(/append-only/);
+    expect(() => db.prepare("UPDATE applications SET status = 'done' WHERE id = ?").run(id)).toThrow(/CHECK/);
+    expect(() => db.prepare("UPDATE applications SET follow_up_on = 'soon' WHERE id = ?").run(id)).toThrow(/CHECK/);
+    expect(() => db.prepare("INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'step', 'x')").run(id)).toThrow(/CHECK/);
+  });
 });
