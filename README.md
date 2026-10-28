@@ -33,7 +33,7 @@ Then open `vaultDir` in Obsidian (*Open folder as vault*) and edit its `CLAUDE.m
 pnpm dev          # server :3000 + web UI :5173
 ```
 1. Open the login link the server prints. If you've lost it, run `pnpm login-url`.
-2. Open http://127.0.0.1:5173. **Review** lists what the system proposes (a note you edited in Obsidian that the app also wants to change, and later your master-CV import). Approve or reject each item.
+2. Open http://127.0.0.1:5173. **Review** lists what the system proposes (a note you edited in Obsidian that the app also wants to change, and your master-CV import: drop LinkedIn's export CSVs, or one `.md`/`.pdf`/`.docx` CV, into `dataDir/career/import/`). Approve or reject each item.
 3. To add a life area, add a line to the `## Areas` list in the vault's `CLAUDE.md`; the app reads it at every boot.
 
 ## Where things live

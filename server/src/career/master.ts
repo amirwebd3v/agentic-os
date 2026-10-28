@@ -152,3 +152,46 @@ export function validateMaster(text: string): string | null {
     throw err;
   }
 }
+
+/** An entry before it has ids: `texts` become its bullets. */
+export type EntryDraft = Omit<Entry, 'id' | 'bullets'> & { texts: string[] };
+export interface MasterDraft {
+  summary: string[];
+  entries: Partial<Record<EntrySectionName, EntryDraft[]>>;
+  skills: string[];
+  /** Like `German (C1)`: the id comes from the part before ` (`. */
+  languages: string[];
+}
+
+/**
+ * Gives a draft its ids (by code only: neither an export nor a model ever picks one), serialises it and checks the
+ * result. Empty sections are left out; `null` when nothing is left.
+ */
+export function buildMaster(d: MasterDraft, source: string, now: Date) {
+  const id = idAllocator();
+  const named = (prefix: string, texts: string[], key = (t: string) => t) =>
+    [...new Set(texts)].map((text) => ({ id: id([prefix, slug(key(text), 40)].filter(Boolean).join('-')), text }));
+  const all: Section[] = [
+    { name: 'Summary', bullets: d.summary.map((text, i) => ({ id: id(`sum-${i + 1}`), text })) },
+    ...(Object.keys(ENTRY_SECTIONS) as EntrySectionName[]).map(
+      (name): Section => ({
+        name,
+        entries: (d.entries[name] ?? []).map(({ texts, ...rest }) => {
+          const entryId = id(entryIdBase(name, rest.org, rest.start));
+          return { ...rest, id: entryId, bullets: texts.map((text) => ({ id: id(bulletIdBase(entryId, text)), text })) };
+        }),
+      }),
+    ),
+    { name: 'Skills', bullets: named('skill', d.skills) },
+    { name: 'Languages', bullets: named('lang', d.languages, (t) => t.replace(/\s*\(.*$/, '')) },
+  ];
+  const sections = all.filter((s) => ('bullets' in s ? s.bullets : s.entries).length > 0);
+  if (!sections.length) return null;
+  const stamp = now.toISOString();
+  const fm = { id: 'career-master', area: 'career', tags: [], sensitivity: 2 as const, source, created: stamp, updated: stamp };
+  const master = serialiseMaster({ fm, sections });
+  parseMaster(master); // self-check: what goes into the queue is valid by construction
+  const jobs = sections.flatMap((s) => ('entries' in s ? s.entries : []));
+  const stats = { entries: jobs.length, bullets: jobs.reduce((n, e) => n + e.bullets.length, d.summary.length), skills: new Set(d.skills).size };
+  return { master, stats };
+}

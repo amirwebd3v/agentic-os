@@ -31,9 +31,10 @@ const MAX_TEXT = 2000;
 const ConflictPayload = z.object({ path: z.string().min(1), current_hash: z.string().nullable(), content: z.string() });
 const ImportPayload = z.object({
   master: z.string(),
-  contact: z.string(),
   master_hash_before: z.string().nullable(),
-  contact_hash_before: z.string().nullable(),
+  // Absent for a CV document import: contact.md is already the owner's and not part of the proposal.
+  contact: z.string().optional(),
+  contact_hash_before: z.string().nullable().optional(),
 });
 
 /** Writes `text` beside `abs` and fsyncs it; the caller renames it into place as the last step of its transaction. */
@@ -125,7 +126,7 @@ export function decide(
       const files = (
         [
           ['career/master.md', p.master, p.master_hash_before],
-          ['career/contact.md', p.contact, p.contact_hash_before],
+          ...(p.contact === undefined ? [] : [['career/contact.md', p.contact, p.contact_hash_before ?? null] as const]),
         ] as const
       ).map(([path, text, before]) => {
         const abs = resolveNotePath(vaultDir, path);
