@@ -1,8 +1,10 @@
 import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import type { Dirent } from 'node:fs';
+import { extname, join } from 'node:path';
 import { parse } from 'csv-parse/sync';
-import { bulletIdBase, entryIdBase, idAllocator, parseMaster, serialiseMaster, slug } from './master.ts';
-import type { Bullet, Entry, EntrySectionName, Section } from './master.ts';
+import { contactNote } from './contact.ts';
+import { buildMaster } from './master.ts';
+import type { EntryDraft } from './master.ts';
 
 /** Columns of LinkedIn's data export ("Get a copy of your data"), lower-cased. Others are reported, not guessed at. */
 const KNOWN = {
@@ -16,48 +18,98 @@ const KNOWN = {
 export type LinkedInFile = keyof typeof KNOWN;
 export const LINKEDIN_FILES = Object.keys(KNOWN) as LinkedInFile[];
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
+/** CV documents the import reads when there is no LinkedIn CSV. */
+export const DOCUMENT_EXTS = ['.md', '.pdf', '.docx'];
+const MAX_DEPTH = 2;
 
 type Row = Record<string, string | undefined>;
 
 /**
- * Reads the recognised export files from `dir` (never a client path). Only plain files directly in `dir` count:
- * symlinks, junctions and folders are skipped, and `O_NOFOLLOW` (where the OS has it) closes the swap race.
- * Warnings name files and limits only.
+ * `abs` as a plain file of at most 5 MB, opened with `O_NOFOLLOW` (where the OS has it) so a swapped-in symlink
+ * isn't followed; `read: false` only stats it. `undefined` (with a warning naming `label`) otherwise.
  */
-export function readExport(dir: string): { files: Partial<Record<LinkedInFile, string>>; warnings: string[] } {
-  const files: Partial<Record<LinkedInFile, string>> = {};
-  const warnings: string[] = [];
-  let names: string[];
+function plainFile(abs: string, label: string, warnings: string[], read = true): { mtimeMs: number; data?: Buffer } | undefined {
+  let fd: number;
   try {
-    names = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isFile()).map((d) => d.name);
+    fd = openSync(abs, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   } catch {
-    return { files, warnings }; // no import folder yet
+    warnings.push(`${label}: unreadable, ignored`);
+    return undefined;
   }
-  for (const file of LINKEDIN_FILES) {
-    const name = names.find((n) => n.toLowerCase() === file.toLowerCase());
-    if (!name) continue;
-    let fd: number;
-    try {
-      fd = openSync(join(dir, name), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    } catch {
-      warnings.push(`${file}: unreadable, ignored`);
-      continue;
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return undefined;
+    if (st.size > MAX_FILE_BYTES) {
+      warnings.push(`${label}: larger than 5 MB, ignored`);
+      return undefined;
     }
-    try {
-      const st = fstatSync(fd);
-      if (!st.isFile()) continue;
-      if (st.size > MAX_FILE_BYTES) warnings.push(`${file}: larger than 5 MB, ignored`);
-      else files[file] = readFileSync(fd, 'utf8');
-    } finally {
-      closeSync(fd);
-    }
+    return { mtimeMs: st.mtimeMs, ...(read ? { data: readFileSync(fd) } : {}) };
+  } finally {
+    closeSync(fd);
   }
-  return { files, warnings };
 }
 
-const clean = (s: string | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
+export interface ExportFiles {
+  files: Partial<Record<LinkedInFile, string>>;
+  /** Only when no LinkedIn CSV was found: the most recently modified `.md`/`.pdf`/`.docx`. `name` is relative to `dir`. */
+  document?: { name: string; data: Buffer };
+  warnings: string[];
+}
+
+/**
+ * Reads the import folder `dir` (never a client path) and its subfolders up to two levels down, e.g. an extracted
+ * `Basic_LinkedInDataExport_…/`. Only plain files count: symlinks and junctions are skipped, never followed, and a
+ * known CSV name matches by basename, case-insensitive (the shallowest, then alphabetically first, wins).
+ * Warnings name files and limits only.
+ */
+export function readExport(dir: string): ExportFiles {
+  const files: Partial<Record<LinkedInFile, string>> = {};
+  const warnings: string[] = [];
+  const csvs = new Map<LinkedInFile, string>();
+  const docs: string[] = [];
+  // ponytail: a subfolder swapped for a link between readdir calls would be followed (O_NOFOLLOW guards the last
+  // step only); the folder is the owner's own. Open each level with O_DIRECTORY|O_NOFOLLOW if that ever matters.
+  const walk = (rel: string, depth: number) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(join(dir, rel), { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+    } catch {
+      return; // no import folder yet, or a folder gone meanwhile
+    }
+    for (const d of entries.filter((e) => e.isFile())) {
+      const name = rel ? `${rel}/${d.name}` : d.name;
+      const lower = d.name.toLowerCase();
+      const csv = LINKEDIN_FILES.find((f) => f.toLowerCase() === lower);
+      if (csv) {
+        if (csvs.has(csv)) warnings.push(`${name}: another ${csv} is used, ignored`);
+        else csvs.set(csv, name);
+      } else if (extname(lower) === '.zip') warnings.push(`${name}: a .zip file; unzip it into this folder first`);
+      else if (DOCUMENT_EXTS.includes(extname(lower))) docs.push(name);
+    }
+    if (depth < MAX_DEPTH) for (const d of entries.filter((e) => e.isDirectory())) walk(rel ? `${rel}/${d.name}` : d.name, depth + 1);
+  };
+  walk('', 0);
+
+  for (const [file, name] of csvs) {
+    const data = plainFile(join(dir, name), file, warnings)?.data;
+    if (data) files[file] = data.toString('utf8');
+  }
+  if (Object.keys(files).length > 0 || docs.length === 0) return { files, warnings };
+
+  const dated = docs.flatMap((name) => {
+    const f = plainFile(join(dir, name), name, warnings, false);
+    return f ? [{ name, mtimeMs: f.mtimeMs }] : [];
+  });
+  const [latest, ...rest] = dated.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  if (!latest) return { files, warnings };
+  if (rest.length) warnings.push(`using ${latest.name}, the newest; ignored ${rest.map((d) => d.name).join(', ')}`);
+  const data = plainFile(join(dir, latest.name), latest.name, warnings)?.data;
+  return data ? { files, document: { name: latest.name, data }, warnings } : { files, warnings };
+}
+
+export const clean = (s: string | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
 /** Entry header fields can't hold the `|` separator. */
-const field = (s: string | undefined): string => clean(s).replaceAll('|', '/');
+export const field = (s: string | undefined): string => clean(s).replaceAll('|', '/');
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 /** LinkedIn writes `Mar 2021` or `2021`; ISO dates are accepted too. Anything else is `null`. */
@@ -79,7 +131,8 @@ export const splitBullets = (text: string | undefined): string[] =>
 
 export interface ImportResult {
   master: string;
-  contact: string;
+  /** Absent for a document import: the owner's `contact.md` already exists and is not part of the proposal. */
+  contact?: string;
   stats: { entries: number; bullets: number; skills: number };
   warnings: string[];
 }
@@ -114,77 +167,44 @@ export function buildImport(files: Partial<Record<LinkedInFile, string>>, now = 
   const positions = rows('Positions.csv');
   if (!profile && positions.length === 0) return null;
 
-  const id = idAllocator();
-  const bullets = (entryId: string, texts: string[]): Bullet[] => texts.map((text) => ({ id: id(bulletIdBase(entryId, text)), text }));
-  let skipped = 0;
-  const entries = (section: EntrySectionName, list: Row[], map: (r: Row) => Omit<Entry, 'id' | 'bullets'> & { texts: string[] } | null) =>
-    list.flatMap((r) => {
-      const e = map(r);
-      if (!e) return (skipped++, []);
-      const { texts, ...rest } = e;
-      const entryId = id(entryIdBase(section, rest.org, rest.start));
-      return [{ ...rest, id: entryId, bullets: bullets(entryId, texts) }];
-    });
   // A row without a usable start date can't get an id (contract §3.1); you add it by hand.
-  const dated = (r: Row, startCol: string, endCol: string) => {
-    const start = exportDate(r[startCol]);
-    return start ? { start, end: exportDate(r[endCol]) ?? 'present' } : null;
-  };
+  let skipped = 0;
+  const entries = (list: Row[], startCol: string, endCol: string, map: (r: Row) => Omit<EntryDraft, 'start' | 'end'>): EntryDraft[] =>
+    list.flatMap((r) => {
+      const start = exportDate(r[startCol]);
+      if (!start) return (skipped++, []);
+      return [{ ...map(r), start, end: exportDate(r[endCol]) ?? 'present' }];
+    });
 
-  const summary = profile ? [clean(profile.headline), ...splitBullets(profile.summary)].filter(Boolean) : [];
-  const skills = [...new Set(rows('Skills.csv').map((r) => clean(r.name)))].filter(Boolean);
-  const all: Section[] = [
-    { name: 'Summary', bullets: summary.map((text, i) => ({ id: id(`sum-${i + 1}`), text })) },
+  const built = buildMaster(
     {
-      name: 'Experience',
-      entries: entries('Experience', positions, (r) => {
-        const d = dated(r, 'started on', 'finished on');
-        return d && { org: field(r['company name']), title: field(r.title), location: field(r.location), ...d, texts: splitBullets(r.description) };
-      }),
-    },
-    {
-      name: 'Education',
-      entries: entries('Education', rows('Education.csv'), (r) => {
-        const d = dated(r, 'start date', 'end date');
-        return d && { org: field(r['school name']), title: field(r['degree name']), location: '', ...d, texts: [...splitBullets(r.notes), ...splitBullets(r.activities)] };
-      }),
-    },
-    {
-      name: 'Certifications',
-      entries: entries('Certifications', rows('Certifications.csv'), (r) => {
-        const d = dated(r, 'started on', 'finished on');
-        return d && { org: field(r.authority), title: field(r.name), location: '', ...d, texts: [] };
-      }),
-    },
-    { name: 'Skills', bullets: skills.map((text) => ({ id: id(['skill', slug(text, 40)].filter(Boolean).join('-')), text })) },
-    {
-      name: 'Languages',
-      bullets: rows('Languages.csv')
+      summary: profile ? [clean(profile.headline), ...splitBullets(profile.summary)].filter(Boolean) : [],
+      entries: {
+        Experience: entries(positions, 'started on', 'finished on', (r) => ({
+          org: field(r['company name']),
+          title: field(r.title),
+          location: field(r.location),
+          texts: splitBullets(r.description),
+        })),
+        Education: entries(rows('Education.csv'), 'start date', 'end date', (r) => ({
+          org: field(r['school name']),
+          title: field(r['degree name']),
+          location: '',
+          texts: [...splitBullets(r.notes), ...splitBullets(r.activities)],
+        })),
+        Certifications: entries(rows('Certifications.csv'), 'started on', 'finished on', (r) => ({ org: field(r.authority), title: field(r.name), location: '', texts: [] })),
+      },
+      skills: rows('Skills.csv').map((r) => clean(r.name)).filter(Boolean),
+      languages: rows('Languages.csv')
         .map((r) => [clean(r.name), clean(r.proficiency)] as const)
         .filter(([lang]) => lang)
-        .map(([lang, level]) => ({ id: id(['lang', slug(lang, 40)].filter(Boolean).join('-')), text: level ? `${lang} (${level})` : lang })),
+        .map(([lang, level]) => (level ? `${lang} (${level})` : lang)),
     },
-  ];
-  const sections = all.filter((s) => ('bullets' in s ? s.bullets : s.entries).length > 0);
+    'linkedin-import',
+    now,
+  );
   if (skipped) warnings.push(`${skipped} row(s) without a start date skipped; add them in Obsidian`);
-
-  const stamp = now.toISOString();
-  const fm = { area: 'career', tags: [], sensitivity: 2 as const, source: 'linkedin-import', created: stamp, updated: stamp };
-  const master = serialiseMaster({ fm: { id: 'career-master', ...fm }, sections });
-  parseMaster(master); // self-check: what goes into the queue is valid by construction
-
-  // contact.md (§3.2): JSON strings are valid double-quoted YAML, and loadContact refuses unquoted numbers.
+  if (!built) return null;
   const name = profile ? clean(`${clean(profile['first name'])} ${clean(profile['last name'])}`) : '';
-  const contact = [
-    '---',
-    'id: career-contact',
-    ...Object.entries(fm).map(([k, v]) => `${k}: ${JSON.stringify(v)}`),
-    ...(['name', 'email', 'phone', 'address', 'url'] as const).map((k) => `${k}: ${JSON.stringify(k === 'name' ? name : '')}`),
-    '---',
-    '',
-  ].join('\n');
-
-  const jobs = sections.flatMap((s) => ('entries' in s ? s.entries : []));
-  const stats = { entries: jobs.length, bullets: jobs.reduce((n, e) => n + e.bullets.length, summary.length), skills: skills.length };
-  return { master, contact, stats, warnings };
+  return { ...built, contact: contactNote(name, 'linkedin-import', now), warnings };
 }

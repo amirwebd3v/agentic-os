@@ -13,8 +13,9 @@ export type Approval = {
   | {
       action_type: 'career_master_import';
       payload: {
-        master: string; contact: string; source_files: string[];
-        master_hash_before: string | null; contact_hash_before: string | null;
+        master: string; source_files: string[]; master_hash_before: string | null;
+        // Absent for a CV document import (contact.md is already yours).
+        contact?: string; contact_hash_before?: string | null;
         stats: { entries: number; bullets: number; skills: number };
       };
     }

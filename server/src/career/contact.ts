@@ -7,6 +7,17 @@ export type ContactField = (typeof CONTACT_FIELDS)[number];
 /** `career/contact.md` frontmatter (contract §3.2). Absent or empty fields are left out. */
 export type Contact = Partial<Record<ContactField, string>>;
 
+/**
+ * `contact.md` text with `name` and the other §3.2 fields empty. JSON strings are valid double-quoted YAML, and
+ * `loadContact` refuses unquoted numbers.
+ */
+export function contactNote(name: string, source: string, now: Date): string {
+  const stamp = now.toISOString();
+  const fm = { id: 'career-contact', area: 'career', tags: [], sensitivity: 2, source, created: stamp, updated: stamp };
+  const fields = { name, email: '', phone: '', address: '', url: '' };
+  return ['---', ...Object.entries({ ...fm, ...fields }).map(([k, v]) => `${k}: ${JSON.stringify(v)}`), '---', ''].join('\n');
+}
+
 /** Fixed messages only: a YAML error quotes the file, i.e. contact values. */
 export class ContactError extends Error {}
 
