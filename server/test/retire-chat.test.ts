@@ -1,10 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
-import { migrate } from '../src/db/migrate.ts';
 import { makeTestDb } from './helpers.ts';
 
 test('0005 expires chat-era approvals and fails their jobs, and touches nothing else', () => {
   const db = makeTestDb();
-  db.pragma('user_version = 4'); // as a database from before the cleanup
   const approval = (type: string, status = 'pending') =>
     db.prepare(`INSERT INTO approvals (action_type, payload, proposed_by, status) VALUES (?, '{}', 'test', ?) RETURNING id`).pluck().get(type, status) as number;
   const job = (kind: string, status: string) =>
@@ -19,7 +18,8 @@ test('0005 expires chat-era approvals and fails their jobs, and touches nothing 
   const done = job('categorize_session', 'done');
   const other = job('career_intake', 'queued');
 
-  migrate(db);
+  // Run 0005 alone: replaying migrate() from version 4 would also re-run every later migration.
+  db.exec(readFileSync(new URL('../migrations/0005_retire_week1_chat.sql', import.meta.url), 'utf8'));
 
   const status = (table: string, id: number) => db.prepare(`SELECT status FROM ${table} WHERE id = ?`).pluck().get(id);
   expect([cat, persona, conflict, decided].map((id) => status('approvals', id))).toEqual(['expired', 'expired', 'pending', 'approved']);
