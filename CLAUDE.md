@@ -6,6 +6,7 @@ Every session reads this file automatically, including parallel sessions in `.cl
 - **Plan:** `docs/plan-review.md`
 - **Week 1 plan:** `docs/week1/implementation-plan.md`
 - **Ticket specs:** `docs/week1/tickets/*.md`
+- **Week 2 plan (Career slice first):** `docs/week2/implementation-plan.md`; shared shapes `docs/week2/career-contract.md`; specs `docs/week2/tickets/*.md`; which skill at which step `docs/week2/skills-map.md`
 - **Build loop:** `docs/Workflow.md` (fullstack-dev-skills + ponytail + claude-mem)
 - **Backlog:** GitHub Project https://github.com/users/amirwebd3v/projects/1. Status lives only there.
 
@@ -52,3 +53,4 @@ Every session reads this file automatically, including parallel sessions in `.cl
 - 2026-10-26: `/tmp` is shared by parallel sessions. A `pnpm verify > /tmp/v.log` showed a sibling worktree's failure as if it were ours. → Write logs and scratch files to the session's own scratchpad, never a fixed `/tmp` name.
 - 2026-10-26: four sessions pushed to their PR branch after it was verified and merged; the late commits were stranded and needed follow-up PRs. → rule 8: `--match-head-commit`, and no pushes after reporting ready.
 - 2026-10-26: `mapError` copied local error messages verbatim, so a parse error on truncated model output could put personal text into `llm_calls.error`, job errors and logs (found by W1-12). → Errors without a status keep only their type name and no `cause` (tested). Never put model or user text in an error message.
+- 2026-10-27: `/code-review <sha>` checked out that commit and left a detached HEAD, so the next commit and my edits landed off the branch (nothing was pushed; recovered with stash, checkout, cherry-pick). → After any review skill run `git branch --show-current` before committing, and review a past commit with `git show` or a worktree, not a checkout.

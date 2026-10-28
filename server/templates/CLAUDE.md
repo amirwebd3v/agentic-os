@@ -33,9 +33,8 @@ This file is the rulebook for Agentic OS and for any Claude session opened in th
 
 ## Filing rules
 
-- Top-level areas exist only with my approval: they are the list above.
-- Subareas are proposed by the app and become active after 3 items, or when I approve them.
-- Every session has exactly one primary area, plus any number of tags.
+- Top-level areas are the list above. To add one, add a line to that list: the app reads it at every boot.
+- Every item has exactly one primary area, plus any number of tags.
 - Unsure? File to `inbox/` and flag it for review.
 
 ## Behaviour rules
@@ -47,9 +46,9 @@ This file is the rulebook for Agentic OS and for any Claude session opened in th
 
 ## Folders
 
-- `persona/`: who I am and how I work; `_questions.md` is the interview question bank.
+- `career/`: my master CV and contact details (`master.md`, `contact.md`); the app reads them to tailor applications.
 - `wiki/`: lasting knowledge, by area.
-- `journal/`: dated entries and session summaries.
+- `journal/`: dated entries.
 - `inbox/`: unfiled items waiting for review.
 - `outputs/`: drafts and documents the app produced.
 - `exports/`: nightly JSONL exports of database tables.

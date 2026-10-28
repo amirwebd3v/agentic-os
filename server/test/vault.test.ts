@@ -96,7 +96,7 @@ test('watcher records an Obsidian edit, and the writer then refuses to overwrite
 });
 
 test('initVault is idempotent, local-only, and the writer commits to it', async () => {
-  expect(await initVault(dir)).toEqual(['.gitignore', '.obsidian/app.json', 'CLAUDE.md', 'persona/_questions.md']);
+  expect(await initVault(dir)).toEqual(['.gitignore', '.obsidian/app.json', 'CLAUDE.md']);
   for (const f of VAULT_FOLDERS) expect(existsSync(join(dir, f)), f).toBe(true);
   expect(JSON.parse(readFileSync(join(dir, '.obsidian/app.json'), 'utf8'))).toEqual({
     attachmentFolderPath: 'attachments',

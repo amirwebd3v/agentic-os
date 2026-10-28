@@ -39,37 +39,19 @@ code, pre { font-family: ui-monospace, monospace; }
 .banner { display: flex; gap: 1rem; align-items: center; }
 .banner p { margin: 0; flex: 1; }
 
-.layout { flex: 1; display: grid; grid-template-columns: 17rem 1fr; min-height: 0; }
+.layout { flex: 1; display: grid; grid-template-columns: 12rem 1fr; min-height: 0; }
 .sidebar { background: var(--panel); border-right: 1px solid var(--line); padding: 0.75rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
-.sidebar .new { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
-.sidebar h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0.75rem 0 0.25rem; }
-.sidebar ul { list-style: none; margin: 0; padding: 0; }
-.sidebar li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0.2rem 0; }
-.sidebar li a { color: var(--fg); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar li a.router-link-active { font-weight: 600; color: var(--accent); }
-.sidebar li select { width: 100%; }
-.sidebar .review { margin-top: auto; color: var(--accent); }
+.sidebar .brand { margin-bottom: 0.5rem; }
+.sidebar a { color: var(--fg); text-decoration: none; }
+.sidebar a.router-link-active { font-weight: 600; color: var(--accent); }
 
 .badge { font-size: 0.72rem; border: 1px solid var(--line); border-radius: 999px; padding: 0 0.45em; color: var(--muted); }
-.badge.flagged { color: #d97706; border-color: transparent; }
-.badge.interrupted, .badge.error { color: var(--bad); border-color: currentColor; }
-
-.chat { display: flex; flex-direction: column; min-height: 0; padding: 0 1rem; }
-.chat header { display: flex; gap: 0.5rem; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--line); }
-.chat header input { flex: 1; font-weight: 600; border-color: transparent; }
-.chat .mode { color: var(--muted); font-size: 0.85rem; }
 .placeholder { color: var(--muted); padding: 2rem 1rem; }
-.messages { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: 1rem 0; display: flex; flex-direction: column; gap: 0.75rem; }
-.msg { max-width: 48rem; }
-.msg.user { align-self: flex-end; background: var(--panel); border-radius: 10px; padding: 0.5rem 0.75rem; }
-.msg .plain { margin: 0; white-space: pre-wrap; }
 .md pre { background: var(--panel); padding: 0.75rem; border-radius: 6px; overflow-x: auto; }
 .md img { max-width: 100%; }
 .md table { border-collapse: collapse; }
 .md th, .md td { border: 1px solid var(--line); padding: 0.25rem 0.5rem; }
 .md .link { text-decoration: underline dotted; color: var(--muted); word-break: break-all; }
-.composer { display: flex; gap: 0.5rem; padding: 0.75rem 0; border-top: 1px solid var(--line); }
-.composer textarea { flex: 1; resize: vertical; }
 
 .badge.count { color: var(--bg); background: var(--accent); border-color: transparent; }
 .review-queue { overflow-y: auto; padding: 0 1rem 2rem; max-width: 56rem; }
@@ -78,10 +60,6 @@ code, pre { font-family: ui-monospace, monospace; }
 .card header { display: flex; gap: 0.5rem; align-items: baseline; }
 .card h2 { font-size: 1rem; margin: 0; flex: 1; overflow-wrap: anywhere; }
 .card time, .card .hint { color: var(--muted); font-size: 0.85rem; }
-.card dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.75rem; }
-.card dt { color: var(--muted); }
-.card dd { margin: 0; overflow-wrap: anywhere; }
-.card textarea { width: 100%; box-sizing: border-box; }
 .card footer { display: flex; gap: 0.5rem; }
 .card .plain { white-space: pre-wrap; }
 .diff { background: var(--panel); padding: 0.5rem; border-radius: 6px; overflow-x: auto; max-height: 24rem; }

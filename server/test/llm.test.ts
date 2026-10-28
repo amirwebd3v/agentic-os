@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { z } from 'zod';
 import { parseConfig } from '../src/config.ts';
@@ -10,7 +11,7 @@ const secret = vi.hoisted(() => ({ key: null as string | null }));
 vi.mock('../src/secrets.ts', () => ({ getSecret: () => secret.key }));
 
 // The SDK is real; only fetch is faked, so no test touches the network.
-const config = parseConfig({ vaultDir: 'C:/aos-test/vault', dataDir: 'C:/aos-test/data', llm: { baseURL: 'http://router.test:20128' } });
+const config = parseConfig({ vaultDir: resolve('/aos-test/vault'), dataDir: resolve('/aos-test/data'), llm: { baseURL: 'http://router.test:20128' } });
 let db: ReturnType<typeof makeTestDb>;
 let requests: { url: string; body: Record<string, unknown> }[];
 
