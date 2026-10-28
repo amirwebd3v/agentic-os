@@ -117,8 +117,14 @@ export async function* stream(deps: LlmDeps, req: CallBase & { messages: Anthrop
   }
 }
 
-/** One user turn in, a Zod-validated object out (`output_config.format` via `messages.parse`). */
-export async function structured<T>(deps: LlmDeps, req: CallBase & { input: string; schema: z.ZodType<T> }): Promise<T> {
+/**
+ * One user turn in, a Zod-validated object out (`output_config.format` via `messages.parse`).
+ * `effort` is sent only when set: some models (Haiku 4.5) reject it (plan R2).
+ */
+export async function structured<T>(
+  deps: LlmDeps,
+  req: CallBase & { input: string; schema: z.ZodType<T>; effort?: Anthropic.OutputConfig['effort'] },
+): Promise<T> {
   const model = deps.config.llm.models[req.tier];
   const started = Date.now();
   try {
@@ -128,7 +134,7 @@ export async function structured<T>(deps: LlmDeps, req: CallBase & { input: stri
         max_tokens: MAX_TOKENS,
         system: systemBlocks(req.system),
         messages: [{ role: 'user', content: req.input }],
-        output_config: { format: zodOutputFormat(req.schema) },
+        output_config: { format: zodOutputFormat(req.schema), ...(req.effort ? { effort: req.effort } : {}) },
       },
       { signal: req.signal },
     );

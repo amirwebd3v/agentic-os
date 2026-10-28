@@ -8,6 +8,7 @@ import { approvalRoutes } from './http/routes/approvals.ts';
 import { areaRoutes } from './http/routes/areas.ts';
 import { careerRoutes, failCareerJob } from './http/routes/career.ts';
 import { providerRoutes } from './http/routes/provider.ts';
+import { careerIntake } from './jobs/career-intake.ts';
 import { startRunner } from './jobs/runner.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
@@ -26,7 +27,12 @@ try {
 }
 watchVault({ db, vaultDir: config.vaultDir });
 // Job handlers by kind, one line per kind. The career pipeline registers its own.
-const stopRunner = startRunner(db, {}, (err) => app.log.error(err, 'job failed'), (job) => failCareerJob(db, job));
+const stopRunner = startRunner(
+  db,
+  { career_intake: careerIntake({ db, config }) },
+  (err) => app.log.error(err, 'job failed'),
+  (job) => failCareerJob(db, job),
+);
 app.addHook('onClose', async () => {
   await stopRunner();
 });

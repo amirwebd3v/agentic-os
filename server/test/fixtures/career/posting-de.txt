@@ -1,0 +1,19 @@
+IT-Sicherheitsanalyst (m/w/d)
+Grünhagen Versicherung AG, Köln
+
+Ihre Aufgaben:
+- Auswertung von Sicherheitsereignissen im SIEM
+- Mitarbeit an Penetrationstests und Schwachstellenmanagement
+- Dokumentation nach ISO 27001
+
+Ihr Profil:
+- Abgeschlossenes Studium der Informatik oder IT-Sicherheit
+- Mindestens 2 Jahre Erfahrung in der IT-Sicherheit
+- Kenntnisse in Netzwerkprotokollen und Linux
+- Sehr gute Deutsch- und gute Englischkenntnisse
+
+Von Vorteil:
+- Zertifizierung wie OSCP oder CEH
+- Erfahrung mit Splunk
+
+Vollzeit, hybrides Arbeiten möglich.
