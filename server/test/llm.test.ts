@@ -103,6 +103,14 @@ test('structured: config baseURL and tier model, inherited ANTHROPIC_BASE_URL ig
   expect(rows()).toEqual([{ pipeline: 'triage', model: config.llm.models.work, input_tokens: 11, output_tokens: 7, cache_read_tokens: 5, error: null }]);
 });
 
+test('structured: effort is sent only when set (plan R2)', async () => {
+  fakeFetch(() => json(200, message('{}')), () => json(200, message('{}')));
+  await structured({ db, config }, { pipeline: 'p', tier: 'fast', input: 'x', schema: z.object({}) });
+  await structured({ db, config }, { pipeline: 'p', tier: 'work', input: 'x', schema: z.object({}), effort: 'medium' });
+  expect(requests.map((r) => 'effort' in (r.body as { output_config: object }).output_config)).toEqual([false, true]);
+  expect(requests[1]!.body).toMatchObject({ output_config: { effort: 'medium' } });
+});
+
 test('retries rate_limit and overloaded, then succeeds; one ledger row', async () => {
   fakeFetch(
     () => json(429, { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } }),

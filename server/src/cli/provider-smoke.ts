@@ -13,7 +13,7 @@ import { getSecret } from '../secrets.ts';
 
 type Result = 'pass' | 'fail' | 'skip';
 const ICON: Record<Result, string> = { pass: '✅', fail: '❌', skip: '⏭' };
-const CHECKS = ['plain', 'stream', 'tools', 'cache', 'batch', 'structured', 'errors'] as const;
+const CHECKS = ['plain', 'stream', 'tools', 'cache', 'batch', 'structured', 'effort', 'errors'] as const;
 type Check = (typeof CHECKS)[number];
 
 // Setup not finished yet is not a failure: skip everything and exit 0.
@@ -108,6 +108,12 @@ const checks: Record<Check, () => Promise<string | void>> = {
     );
     const use = m.content.find((b) => b.type === 'tool_use');
     assert(use && Contact.safeParse(use.input).success, `strict tool input invalid: ${JSON.stringify(use?.input)}`);
+  },
+  async effort() {
+    // Plan R2: does the provider pass `output_config.effort` through? `work` tier, since Haiku 4.5 rejects effort.
+    const out = await structured(deps, { pipeline: 'smoke', tier: 'work', effort: 'low', input: 'Extract: Jane Doe wants a demo.', schema: z.object({ name: z.string() }) });
+    assert(out.name.includes('Jane'), `unexpected output ${JSON.stringify(out)}`);
+    return `accepted by ${models.work}`;
   },
   async errors() {
     const kinds = [];
