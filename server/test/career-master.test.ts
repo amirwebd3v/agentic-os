@@ -1,15 +1,18 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
 import { expireStale } from '../src/approvals/expire.ts';
 import { loadContact } from '../src/career/contact.ts';
+import { documentText, scrubContactLike } from '../src/career/document.ts';
 import { buildImport, exportDate, readExport, splitBullets } from '../src/career/linkedin.ts';
 import { parseMaster, serialiseMaster, validateMaster } from '../src/career/master.ts';
 import { approvalRoutes } from '../src/http/routes/approvals.ts';
 import { careerMasterRoutes } from '../src/http/routes/career-master.ts';
+import type { structured } from '../src/llm/client.ts';
+import { LlmError } from '../src/llm/errors.ts';
 import { sha256, vaultGit } from '../src/vault/writer.ts';
-import { buildTestApp } from './helpers.ts';
+import { buildTestApp, capturePrompts } from './helpers.ts';
 
 const FIXTURE = join(import.meta.dirname, 'fixtures/career/linkedin');
 const NOW = new Date('2026-10-28T10:00:00.000Z');
@@ -99,7 +102,7 @@ test('LinkedIn export maps by header name; contact gets the name only; private c
 
   const vault = tmp('aos-contact-');
   mkdirSync(join(vault, 'career'));
-  writeFileSync(join(vault, 'career/contact.md'), contact);
+  writeFileSync(join(vault, 'career/contact.md'), contact!);
   expect(loadContact(vault)).toEqual({ name: 'Erika Mustermann' });
   expect(contact).toMatch(/^phone: ""$/m);
 
@@ -134,11 +137,11 @@ test('the import folder: only plain files directly inside, at most 5 MB each', (
   expect(readExport(dir)).toEqual({ files: { 'Languages.csv': 'Name\nGerman\n' }, warnings: ['Skills.csv: larger than 5 MB, ignored'] });
 });
 
-async function setup() {
+async function setup(llm?: typeof structured) {
   const vault = tmp('aos-career-vault-');
   const data = tmp('aos-career-data-');
   await vaultGit(vault, 'init', '-q', '-b', 'main');
-  const t = await buildTestApp({ loggedIn: true, plugins: [approvalRoutes({ vaultDir: vault }), careerMasterRoutes({ vaultDir: vault, dataDir: data })] });
+  const t = await buildTestApp({ loggedIn: true, plugins: [approvalRoutes({ vaultDir: vault }), careerMasterRoutes({ vaultDir: vault, dataDir: data, ...(llm ? { llm } : {}) })] });
   const importDir = join(data, 'career/import');
   const post = (url: string, payload: object = {}) => t.app.inject(t.authed({ method: 'POST', url, payload }));
   const imp = () => post('/api/career/master/import');
@@ -148,7 +151,7 @@ async function setup() {
 
 test('import → one pending approval → approve writes both files as the user’s → master_exists', async () => {
   const t = await setup();
-  expect((await t.imp()).json()).toEqual({ error: 'import_empty' }); // no folder yet
+  expect((await t.imp()).json()).toEqual({ error: 'import_empty', warnings: [] }); // no folder yet
   mkdirSync(t.importDir, { recursive: true });
   expect((await t.imp()).statusCode).toBe(400);
 
@@ -203,4 +206,133 @@ test('import approval is hash-checked: a file changed meanwhile → 409, stays p
   expect((await t.post(`/api/approvals/${approval_id}/decide`, { decision: 'reject' })).json().status).toBe('rejected');
   expect(existsSync(join(t.vault, 'career/master.md'))).toBe(false);
   expect(readFileSync(join(t.vault, 'career/contact.md'), 'utf8')).toBe('mine, edited');
+});
+
+// --- Follow-up: subfolders and CV documents (.md, .pdf, .docx) ---
+const CV = join(import.meta.dirname, 'fixtures/career/cv');
+const CONTACT = `---\nname: "Erika Mustermann"\nemail: "erika@example.com"\nphone: "+49 30 1234567"\nurl: "example.com/erika"\n---\n`;
+/** Everything contact-like in the fixture CV: the listed values and the second number, address and link. */
+const CONTACT_LIKE = /Mustermann|erika|@|1234567|9876543|example\.(?:com|org|net)|https?:/i;
+
+test('the import folder: subfolders up to two levels, a .zip warns, the newest document wins', () => {
+  const dir = join(tmp('aos-import-'), 'import');
+  const sub = join(dir, 'Basic_LinkedInDataExport_10-28-2026');
+  mkdirSync(join(sub, 'a/b'), { recursive: true });
+  writeFileSync(join(sub, 'POSITIONS.CSV'), 'Company Name,Started On\nX,2020\n');
+  writeFileSync(join(sub, 'a/b/Skills.csv'), 'Name\nTooDeep\n'); // depth 3: not read
+  writeFileSync(join(dir, 'export.zip'), 'PK');
+  writeFileSync(join(dir, 'cv.md'), '# ignored while there is a CSV');
+  expect(readExport(dir)).toEqual({
+    files: { 'Positions.csv': 'Company Name,Started On\nX,2020\n' },
+    warnings: ['export.zip: a .zip file; unzip it into this folder first'],
+  });
+
+  rmSync(sub, { recursive: true });
+  mkdirSync(join(dir, 'old'));
+  writeFileSync(join(dir, 'old/cv.docx'), 'old');
+  utimesSync(join(dir, 'old/cv.docx'), new Date('2020-01-01'), new Date('2020-01-01'));
+  const { document, warnings } = readExport(dir);
+  expect(document).toEqual({ name: 'cv.md', data: Buffer.from('# ignored while there is a CSV') });
+  expect(warnings).toEqual(['export.zip: a .zip file; unzip it into this folder first', 'using cv.md, the newest; ignored old/cv.docx']);
+});
+
+test('CV text: .md, .docx and .pdf extract; a broken file is null; contact-like runs go, dates stay', async () => {
+  for (const f of ['cv.md', 'cv.docx', 'cv.pdf']) {
+    const text = await documentText(f, readFileSync(join(CV, f)));
+    expect(text).toContain('Cut the nightly build from 12 to 4 minutes.');
+    expect(text).toContain('Acme GmbH, Senior Engineer, Berlin, 2021-03 - present');
+  }
+  expect(await documentText('cv.pdf', Buffer.from('%PDF-1.4 not really'))).toBeNull();
+  expect(await documentText('cv.docx', Buffer.from('PK nope'))).toBeNull();
+  expect(await documentText('cv.md', Buffer.from([0xff, 0xfe, 0x00]))).toBeNull();
+
+  expect(scrubContactLike('a.b@x.de, +49 (0)30 123-4567, 030/1234567, www.x.de, https://x.io/a, x.dev/me')).toBe('[email], [phone], [phone], [url], [url], [url]');
+  const kept = '2019 - 2021, 03/2021 - 06/2024, 01.02.1990, 4 to 12 minutes, v1.2.3, e.g. this';
+  expect(scrubContactLike(kept)).toBe(kept);
+});
+
+/** What a careless model might answer: some text copied, some invented, an id it must not choose. */
+const answer = () => ({
+  summary: ['Backend engineer focused on data pipelines.', 'Award-winning visionary leader.'],
+  experience: [
+    { org: 'Acme GmbH', title: 'Senior Engineer', start: '2021-03', end: 'present', location: 'Berlin', bullets: ['Cut the  nightly build from 12 to 4 minutes.', 'Led a team of 40 engineers.'], id: 'evil' },
+    { org: 'Fake Corp', title: 'CTO', start: '2015', end: '2018', location: '', bullets: ['Invented everything.'] },
+  ],
+  education: [],
+  projects: [],
+  certifications: [],
+  skills: ['Python', 'PostgreSQL', 'Rust', 'SQL'], // SQL only inside PostgreSQL
+  languages: ['German (C1)'],
+});
+
+test('a CV document needs contact.md with a name first: contact_missing creates an empty template once', async () => {
+  const llm = capturePrompts(answer);
+  const t = await setup(llm.llm);
+  mkdirSync(t.importDir, { recursive: true });
+  cpSync(join(CV, 'cv.md'), join(t.importDir, 'cv.md'));
+  const res = await t.imp();
+  expect([res.statusCode, res.json().error]).toEqual([409, 'contact_missing']);
+  expect(res.json().warnings).toContain('career/contact.md created');
+  const template = readFileSync(join(t.vault, 'career/contact.md'), 'utf8');
+  expect(template).toMatch(/^name: ""$/m);
+  expect(loadContact(t.vault)).toEqual({});
+  expect((await t.imp()).json().error).toBe('contact_missing'); // still no name
+  expect(readFileSync(join(t.vault, 'career/contact.md'), 'utf8')).toBe(template); // never overwritten
+  expect(llm.calls).toHaveLength(0);
+  expect(t.pending()).toHaveLength(0);
+});
+
+test('CV document import: nothing contact-like reaches the model, invented text is dropped, approve writes master.md only', async () => {
+  const llm = capturePrompts(answer);
+  const t = await setup(llm.llm);
+  mkdirSync(join(t.vault, 'career'));
+  writeFileSync(join(t.vault, 'career/contact.md'), CONTACT);
+  mkdirSync(join(t.importDir, 'cv'), { recursive: true });
+  cpSync(join(CV, 'cv.pdf'), join(t.importDir, 'cv', 'Erika_CV.pdf'));
+
+  const res = await t.imp();
+  expect(res.statusCode).toBe(201);
+  expect(res.json().warnings).toEqual(['5 item(s) not found word for word in the CV were dropped; add them in Obsidian']);
+  expect(llm.calls).toHaveLength(1);
+  expect(llm.calls[0]!.input).toContain('Cut the nightly build from 12 to 4 minutes.');
+  expect(llm.text()).not.toMatch(CONTACT_LIKE);
+
+  const payload = JSON.parse(t.pending()[0]!.payload);
+  expect(payload).not.toHaveProperty('contact');
+  expect(payload).toMatchObject({ source_files: ['cv/Erika_CV.pdf'], master_hash_before: null, stats: { entries: 1, bullets: 2, skills: 2 } });
+  expect(payload.master).toContain('### Acme GmbH | Senior Engineer | 2021-03 | present | Berlin  ^exp-acme-gmbh-2021\n');
+  expect(payload.master).toMatch(/^- Cut the nightly build from 12 to 4 minutes\. {2}\^exp-acme-gmbh-2021-[0-9a-f]{6}$/m);
+  expect(payload.master).toMatch(/^- German \(C1\) {2}\^lang-german$/m);
+  expect(payload.master).not.toMatch(/Award|40 engineers|Fake Corp|Invented|Rust|evil|Mustermann/);
+  expect(validateMaster(payload.master)).toBeNull();
+  const audit = t.db.prepare(`SELECT args_redacted FROM audit_log WHERE action = 'career.master_import.propose'`).pluck().get() as string;
+  expect(audit).toContain('document.pdf');
+  expect(audit).not.toMatch(/Erika/);
+
+  const { approval_id } = res.json();
+  expect((await t.post(`/api/approvals/${approval_id}/decide`, { decision: 'approve' })).json().status).toBe('approved');
+  expect(readFileSync(join(t.vault, 'career/master.md'), 'utf8')).toBe(payload.master);
+  expect(readFileSync(join(t.vault, 'career/contact.md'), 'utf8')).toBe(CONTACT); // the owner's, untouched
+  expect(t.db.prepare('SELECT path FROM vault_notes').pluck().all()).toEqual(['career/master.md']);
+  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe(`aos: approval ${approval_id}\n`));
+});
+
+test('CV document import: an unreadable file → import_unreadable, a failing model → provider_error, nothing proposed', async () => {
+  const failing = capturePrompts(() => {
+    throw new LlmError('overloaded', 'upstream 529', 529);
+  });
+  const t = await setup(failing.llm);
+  mkdirSync(join(t.vault, 'career'));
+  writeFileSync(join(t.vault, 'career/contact.md'), CONTACT);
+  mkdirSync(t.importDir, { recursive: true });
+  writeFileSync(join(t.importDir, 'cv.docx'), 'PK broken');
+  const bad = await t.imp();
+  expect([bad.statusCode, bad.json()]).toEqual([400, { error: 'import_unreadable', warnings: ['cv.docx: could not be read'] }]);
+
+  rmSync(join(t.importDir, 'cv.docx'));
+  cpSync(join(CV, 'cv.docx'), join(t.importDir, 'cv.docx'));
+  const res = await t.imp();
+  expect([res.statusCode, res.json()]).toEqual([502, { error: 'provider_error' }]);
+  expect(failing.text()).not.toMatch(CONTACT_LIKE);
+  expect(t.pending()).toHaveLength(0);
 });

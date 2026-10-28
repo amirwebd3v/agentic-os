@@ -16,7 +16,7 @@ The shapes every Wave 2–5 ticket builds against, so the sessions can run in pa
 |---|---|---|
 | `vault/career/master.md` | you (user-owned after approval) | The master CV (§3.1) |
 | `vault/career/contact.md` | you (user-owned after approval) | Contact details (§3.2) |
-| `dataDir/career/import/` | you | LinkedIn export CSVs, dropped here |
+| `dataDir/career/import/` | you | LinkedIn export CSVs (or the extracted export folder), or one `.md`/`.pdf`/`.docx` CV, dropped here |
 | `dataDir/career/template.docx` | you | Your Word CV template |
 | `dataDir/career/letter-template.docx` | you, optional | Cover-letter template. If absent, a plain built-in layout is used. |
 | `dataDir/career/out/<applicationId>/` | the app | Generated `cv.docx`, `cv.pdf`, `letter.docx`, `letter.pdf`. Never in the vault, never in git. |
@@ -215,15 +215,17 @@ type RenderModel = {
 ### 8.1 Master import (W2-04)
 | Method & path | Body | Response |
 |---|---|---|
-| `POST /api/career/master/import` | — | Reads the CSVs in `dataDir/career/import/`, builds `master.md` + `contact.md`, and creates a `career_master_import` approval. `201 { approval_id }`. `409 master_exists` if `career/master.md` already exists. `400 import_empty` if no recognised file. |
+| `POST /api/career/master/import` | — | Reads `dataDir/career/import/`, builds `master.md` (+ `contact.md` from CSVs), and creates a `career_master_import` approval. `201 { approval_id, warnings }`. `409 master_exists` if `career/master.md` already exists. `400 import_empty` if nothing usable was found. Document path only: `409 provider_not_configured`, `409 contact_missing`, `400 import_unreadable`, `502 provider_error`. Every 4xx except `master_exists`/`provider_not_configured` carries `warnings` (file names and counts only, never file content). |
 
-**v1 imports from the LinkedIn CSVs only**: `Profile.csv`, `Positions.csv`, `Education.csv`, `Skills.csv`, `Languages.csv`, `Certifications.csv`. These are the usual names in the export; W2-04 checks them against a real export. Your Word CV is the output template (§2), not an import source.
+**Sources.** The folder and its subfolders up to two levels down (e.g. an extracted `Basic_LinkedInDataExport_…/`) are scanned; only plain files ≤ 5 MB count, links are never followed, a `.zip` only gets a warning ("unzip it into this folder first").
+- **LinkedIn CSVs** (deterministic, no model): `Profile.csv`, `Positions.csv`, `Education.csv`, `Skills.csv`, `Languages.csv`, `Certifications.csv`, matched by basename, case-insensitive. If any is found, documents are ignored.
+- **A CV document** otherwise: `.md`, `.pdf` or `.docx` (the newest if several; the rest are named in `warnings`). Text is extracted (`mammoth`, `unpdf`); failure or no text → `import_unreadable`. It needs `career/contact.md` with at least `name` (else `contact_missing`; a missing file is created as an empty template for you to fill in), because before the one `work`-tier call the text goes through `promptSafe` and a generic pass that replaces any e-mail, URL and phone-like run with `[email]`/`[url]`/`[phone]`. Every field and bullet of the answer must appear in that redacted text (whitespace and case aside), dates by their year; the rest is dropped and counted in `warnings`. Ids are assigned by code. The proposal has **no `contact`** (the file is already yours). The model failing → `502 provider_error`.
 
 **Approval row** (`review-contract.md` gets a matching row in the same PR):
 
 | `action_type` | Producer | `payload` | `original_text` | On approve |
 |---|---|---|---|---|
-| `career_master_import` | W2-04 | `{ master: string, contact: string, source_files: string[], master_hash_before: string \| null, contact_hash_before: string \| null, stats: { entries: number, bullets: number, skills: number } }` | `null` (not editable in the queue; edit in Obsidian afterwards) | Write `career/master.md` and `career/contact.md` inside the approval's transaction, hash-checked against `*_hash_before` (mismatch → `409`, stays pending), `vault_notes.last_written_by='user'`, vault git commit. Reject writes nothing. **Never expires** (add to the exemption in `approvals/expire.ts`). One pending import at a time: a new import replaces the pending payload. |
+| `career_master_import` | W2-04 | `{ master: string, contact?: string, source_files: string[], master_hash_before: string \| null, contact_hash_before?: string \| null, stats: { entries: number, bullets: number, skills: number } }` | `null` (not editable in the queue; edit in Obsidian afterwards) | Write `career/master.md` and (if in the payload) `career/contact.md` inside the approval's transaction, hash-checked against `*_hash_before` (mismatch → `409`, stays pending), `vault_notes.last_written_by='user'`, vault git commit. Reject writes nothing. **Never expires** (add to the exemption in `approvals/expire.ts`). One pending import at a time: a new import replaces the pending payload. |
 
 Web: add the case to the `Approval` union in `web/src/api.ts` and to `ApprovalCard.vue` (title + counts + a `<pre>` preview of `master`, text only).
 
@@ -266,7 +268,7 @@ type ApplicationDetail = ApplicationSummary & {
 ```
 
 ### 8.3 Errors
-Fixed codes only: `provider_not_configured`, `master_missing`, `master_exists`, `import_empty`, `posting_too_long`, `not_found`, `wrong_status`, `bad_ref`, `bad_date`, `flagged_not_acknowledged`, `files_not_ready`.
+Fixed codes only: `provider_not_configured`, `provider_error`, `master_missing`, `master_exists`, `import_empty`, `import_unreadable`, `contact_missing`, `posting_too_long`, `not_found`, `wrong_status`, `bad_ref`, `bad_date`, `flagged_not_acknowledged`, `files_not_ready`.
 
 `FailCode` (stored in `applications.fail_code`): `provider_error`, `selection_invalid`, `no_match` (nothing selected), `verify_failed`, `render_failed`, `internal`.
 
