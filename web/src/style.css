@@ -100,18 +100,18 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .page { overflow-y: auto; padding: var(--s5) var(--s6) var(--s7); }
 .placeholder { color: var(--muted); padding: var(--s5) 0; }
 
-/* ---------- status vocabulary: a word, a tint and an edge, never colour alone ---------- */
+/* ---------- status vocabulary: a word, a tint and an outline, never colour alone ---------- */
 .status { display: inline-block; font-size: 12px; line-height: 20px; font-weight: 500; padding: 0 var(--s2); border-radius: var(--radius);
-  background: var(--inset); border-left: 3px solid var(--border-strong); white-space: nowrap; }
-.status.working { border-left-color: var(--accent); }
-.status.ready { background: var(--success-tint); border-left-color: var(--success); }
-.status.attention { background: var(--attention-tint); border-left-color: var(--attention); }
-.status.danger { background: var(--danger-tint); border-left-color: var(--danger); }
-.notice { border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: var(--radius); padding: var(--s3) var(--s4); margin: 0 0 var(--s3); }
+  background: var(--inset); border: 1px solid var(--border-strong); white-space: nowrap; }
+.status.working { border-color: var(--accent); }
+.status.ready { background: var(--success-tint); border-color: var(--success); }
+.status.attention { background: var(--attention-tint); border-color: var(--attention); }
+.status.danger { background: var(--danger-tint); border-color: var(--danger); }
+.notice { border: 1px solid var(--border-strong); border-radius: var(--radius); padding: var(--s3) var(--s4); margin: 0 0 var(--s3); }
 .notice > :last-child { margin-bottom: 0; }
-.notice.ok { border-left-color: var(--success); }
-.notice.attention { background: var(--attention-tint); border-left-color: var(--attention); }
-.notice.danger { background: var(--danger-tint); border-left-color: var(--danger); }
+.notice.ok { border-color: var(--success); }
+.notice.attention { background: var(--attention-tint); border-color: var(--attention); }
+.notice.danger { background: var(--danger-tint); border-color: var(--danger); }
 .tag { display: inline-block; font-size: 12px; line-height: 18px; padding: 0 6px; border-radius: var(--radius); background: var(--inset); color: var(--muted); }
 .tag.attention { background: var(--attention-tint); color: var(--fg); }
 

@@ -31,7 +31,7 @@ Structure follows GitHub's Primer: a persistent left navigation, dense ledger ro
 | `--accent` | `#0969da` | `#539bf5` | Links, the current nav item, focus, the line in focus. Dark uses a dimmed scale step because `fgColor-accent` (#478be6) is 4.3:1 there. |
 | `--accent-bg` / `--on-accent` | `#0969da` / `#fff` | `#316dca` / `#f0f6fc` | The one primary button per screen. |
 | `--accent-tint` | `#ddf4ff` | `#4184e41a` | Background of the line in focus. |
-| `--success`, `--attention`, `--danger` (+ `-tint`) | Primer `fgColor-*` / `bgColor-*-muted` | same; dark danger `#f47067` (4.0:1 for `#e5534b`) | Status edges and notice grounds. Text on tints is always `--fg`. |
+| `--success`, `--attention`, `--danger` (+ `-tint`) | Primer `fgColor-*` / `bgColor-*-muted` | same; dark danger `#f47067` (4.0:1 for `#e5534b`) | Status outlines and notice grounds. Text on tints is always `--fg`. |
 | `--add-word` / `--del-word` | `#aceebb` / `#ffcecb` | `#46954a66` / `#e5534b66` | Word diff (Primer `diffBlob-*Word-bgColor`). |
 
 **The One Accent Rule.** One primary button per screen (Applications: "Tailor CV and letter"; application page: "Finalise and create files"). Approve/Reject, Save line, Retry export and the import are neutral buttons.
@@ -54,8 +54,8 @@ Flat. 1 px borders and tonal steps, no shadows. Radius 6 px (`--radius`) on cont
 
 ## Components
 
-- **Status label** (`.status.working|ready|attention|danger|done`): a word, a tint and a 3 px left edge. Words come from `statusLabel()` in `stores/career.ts` for every state: the running step ("Writing the draft"), Ready for review, Needs your check, Failed, Creating files, Final, Files failed, Applied, Withdrawn.
-- **Notice** (`.notice[.ok|.attention|.danger]`): a bordered block with a coloured left edge; it opens with a bold sentence that names the state.
+- **Status label** (`.status.working|ready|attention|danger|done`): a word, a tint and a 1 px outline in the status colour (no side-tab edge). Words come from `statusLabel()` in `stores/career.ts` for every state: the running step ("Writing the draft"), Ready for review, Needs your check, Failed, Creating files, Final, Files failed, Applied, Withdrawn.
+- **Notice** (`.notice[.ok|.attention|.danger]`): a block with a 1 px border in the status colour; it opens with a bold sentence that names the state.
 - **Draft line** (`DraftLine.vue`): text, an Edit button (or Source once final), "Check: this line …" tags from the verifier in words, "Edited by you, not re-checked". Focus or click selects it; the focused line gets the accent tint and edge. Edit in place: a textarea, Save line / Cancel, Ctrl+Enter saves, Esc cancels and returns focus to Edit.
 - **Source** (`LineSource.vue`): each cited master line as a quote with its id, then "Changes from that text" with `<del>`/`<ins>` (strike-through and underline plus screen-reader "removed:"/"added:", never colour alone).
 - **Master import** (`MasterImport.vue`): a neutral button with the outcome as a notice and file warnings as a list.
