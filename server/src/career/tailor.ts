@@ -137,6 +137,7 @@ ${DATA_RULE}
 - Reword lightly, never add facts: every number, name, product, tool and acronym in a line must appear in the lines it cites. The cover letter may also name the company and the role title from <requirements>.
 - Do not write employer names, job titles or dates as CV bullets: they are copied from the master separately.
 - Never write a name, e-mail address, phone number, street address or URL. If the letter must refer to one, use only {{CONTACT_NAME}}, {{CONTACT_EMAIL}}, {{CONTACT_PHONE}}, {{CONTACT_ADDRESS}}, {{CONTACT_URL}}.
+- The letter is prose for a hiring manager: first person ("I"), complete sentences, a natural professional tone, and each paragraph links what you did to what this role needs. Use the cited facts; never add a claim about yourself (an ability, a trait, a "comfortable with") that the cited lines don't state.
 - Summary at most 300 characters; each CV bullet at most 300; at most 18 CV bullets in all. Letter: 3 to 5 paragraphs, each at most 700 characters, no salutation and no sign-off.`;
 
 const masterBlock = (contact: Contact, m: MasterIndex) => promptSafe(contact, wrapUntrusted('master', m.body));
