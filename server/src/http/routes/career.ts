@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
+import type { Requirements } from '../../career/intake.ts';
+import { coverage } from '../../career/tailor.ts';
+import type { Selection } from '../../career/tailor.ts';
 import { audit } from '../../db/audit.ts';
 import type { Database } from '../../db/index.ts';
 import { enqueue } from '../../db/jobs.ts';
@@ -111,17 +114,12 @@ export const careerRoutes =
         const { id } = req.params;
         const summary = db.prepare(`SELECT ${SUMMARY} FROM applications WHERE id = ?`).get(id);
         if (!summary) return reply.code(404).send({ error: 'not_found' });
-        const requirements = latest<{ must_have: { id: string }[] }>(db, id, 'requirements');
-        const selection = latest<{ picks: { requirement_id: string; bullet_ids: string[] }[] }>(db, id, 'selection');
-        let coverage = null;
-        if (requirements && selection) {
-          const picked = new Set(selection.picks.filter((p) => p.bullet_ids.length).map((p) => p.requirement_id));
-          coverage = { matched: requirements.must_have.filter((r) => picked.has(r.id)).length, total: requirements.must_have.length };
-        }
+        const requirements = latest<Requirements>(db, id, 'requirements');
+        const selection = latest<Selection>(db, id, 'selection');
         return {
           ...summary,
           requirements,
-          coverage,
+          coverage: requirements && selection ? coverage(requirements, selection) : null,
           draft: latest(db, id, 'draft'),
           // ponytail: edited_refs and sources stay empty until the edit route (W2-08) and the master parser (W2-04) land
           edited_refs: [],
