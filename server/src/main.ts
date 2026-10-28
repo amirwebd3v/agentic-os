@@ -12,6 +12,7 @@ import { providerRoutes } from './http/routes/provider.ts';
 import { careerDraft } from './jobs/career-draft.ts';
 import { careerIntake } from './jobs/career-intake.ts';
 import { careerMatch } from './jobs/career-match.ts';
+import { careerRender } from './jobs/career-render.ts';
 import { careerVerify } from './jobs/career-verify.ts';
 import { startRunner } from './jobs/runner.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
@@ -38,6 +39,7 @@ const stopRunner = startRunner(
     career_match: careerMatch({ db, config }),
     career_draft: careerDraft({ db, config }),
     career_verify: careerVerify({ db, config }),
+    career_render: careerRender({ db, config }),
   },
   (err) => app.log.error(err, 'job failed'),
   (job) => failCareerJob(db, job),
