@@ -15,6 +15,8 @@ export interface Job {
 }
 
 export const MAX_ATTEMPTS = 5;
+// career_* steps get one attempt: a retry repeats a model call and hides the failure behind backoff (career contract §4).
+const MAX_ATTEMPTS_OF_KIND = `CASE WHEN kind LIKE 'career\\_%' ESCAPE '\\' THEN 1 ELSE ${MAX_ATTEMPTS} END`;
 const STALE_LOCK_MINUTES = 10;
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
@@ -43,21 +45,24 @@ export function complete(db: Database, id: number): void {
   db.prepare(`UPDATE jobs SET status = 'done', locked_at = NULL, error = NULL WHERE id = ? AND status = 'running'`).run(id);
 }
 
-/** Requeues with exponential backoff (30 s · 2^attempts) until MAX_ATTEMPTS, then marks failed. */
-export function fail(db: Database, id: number, error: string): void {
-  db.prepare(
-    `UPDATE jobs SET locked_at = NULL, error = @error,
-       status = CASE WHEN attempts < ${MAX_ATTEMPTS} THEN 'queued' ELSE 'failed' END,
-       run_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || (30 << attempts) || ' seconds')
-     WHERE id = @id AND status = 'running'`,
-  ).run({ id, error });
+/** Requeues with exponential backoff (30 s · 2^attempts) until the kind's attempts cap, then marks failed. True when it gave up. */
+export function fail(db: Database, id: number, error: string): boolean {
+  const row = db
+    .prepare(
+      `UPDATE jobs SET locked_at = NULL, error = @error,
+         status = CASE WHEN attempts < ${MAX_ATTEMPTS_OF_KIND} THEN 'queued' ELSE 'failed' END,
+         run_after = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || (30 << attempts) || ' seconds')
+       WHERE id = @id AND status = 'running' RETURNING status`,
+    )
+    .get({ id, error }) as { status: Job['status'] } | undefined;
+  return row?.status === 'failed';
 }
 
 /** Requeues jobs left running by a crash or laptop sleep. Run on boot. Returns how many. */
 export function recoverStaleLocks(db: Database): number {
   return db
     .prepare(
-      `UPDATE jobs SET locked_at = NULL, status = CASE WHEN attempts < ${MAX_ATTEMPTS} THEN 'queued' ELSE 'failed' END
+      `UPDATE jobs SET locked_at = NULL, status = CASE WHEN attempts < ${MAX_ATTEMPTS_OF_KIND} THEN 'queued' ELSE 'failed' END
        WHERE status = 'running' AND locked_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${STALE_LOCK_MINUTES} minutes')`,
     )
     .run().changes;
