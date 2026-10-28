@@ -8,20 +8,16 @@ Deliberate shortcuts (`ponytail:` comments in the code), collected at the end of
 
 | Where | Shortcut | Ceiling | Upgrade when |
 |---|---|---|---|
-| `server/src/approvals/apply.ts:235` | The persona approve does two renames (topic file + `_questions.md`) that aren't atomic together | If the 2nd rename fails, the statement is saved but the question stays unticked | A tick ever goes missing; then journal both renames |
-| `server/src/approvals/apply.ts:261` | A failed COMMIT after the rename leaves the file written but the row pending | The retry sees the new hash and asks again | It happens in practice (needs a disk or DB failure mid-commit) |
-| `server/src/chat/prompt.ts:8` | Chars as a token proxy for history (~100k tokens) | Very long chats could hit the context limit | Long chats get cut or rejected; then use token counting |
-| `server/src/jobs/categorize-session.ts:52` | Chars as a token proxy for the categorization input (~25k tokens) | Very long sessions are truncated for filing | Filing quality drops on long sessions |
-| `server/src/cli/provider-smoke.ts:90` | Batch is only *detected* (GET), never created | No proof batching actually works | A nightly batch job exists (Month 1+; 9router has no batch anyway) |
+| `server/src/approvals/apply.ts:136` | A failed COMMIT after the rename leaves the file written but the row pending | The retry sees the new hash and asks again | It happens in practice (needs a disk or DB failure mid-commit) |
+| `server/src/cli/provider-smoke.ts:89` | Batch is only *detected* (GET), never created | No proof batching actually works | A nightly batch job exists (Month 1+; 9router has no batch anyway) |
+| `server/src/cli/provider-smoke.ts:146` | Smoke results are only printed, never stored | A feature can't read provider capability flags | A feature needs them (for example batch or caching on/off) |
 | `server/src/db/audit.ts:27` | Redaction is by key name only | A secret inside free text would be logged | A secret ever shows up in `args_redacted`; then add value scanning |
 | `server/src/db/jobs.ts:41` | No lock token; one worker loop assumed | Parallel workers could double-complete | Jobs run in parallel (see `runner.ts`) |
 | `server/src/jobs/runner.ts:25` | One sequential worker | A slow job (e.g. a long Claude call) delays the others | Gmail sync arrives (Month 1) and starves filing; then one worker per kind + a claim token |
 | `server/src/http/auth.ts:46` | No logout or session revocation | A stolen cookie stays valid until it expires (30 days) | The UI needs logout, or a device is lost |
 | `server/src/http/routes/approvals.ts:74` | "Show more" capped at 200 | Older pending items are hidden | The queue ever exceeds 200 (it shouldn't, with expiry) |
 | `server/src/http/routes/approvals.ts:86` | Two vault git commit chains (writer + approvals) can collide | One commit fails and is picked up by the next `add -A` | Missing vault commits are noticed |
-| `server/src/http/routes/sessions.ts:43` | No pagination; the session list is capped at 500 | The oldest sessions disappear from the sidebar | You pass ~500 sessions; then add a cursor |
 | `server/src/vault/writer.ts:147` | Obsidian save vs. app rename race (microseconds) | One edit could be lost | Ever observed; then re-check under a lock |
-| `web/src/components/MessageBubble.vue:7` | Re-renders the whole reply per streamed delta (O(n²)) | Long replies could stutter | Visible lag on long replies |
 | `web/src/diff.ts:3` | LCS line diff with O(n·m) memory | Huge notes would be slow to diff | A conflict on a very large note |
 
 ## Watch list (not code comments)
@@ -49,3 +45,13 @@ A repo-wide audit found 14 candidates (about −75 lines, −2 deps).
 | `index.html` fallback vs. hash router | A 4-line guard, kept deliberately (see the watch list). |
 | The `makeTestDb()` wrapper | A one-line test helper. Inlining it in 6 files only adds churn. |
 | 8 more dead `export` keywords (web types, `session-note.ts`) | Harmless. Clean them up opportunistically. |
+
+## W2-00 cleanup (2026-10-27)
+The chat channel, session categorization and persona interviews were removed (see [[week2/implementation-plan]], "Cleanup decision"). Left behind on purpose:
+- **Tables** `sessions`, `messages` and `persona_questions` stay in the schema: migrations are forward-only. Migration `0005_retire_week1_chat.sql` expires pending `propose_category` / `persona_statement` approvals and fails queued `categorize_session` / `extract_persona` jobs, so nothing is left that the app can no longer apply.
+- **No caller yet:** `createWriter()` (`vault/writer.ts`, tested), `GET /api/areas`, and the `systemBlocks()` persona block in `llm/client.ts`. The career and email slices decide whether they use them. Delete any that is still unused after the Email slice.
+- **Review-queue editing** (`final_text`, `edit_distance`) still works on the server, but no UI sends it: the application page (W2-08) has its own edit flow.
+- **The decider** (`server/src/decider`, `sidecar/`, `scripts/sidecar.ts`, `scripts/decider-bench.ts`) is parked: `pnpm dev` doesn't start it. Its `status()` and `model`/`maxLen` options were already flagged as "delete if unused"; decide at the Email slice.
+
+### If you already use a Week 1 vault
+Run the cleanup tool instead of editing by hand: stop the server, then `pnpm vault:retire` (a dry run that changes nothing), read the list, then `pnpm vault:retire --apply`, then `pnpm vault:init` once to create `career/`. It deletes `persona/` and the app-written session notes and area indexes you haven't edited, patches the stale `CLAUDE.md` lines (only where they match verbatim), and clears the chat-era database rows. It first backs up `brain.db` next to itself and commits the vault in git before and after. `server/src/vault/retire.ts` is a one-shot: delete it, its CLI and its test once you have run it (W2-12).

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseConfig, readAppEnv, repoRoot } from '../src/config.ts';
 
-const dirs = { vaultDir: 'E:/AgenticOS/vault', dataDir: 'E:/AgenticOS/data' };
+const dirs = { vaultDir: resolve('/AgenticOS/vault'), dataDir: resolve('/AgenticOS/data') };
 
 describe('config', () => {
   test('fills defaults', () => {
@@ -15,7 +15,7 @@ describe('config', () => {
   });
 
   test('rejects OneDrive paths', () => {
-    expect(() => parseConfig({ ...dirs, vaultDir: 'C:/Users/x/OneDrive/vault' })).toThrow(/OneDrive/);
+    expect(() => parseConfig({ ...dirs, vaultDir: resolve('/Users/x/OneDrive/vault') })).toThrow(/OneDrive/);
   });
 
   test('rejects data dirs inside the code repo', () => {
@@ -56,6 +56,7 @@ describe('config', () => {
 
   test('example config stays valid', () => {
     const example = JSON.parse(readFileSync(resolve(repoRoot, 'agentic-os.example.json'), 'utf8'));
-    expect(() => parseConfig(example)).not.toThrow();
+    // The example's Windows drive paths aren't absolute on POSIX.
+    expect(() => parseConfig(process.platform === 'win32' ? example : { ...example, ...dirs })).not.toThrow();
   });
 });

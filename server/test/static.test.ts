@@ -25,7 +25,7 @@ describe('serving the built web app', () => {
     const html = { host: HOST, accept: 'text/html' };
     expect((await app.inject({ url: '/', headers: html })).body).toContain('<title>AOS</title>');
     expect((await app.inject({ url: '/assets/app.js', headers: { host: HOST } })).statusCode).toBe(200);
-    expect((await app.inject({ url: '/sessions/5', headers: html })).body).toContain('<title>AOS</title>');
+    expect((await app.inject({ url: '/review', headers: html })).body).toContain('<title>AOS</title>');
   });
 
   test('missing assets are 404, not the SPA shell', async () => {
