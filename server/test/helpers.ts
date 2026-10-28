@@ -6,6 +6,7 @@ import { parseConfig } from '../src/config.ts';
 import { openDb } from '../src/db/index.ts';
 import type { Database } from '../src/db/index.ts';
 import { createLoginToken } from '../src/http/auth.ts';
+import type { structured, SystemPrompt } from '../src/llm/client.ts';
 
 /** In-memory database with all migrations applied. Extend here for per-ticket fixtures. */
 export function makeTestDb(): Database {
@@ -57,4 +58,18 @@ export async function buildTestApp({
   });
   const areaId = (slug: string) => (db.prepare('SELECT id FROM areas WHERE slug = ?').get(slug) as { id: number }).id;
   return { app, db, cookie, loginToken: createLoginToken(db), authed, areaId };
+}
+
+/**
+ * A fake `llm` (inject it where a step defaults to the real `structured`) that records the `system` and `input` of
+ * every call. `answer` builds each reply. `text()` is everything a model would have seen, for leak assertions.
+ */
+export function capturePrompts(answer: (req: Parameters<typeof structured>[1]) => unknown = () => ({})) {
+  const calls: { pipeline: string; system: SystemPrompt | undefined; input: string }[] = [];
+  const llm = (async (_deps, req) => {
+    calls.push({ pipeline: req.pipeline, system: req.system, input: req.input });
+    return structuredClone(answer(req));
+  }) as typeof structured;
+  const text = () => calls.map((c) => [c.system?.rules, c.system?.persona, c.system?.context, c.input].join('\n')).join('\n');
+  return { llm, calls, text };
 }
