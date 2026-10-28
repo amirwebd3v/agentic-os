@@ -9,7 +9,10 @@ import { areaRoutes } from './http/routes/areas.ts';
 import { careerMasterRoutes } from './http/routes/career-master.ts';
 import { careerRoutes, failCareerJob } from './http/routes/career.ts';
 import { providerRoutes } from './http/routes/provider.ts';
+import { careerDraft } from './jobs/career-draft.ts';
 import { careerIntake } from './jobs/career-intake.ts';
+import { careerMatch } from './jobs/career-match.ts';
+import { careerVerify } from './jobs/career-verify.ts';
 import { startRunner } from './jobs/runner.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
@@ -30,7 +33,12 @@ watchVault({ db, vaultDir: config.vaultDir });
 // Job handlers by kind, one line per kind. The career pipeline registers its own.
 const stopRunner = startRunner(
   db,
-  { career_intake: careerIntake({ db, config }) },
+  {
+    career_intake: careerIntake({ db, config }),
+    career_match: careerMatch({ db, config }),
+    career_draft: careerDraft({ db, config }),
+    career_verify: careerVerify({ db, config }),
+  },
   (err) => app.log.error(err, 'job failed'),
   (job) => failCareerJob(db, job),
 );
