@@ -27,13 +27,20 @@ test('payload text renders as text, never as HTML', () => {
   const conflict = mount({ ...base, action_type: 'vault_conflict', payload: { path: evil, current_hash: null, content: evil }, current_text: evil });
   // A type this UI doesn't know yet falls back to raw JSON, also as text.
   const unknown = mount({ ...base, action_type: evil, payload: { note: evil } } as unknown as Approval);
-  for (const e of [conflict, unknown]) {
+  const master = mount({
+    ...base,
+    action_type: 'career_master_import',
+    payload: { master: evil, contact: evil, source_files: [evil], master_hash_before: null, contact_hash_before: null, stats: { entries: 1, bullets: 2, skills: 3 } },
+  });
+  for (const e of [conflict, unknown, master]) {
     expect(e.querySelector('img')).toBeNull();
     expect(e.textContent).toContain(evil);
   }
   const approve = (e: HTMLElement) => [...e.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Approve')!;
   expect(approve(unknown).disabled).toBe(true); // this UI can't apply a type it doesn't know
   expect(approve(conflict).disabled).toBe(false);
+  expect(approve(master).disabled).toBe(false);
+  expect(master.textContent).toContain('1 entries, 2 bullets, 3 skills');
 });
 
 test('Approve and Reject emit the decision', () => {
