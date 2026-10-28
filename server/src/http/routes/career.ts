@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
+import { editDistance } from '../../approvals/edit-distance.ts';
 import type { Requirements } from '../../career/intake.ts';
-import { coverage, event } from '../../career/tailor.ts';
-import type { Selection } from '../../career/tailor.ts';
+import { coverage, event, readMaster, saveText } from '../../career/tailor.ts';
+import type { Draft, DraftLine, Selection } from '../../career/tailor.ts';
 import { audit } from '../../db/audit.ts';
 import type { Database } from '../../db/index.ts';
 import { enqueue } from '../../db/jobs.ts';
@@ -74,8 +75,40 @@ function enqueueRender(db: Database, id: number): void {
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } as const;
 const CONTENT_TYPE = { docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pdf: 'application/pdf' } as const;
 
+/** Every editable line of a draft by its ref (contract §6): `cv.summary`, `cv.entries.<entry_id>.<i>`, `letter.<i>`. */
+const draftLines = (d: Draft): [string, DraftLine][] => [
+  ...(d.summary ? [['cv.summary', d.summary] as [string, DraftLine]] : []),
+  ...d.entries.flatMap((e) => e.bullets.map((l, i): [string, DraftLine] => [`cv.entries.${e.entry_id}.${i}`, l])),
+  ...d.letter.paragraphs.map((l, i): [string, DraftLine] => [`letter.${i}`, l]),
+];
+
+/**
+ * The master text behind every id the draft cites or lists (bullet text without its entry header), plus each
+ * entry's header (`org | title | start – end`) under its entry id so the page can title the CV sections.
+ * Read from the master as it is now; an id it no longer has is simply missing. A missing or invalid master → `{}`.
+ */
+function draftSources(vaultDir: string, draft: Draft): Record<string, string> {
+  let master;
+  try {
+    master = readMaster(vaultDir).master;
+  } catch {
+    return {};
+  }
+  const all = new Map<string, string>();
+  for (const s of master.sections) {
+    if ('bullets' in s) for (const b of s.bullets) all.set(b.id, b.text);
+    else
+      for (const e of s.entries) {
+        all.set(e.id, `${e.org} | ${e.title} | ${e.start} – ${e.end}`);
+        for (const b of e.bullets) all.set(b.id, b.text);
+      }
+  }
+  const ids = [...draft.skill_ids, ...draftLines(draft).flatMap(([, l]) => l.cites), ...draft.entries.map((e) => e.entry_id)];
+  return Object.fromEntries(ids.filter((i) => all.has(i)).map((i) => [i, all.get(i)!]));
+}
+
 /** `ApplicationDetail` (contract §8.2), or null when there is no such application. */
-function applicationDetail(db: Database, id: number) {
+function applicationDetail(db: Database, vaultDir: string, id: number) {
   const summary = db.prepare(`SELECT ${SUMMARY} FROM applications WHERE id = ?`).get(id);
   if (!summary) return null;
   const requirements = latest<Requirements>(db, id, 'requirements');
@@ -84,29 +117,34 @@ function applicationDetail(db: Database, id: number) {
     .prepare(`SELECT detail FROM application_events WHERE application_id = ? AND kind = 'rendered' ORDER BY id DESC LIMIT 1`)
     .pluck()
     .get(id) as string | undefined;
+  const draft = latest<Draft>(db, id, 'draft');
+  const edited = db
+    .prepare(`SELECT json_extract(detail, '$.refs') FROM application_events WHERE application_id = ? AND kind = 'edited'`)
+    .pluck()
+    .all(id) as string[];
   return {
     ...summary,
     requirements,
     coverage: requirements && selection ? coverage(requirements, selection) : null,
-    draft: latest(db, id, 'draft'),
-    // ponytail: edited_refs and sources stay empty until the edit route (W2-08) and the master parser (W2-04) land
-    edited_refs: [],
+    draft,
+    edited_refs: [...new Set(edited.flatMap((r) => (JSON.parse(r) as string[] | null) ?? []))],
     verify: latest(db, id, 'verify_report'),
-    sources: {},
+    sources: draft ? draftSources(vaultDir, draft) : {},
     files: db.prepare('SELECT kind, bytes FROM application_files WHERE application_id = ? ORDER BY id').all(id),
     render_warnings: rendered ? ((JSON.parse(rendered) as { warnings?: string[] }).warnings ?? []) : [],
   };
 }
 
 /**
- * Applications under `/api/career/applications` (career contract §8.2): start a run, list, detail, finalise, render,
- * download. `vaultDir` and `dataDir` override the config (tests).
+ * Applications under `/api/career/applications` (career contract §8.2): start a run, list, detail, edit the draft,
+ * finalise, render, download. `vaultDir` and `dataDir` override the config (tests).
  */
 export const careerRoutes =
   ({ vaultDir: vaultOverride, dataDir: dataOverride }: { vaultDir?: string; dataDir?: string } = {}): FastifyPluginAsync =>
   async (api) => {
     const { db } = api;
-    const masterPath = join(vaultOverride ?? api.config.vaultDir, 'career', 'master.md');
+    const vaultDir = vaultOverride ?? api.config.vaultDir;
+    const masterPath = join(vaultDir, 'career', 'master.md');
     failStuckApplications(db); // boot: openDb's recoverStaleLocks fails a career job that was running at a crash
 
     api.post<{ Body: { posting: string } }>(
@@ -153,7 +191,62 @@ export const careerRoutes =
     api.get<{ Params: { id: number } }>(
       '/career/applications/:id',
       { schema: { params: { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } } },
-      async (req, reply) => applicationDetail(db, req.params.id) ?? reply.code(404).send({ error: 'not_found' }),
+      async (req, reply) => applicationDetail(db, vaultDir, req.params.id) ?? reply.code(404).send({ error: 'not_found' }),
+    );
+
+    // ---------- W2-08: edit the draft ----------
+    api.patch<{ Params: { id: number }; Body: { edits: { ref: string; text: string }[] } }>(
+      '/career/applications/:id/draft',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: {
+            type: 'object',
+            properties: {
+              edits: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 50,
+                items: {
+                  type: 'object',
+                  properties: { ref: { type: 'string', maxLength: 200 }, text: { type: 'string', minLength: 1, maxLength: 700 } },
+                  required: ['ref', 'text'],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ['edits'],
+            additionalProperties: false,
+          },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        const status = db.prepare('SELECT status FROM applications WHERE id = ?').pluck().get(id) as string | undefined;
+        if (status === undefined) return reply.code(404).send({ error: 'not_found' });
+        const draft = latest<Draft>(db, id, 'draft');
+        if (!draft || (status !== 'draft_ready' && status !== 'flagged')) return reply.code(409).send({ error: 'wrong_status' });
+        const byRef = new Map(draftLines(draft));
+        const distances: number[] = [];
+        for (const { ref, text } of req.body.edits) {
+          const line = byRef.get(ref);
+          if (!line) return reply.code(400).send({ error: 'bad_ref' });
+          // ponytail: Levenshtein is O(n·m); the model's line is capped at 2000 chars for the metric only.
+          distances.push(editDistance(line.text.slice(0, 2000), text));
+          line.text = text; // cites unchanged; the line is yours now and not re-verified (§8.2)
+        }
+        draft.versions += 1;
+        const refs = [...new Set(req.body.edits.map((e) => e.ref))];
+        const counts = { lines: refs.length, edit_distance: distances.reduce((a, b) => a + b, 0) / distances.length, version: draft.versions };
+        db.transaction(() => {
+          saveText(db, id, 'draft', draft);
+          // Refs are ids and indexes (`cv.entries.<entry_id>.<i>`), never text: they make `edited_refs` real.
+          db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'edited', ?)`).run(id, JSON.stringify({ ...counts, refs }));
+          db.prepare(`UPDATE applications SET updated_at = ${NOW} WHERE id = ?`).run(id);
+        })();
+        audit(db, { actor: 'user', action: 'career.application.edit', args: { id, ...counts } });
+        return applicationDetail(db, vaultDir, id);
+      },
     );
 
     // ---------- W2-09: finalise, render, download ----------
@@ -176,7 +269,7 @@ export const careerRoutes =
           enqueueRender(db, id);
         })();
         audit(db, { actor: 'user', action: 'career.application.final', args: { id, flagged } });
-        return reply.code(202).send(applicationDetail(db, id));
+        return reply.code(202).send(applicationDetail(db, vaultDir, id));
       },
     );
 
@@ -190,7 +283,7 @@ export const careerRoutes =
         event(db, id, 'retry', { to: 'render' });
         enqueueRender(db, id);
       })();
-      return reply.code(202).send(applicationDetail(db, id));
+      return reply.code(202).send(applicationDetail(db, vaultDir, id));
     });
 
     api.get<{ Params: { id: number; kind: string } }>(

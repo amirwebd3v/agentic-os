@@ -259,7 +259,7 @@ Web: add the case to the `Approval` union in `web/src/api.ts` and to `ApprovalCa
 
 **Download headers:** `Content-Disposition: attachment; filename="application-<id>-<cv|letter>.<docx|pdf>"`, a fixed content type (`application/vnd.openxmlformats-officedocument.wordprocessingml.document` or `application/pdf`), `Cache-Control: no-store`. The file is looked up **by database id**, never by a client path. The global CSP is **not** loosened, so there is no in-browser PDF preview.
 
-**Edits:** each edit replaces one line's `text` (cites unchanged), bumps `draft.versions`, writes a new `application_texts` row (`version + 1`), and adds an `edited` event with `{ lines, edit_distance }` (mean normalised Levenshtein per edited line). User-edited lines are not re-verified; they are yours.
+**Edits:** each edit replaces one line's `text` (cites unchanged), bumps `draft.versions`, writes a new `application_texts` row (`version + 1`), and adds an `edited` event with `{ lines, edit_distance, version, refs }` (mean normalised Levenshtein per edited line; `refs` are line refs, ids only, and feed `edited_refs`). Audited as `career.application.edit { id, lines, edit_distance, version }`. User-edited lines are not re-verified; they are yours.
 
 ```ts
 type ApplicationStatus = 'processing' | 'draft_ready' | 'flagged' | 'failed' | 'final' | 'applied' | 'withdrawn';
@@ -276,7 +276,8 @@ type ApplicationDetail = ApplicationSummary & {
   draft: Draft | null;
   edited_refs: string[];                 // lines the user changed
   verify: VerifyReport | null;
-  sources: Record<string, string>;       // cite id -> master text (bullets and skills), so the page can show each line's source
+  sources: Record<string, string>;       // cite id -> master text (bullets and skills, as master.md is now), so the page can show each line's source;
+                                         // each draft entry_id -> "org | title | start – end" for the section heading
   files: { kind: 'cv_docx' | 'cv_pdf' | 'letter_docx' | 'letter_pdf'; bytes: number }[];
   render_warnings: 'cv_over_2_pages'[];  // from the latest successful render (§7)
 };
