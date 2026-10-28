@@ -21,6 +21,10 @@ try {
 
   if (!apply) {
     console.log('\nNothing was changed. Stop the server, then run `pnpm vault:retire --apply` to do it.');
+  } else if (!existsSync(join(vaultDir, '.git'))) {
+    // The restore-point commit needs git; checked before the backup and any delete.
+    console.error('\nThe vault is not a git repository yet. Run `pnpm vault:init` first, then rerun with --apply.');
+    process.exitCode = 1;
   } else {
     // wal_checkpoint so the copy is a complete database file.
     db.pragma('wal_checkpoint(TRUNCATE)');
