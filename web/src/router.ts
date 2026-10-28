@@ -4,7 +4,9 @@ import { createRouter, createWebHashHistory } from 'vue-router';
 export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
+    { path: '/applications', component: () => import('./views/ApplicationsView.vue') },
+    { path: '/applications/:id(\\d+)', component: () => import('./views/ApplicationView.vue'), props: true },
     { path: '/review', component: () => import('./views/ReviewView.vue') },
-    { path: '/:pathMatch(.*)*', redirect: '/review' },
+    { path: '/:pathMatch(.*)*', redirect: '/applications' },
   ],
 });

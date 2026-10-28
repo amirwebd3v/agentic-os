@@ -43,7 +43,7 @@ const unknown = computed(() => props.approval as unknown as { action_type: strin
       <p class="hint">
         {{ approval.payload.stats.entries }} entries, {{ approval.payload.stats.bullets }} bullets, {{ approval.payload.stats.skills }} skills
         from {{ approval.payload.source_files.join(', ') }}. Approve to create <code>career/master.md</code>
-        <span v-if="approval.payload.contact !== undefined">and <code>career/contact.md</code></span>; after that they're yours to edit in Obsidian.
+        <span v-if="approval.payload.contact !== undefined">{{ ' ' }}and <code>career/contact.md</code></span>; after that they're yours to edit in Obsidian.
         <template v-if="approval.payload.contact_hash_before">This replaces your current <code>career/contact.md</code>.</template>
       </p>
       <pre class="plain">{{ approval.payload.master }}</pre>

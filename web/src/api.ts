@@ -28,8 +28,8 @@ export type BatchResult = { id: number; ok: boolean; error?: string }[];
 export const needsLogin = ref(false);
 
 export class ApiError extends Error {
-  /** `detail` is the server's `{ error }` text, shown to the user as plain text. */
-  constructor(readonly status: number, readonly detail?: string) {
+  /** `detail` is the server's `{ error }` text; `warnings` (master import) are file names and reasons. Both plain text. */
+  constructor(readonly status: number, readonly detail?: string, readonly warnings: string[] = []) {
     super(`HTTP ${status}`);
   }
 }
@@ -44,8 +44,9 @@ async function call(method: string, path: string, body?: unknown, signal?: Abort
   });
   if (res.status === 401) needsLogin.value = true;
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-    throw new ApiError(res.status, typeof body?.error === 'string' ? body.error : undefined);
+    const body = (await res.json().catch(() => null)) as { error?: unknown; warnings?: unknown } | null;
+    const warnings = Array.isArray(body?.warnings) ? body.warnings.filter((w): w is string => typeof w === 'string') : [];
+    throw new ApiError(res.status, typeof body?.error === 'string' ? body.error : undefined, warnings);
   }
   return res;
 }
@@ -81,12 +82,26 @@ export type ApplicationSummary = {
   status: ApplicationStatus; step: ApplicationStep | null; fail_code: FailCode | null;
   follow_up_on: string | null; created_at: string; updated_at: string;
 };
+export type FileKind = 'cv_docx' | 'cv_pdf' | 'letter_docx' | 'letter_pdf';
 export type ApplicationDetail = ApplicationSummary & {
   requirements: Requirements | null; coverage: { matched: number; total: number } | null; draft: Draft | null;
-  edited_refs: string[]; verify: VerifyReport | null; sources: Record<string, string>;
-  files: { kind: 'cv_docx' | 'cv_pdf' | 'letter_docx' | 'letter_pdf'; bytes: number }[];
+  /** Lines the user changed (refs as in VerifyReport). */
+  edited_refs: string[]; verify: VerifyReport | null;
+  /** Cite id → master text; an entry id → its `org | title | start – end` header. */
+  sources: Record<string, string>;
+  files: { kind: FileKind; bytes: number }[];
+  /** From the latest successful render (contract §7). */
+  render_warnings: 'cv_over_2_pages'[];
 };
 
 export const createApplication = (posting: string) => json<ApplicationSummary>('POST', '/api/career/applications', { posting });
 export const listApplications = () => json<ApplicationSummary[]>('GET', '/api/career/applications');
 export const getApplication = (id: number) => json<ApplicationDetail>('GET', `/api/career/applications/${id}`);
+export const editDraft = (id: number, edits: { ref: string; text: string }[]) =>
+  json<ApplicationDetail>('PATCH', `/api/career/applications/${id}/draft`, { edits });
+export const finaliseApplication = (id: number, acknowledge_flagged: boolean) =>
+  json<ApplicationDetail>('POST', `/api/career/applications/${id}/final`, { acknowledge_flagged });
+export const rerenderApplication = (id: number) => json<ApplicationDetail>('POST', `/api/career/applications/${id}/render`);
+/** A plain link: the browser downloads it with the session cookie (contract §8.2). */
+export const fileUrl = (id: number, kind: FileKind) => `/api/career/applications/${id}/files/${kind}`;
+export const importMaster = () => json<{ approval_id: number; warnings: string[] }>('POST', '/api/career/master/import');
