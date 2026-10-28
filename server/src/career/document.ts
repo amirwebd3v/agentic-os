@@ -30,8 +30,17 @@ function tableText(text: string, delimiter: string): string {
   }
 }
 
+/** UTF-8, else Windows-1252: what Excel and Notepad on Windows save a CSV or text file as. */
+function decodeText(data: Buffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(data);
+  } catch {
+    return new TextDecoder('windows-1252').decode(data);
+  }
+}
+
 /**
- * Plain text of a supported file (`DOCUMENT_EXTS`, `DATA_EXTS`): `.docx` and `.pdf` extracted, the rest strict UTF-8,
+ * Plain text of a supported file (`DOCUMENT_EXTS`, `DATA_EXTS`): `.docx` and `.pdf` extracted, the rest UTF-8 (else Windows-1252),
  * CSV/TSV as `Header: value` lines, JSON pretty-printed. `null` when it can't be read. Never a parser message (it can quote the file).
  */
 export async function documentText(name: string, data: Buffer): Promise<string | null> {
@@ -39,7 +48,7 @@ export async function documentText(name: string, data: Buffer): Promise<string |
     const ext = extname(name).toLowerCase();
     if (ext === '.docx') return (await mammoth.extractRawText({ buffer: data })).value;
     if (ext === '.pdf') return (await extractText(new Uint8Array(data), { mergePages: true })).text;
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(data);
+    const text = decodeText(data);
     if (ext === '.csv' || ext === '.tsv') return tableText(text, ext === '.tsv' ? '\t' : ',');
     if (ext === '.json') {
       try {
