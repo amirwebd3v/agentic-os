@@ -552,7 +552,7 @@ test('PUT rejects a bad shape, a broken line and an unknown or repeated id with 
     { hash, sections: [{ name: 'Skills', bullets: [{ text: 'Secret\nline' }] }] }, // newline
     { hash, sections: [{ name: 'Skills', bullets: [{ text: 'Secret  ^injected' }] }] }, // would read as an id
     { hash, sections: [{ name: 'Skills', bullets: [{ text: '   ' }] }] }, // empty after trimming
-    { hash, sections: [{ name: 'Skills', bullets: [{ text: 'x'.repeat(501) }] }] },
+    { hash, sections: [{ name: 'Skills', bullets: [{ text: 'x'.repeat(2001) }] }] },
     { hash, sections: exp({ org: 'Secret | Org' }) }, // `|` in a header field
     { hash, sections: exp({ start: 'June 2021' }) },
     { hash, sections: exp({ end: '2021-13' }) },
