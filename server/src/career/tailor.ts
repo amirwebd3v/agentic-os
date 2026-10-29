@@ -14,6 +14,8 @@ import { ID_RE, parseMaster } from './master.ts';
 import type { Entry, Master } from './master.ts';
 import { promptSafe } from './redact.ts';
 import type { Violation } from './verify.ts';
+import { toDraftV2 } from './draft.ts';
+import type { Draft } from './draft.ts';
 
 /** Fixed messages only (contract §1). */
 export class TailorError extends Error {}
@@ -93,26 +95,24 @@ export const Selection = z
   .strict();
 export type Selection = z.infer<typeof Selection>;
 
-// `removed` marks a line the user took out (§8.2): it stays in place so later refs keep their index.
+// Draft v1 (career-contract.md §4.3): the model's answer is built in this shape, then turned into v2 (`draft.ts`).
+// Stored v1 drafts (from before v2) are converted on read; `removed` marks a line the user took out.
 const Line = z.object({ text: z.string(), cites: z.array(z.string()), removed: z.literal(true).optional() }).strict();
-export const HEADER_FIELDS = ['org', 'title', 'start', 'end', 'location'] as const;
-/** The user's per-application override of an entry header; a field left out is copied from the master at render. */
+const HEADER_FIELDS = ['org', 'title', 'start', 'end', 'location'] as const;
 const Header = z.partialRecord(z.enum(HEADER_FIELDS), z.string());
 /** Lengths and cite counts are not limited here: the verifier reports them (§6) instead of failing the step. */
-export const Draft = z
+const DraftV1 = z
   .object({
     summary: Line.nullable(),
     entries: z.array(z.object({ entry_id: Id, bullets: z.array(Line), header: Header.optional(), removed: z.literal(true).optional() }).strict()),
     skill_ids: z.array(z.string()),
-    // The user's own skills and languages lines (§8.2); absent → the selected skills / the master's languages.
     skills_text: z.string().optional(),
     languages_text: z.string().optional(),
     letter: z.object({ paragraphs: z.array(Line) }).strict(),
     versions: z.number().int().positive(),
   })
   .strict();
-export type Draft = z.infer<typeof Draft>;
-export type DraftLine = z.infer<typeof Line>;
+export type DraftV1 = z.infer<typeof DraftV1>;
 
 /** `matched must_have / total must_have` (contract §4.2), shared with the detail route. */
 export function coverage(req: Pick<Requirements, 'must_have'>, sel: Pick<Selection, 'picks'>) {
@@ -212,14 +212,15 @@ export interface Retry {
   violations: Violation[];
 }
 
-/** Step 3: writes the draft; attempt 2 gets the previous draft and its violations. Throws like `selectBullets`. */
+/** Step 3: writes the draft (v2); attempt 2 gets the previous draft and its violations. Throws like `selectBullets`. */
 export async function writeDraft(deps: IntakeDeps, m: MasterIndex, req: Requirements, sel: Selection, retry?: Retry, jobId?: number): Promise<Draft> {
   const parts = [requirementsBlock(req), wrapUntrusted('selection', JSON.stringify({ entries: sel.entries, skill_ids: sel.skill_ids, picks: sel.picks }))];
   if (retry) {
     parts.push(
-      wrapUntrusted('previous_draft', JSON.stringify({ summary: retry.draft.summary, entries: retry.draft.entries, skill_ids: retry.draft.skill_ids, letter: retry.draft.letter })),
+      // Entries carry their master entry id as `source`; refs name a line ("l-7") or an entry ("e-2") of this document.
+      wrapUntrusted('previous_draft', JSON.stringify({ cv: retry.draft.cv, letter: retry.draft.letter })),
       wrapUntrusted('violations', JSON.stringify(retry.violations)),
-      'The previous draft failed the checks listed in <violations> (ref = cv.summary, cv.entries.<entry_id>.<index>, letter.<index>, counted from 0). Write the whole draft again and fix every one: drop or reword the claim, or cite the lines that back it.',
+      'The previous draft failed the checks listed in <violations>. Each ref is the id of a line ("l-7") or an entry ("e-2") in <previous_draft>, or "cv", "letter" or "cv.skills" for the whole CV, the whole letter or the skills. Write the whole draft again and fix every one: drop or reword the claim, or cite the lines that back it.',
     );
   }
   const raw = await (deps.llm ?? structured)(deps, {
@@ -237,7 +238,7 @@ export async function writeDraft(deps: IntakeDeps, m: MasterIndex, req: Requirem
     text: line(l.text.normalize('NFKC').replace(/\p{Cf}/gu, ''), Infinity),
     cites: l.cites.map((c) => c.trim()),
   });
-  const entries: Draft['entries'] = [];
+  const entries: DraftV1['entries'] = [];
   for (const e of res.data.entries) {
     const id = e.entry_id.trim();
     const bullets = e.bullets.map(flat);
@@ -245,7 +246,7 @@ export async function writeDraft(deps: IntakeDeps, m: MasterIndex, req: Requirem
     if (same) same.bullets.push(...bullets);
     else entries.push({ entry_id: id, bullets });
   }
-  const draft = Draft.safeParse({
+  const draft = DraftV1.safeParse({
     summary: res.data.summary && flat(res.data.summary),
     entries,
     skill_ids: res.data.skill_ids.map((s) => s.trim()),
@@ -253,7 +254,8 @@ export async function writeDraft(deps: IntakeDeps, m: MasterIndex, req: Requirem
     versions: 1,
   });
   if (!draft.success) throw new TailorError('model output does not match Draft');
-  return draft.data;
+  // The doc is built in code: entries in master section order with master header values, every line `model`.
+  return toDraftV2(draft.data, m.master, true);
 }
 
 // ---------- step bookkeeping ----------

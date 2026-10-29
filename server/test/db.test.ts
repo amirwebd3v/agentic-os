@@ -1,6 +1,7 @@
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
 import { describe, test, expect, beforeEach } from 'vitest';
 import { openDb } from '../src/db/index.ts';
 import type { Database } from '../src/db/index.ts';
@@ -108,5 +109,49 @@ describe('db', () => {
     expect(() => db.prepare("UPDATE applications SET status = 'done' WHERE id = ?").run(id)).toThrow(/CHECK/);
     expect(() => db.prepare("UPDATE applications SET follow_up_on = 'soon' WHERE id = ?").run(id)).toThrow(/CHECK/);
     expect(() => db.prepare("INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'step', 'x')").run(id)).toThrow(/CHECK/);
+  });
+
+  test('0009 rebuilds applications and application_texts: rows, indexes, foreign keys and triggers survive', () => {
+    // A database at 0008 with data in every table that points at applications.
+    const old = new BetterSqlite3(':memory:');
+    old.pragma('foreign_keys = ON');
+    const dir = new URL('../migrations/', import.meta.url);
+    for (const name of readdirSync(dir).filter((n) => Number(n.slice(0, 4)) <= 8).sort()) old.exec(readFileSync(new URL(name, dir), 'utf8'));
+    old.pragma('user_version = 8');
+    old.exec(`
+      INSERT INTO applications (id, company, role_title, language, status, step, fail_code, follow_up_on, master_hash, archived_at, deleted_at)
+        VALUES (7, 'C', 'R', 'en', 'final', 'render', 'render_failed', '2026-11-01', 'h', '2026-10-01T00:00:00.000Z', NULL);
+      INSERT INTO applications (id, master_hash) VALUES (8, 'h2');
+      INSERT INTO application_texts (application_id, kind, version, body) VALUES (7, 'draft', 1, '{}'), (7, 'draft', 2, '{"v":2}'), (8, 'posting', 1, 'p');
+      INSERT INTO application_events (application_id, kind) VALUES (7, 'created'), (8, 'created');
+      INSERT INTO application_milestones (application_id, kind, on_date) VALUES (7, 'applied', '2026-10-02');
+      INSERT INTO application_files (application_id, kind, relpath, sha256, bytes) VALUES (7, 'cv_docx', '7/cv.docx', 'x', 1);
+    `);
+    const dump = (tables: string[]) => tables.map((t) => old.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all());
+    const tables = ['applications', 'application_texts', 'application_events', 'application_milestones', 'application_files'];
+    const before = dump(tables);
+
+    migrate(old);
+    expect(old.pragma('user_version', { simple: true })).toBe(LATEST);
+    expect(old.pragma('foreign_keys', { simple: true })).toBe(1); // back on after the rebuild
+    expect(dump(tables)).toEqual(before);
+    expect(old.pragma('foreign_key_check')).toEqual([]);
+    for (const t of ['application_texts', 'application_events', 'application_milestones', 'application_files'])
+      expect((old.pragma(`foreign_key_list(${t})`) as { table: string }[]).map((f) => f.table)).toEqual(['applications']);
+    expect(old.prepare("SELECT name FROM sqlite_master WHERE type IN ('index', 'trigger') AND name NOT LIKE 'sqlite_%' AND tbl_name LIKE 'application%' ORDER BY name").pluck().all()).toEqual([
+      'application_events_no_delete', 'application_events_no_update', 'application_milestones_app_date', 'applications_status_updated',
+    ]);
+    expect(old.prepare("SELECT count(*) FROM sqlite_master WHERE name LIKE '%_v2'").pluck().get()).toBe(0);
+
+    // Foreign keys enforce again, the append-only triggers still fire, the new values are allowed and old CHECKs hold.
+    expect(() => old.prepare("INSERT INTO application_events (application_id, kind) VALUES (99, 'created')").run()).toThrow(/FOREIGN KEY/);
+    expect(() => old.prepare('DELETE FROM application_events').run()).toThrow(/append-only/);
+    expect(() => old.prepare('DELETE FROM applications WHERE id = 8').run()).toThrow(/FOREIGN KEY/);
+    old.prepare("UPDATE applications SET status = 'needs_answers', step = 'questions' WHERE id = 8").run();
+    for (const kind of ['gaps', 'ats', 'company', 'vacancy', 'answers']) old.prepare("INSERT INTO application_texts (application_id, kind, body) VALUES (8, ?, '{}')").run(kind);
+    for (const step of ['gaps', 'ats', 'company', 'vacancy', 'letter']) old.prepare('UPDATE applications SET step = ? WHERE id = 8').run(step);
+    expect(() => old.prepare("UPDATE applications SET status = 'done' WHERE id = 8").run()).toThrow(/CHECK/);
+    expect(() => old.prepare("INSERT INTO application_texts (application_id, kind, body) VALUES (8, 'letter', '{}')").run()).toThrow(/CHECK/);
+    old.close();
   });
 });

@@ -8,8 +8,10 @@ import { CONTACT_FIELDS, loadContact } from '../career/contact.ts';
 import type { Contact, ContactField } from '../career/contact.ts';
 import type { Requirements } from '../career/intake.ts';
 import { restoreContact } from '../career/redact.ts';
+import { toDraftV2 } from '../career/draft.ts';
+import type { Draft } from '../career/draft.ts';
 import { event, latest, readMaster } from '../career/tailor.ts';
-import type { Draft, MasterIndex } from '../career/tailor.ts';
+import type { DraftV1, MasterIndex } from '../career/tailor.ts';
 import type { Config } from '../config.ts';
 import type { Database } from '../db/index.ts';
 import { isInside, sha256 } from '../vault/writer.ts';
@@ -45,43 +47,37 @@ export type RenderModel = Record<
 > &
   Record<SectionKey, RenderEntry[]> & { skills: string[]; languages: string[]; paragraphs: string[] };
 
-// ponytail: an edited skills or languages line is split on commas, so an item can't contain one.
-const items = (line: string) => line.split(',').map((s) => s.trim()).filter(Boolean);
-
 /**
- * The data both templates get. Employer, title, dates and place come from the master by `entry_id`, never from the
- * model; the user's header, skills and languages edits (contract §8.2) go on top, and removed items are left out.
- * Contact placeholders are restored here and nowhere else (contract §3.3).
+ * The data both templates get, from the v2 document in section order (career-v2.md §1): every entry renders with
+ * its own header fields (copied from the master when the draft was written, then the owner's). Contact placeholders
+ * are restored here and nowhere else (contract §3.3).
  */
-export function renderModel(draft: Draft, m: MasterIndex, contact: Contact, req: Pick<Requirements, 'company' | 'role_title'>, now: Date): RenderModel {
+export function renderModel(draft: Draft, m: Pick<MasterIndex, 'language'>, contact: Contact, req: Pick<Requirements, 'company' | 'role_title'>, now: Date): RenderModel {
   const restore = (s: string) => restoreContact(s, contact);
-  const text = (l: { text: string }) => restore(l.text);
-  const lines = (list: Draft['letter']['paragraphs']) => list.filter((l) => !l.removed).map(text);
+  const lines = (list: { text: string }[]) => list.map((l) => restore(l.text));
   const sections: Record<SectionKey, RenderEntry[]> = { experience: [], education: [], projects: [], certifications: [] };
-  for (const d of draft.entries) {
-    if (d.removed) continue;
-    const s = m.master.sections.find((x) => 'entries' in x && x.entries.some((e) => e.id === d.entry_id));
-    const e = m.entries.get(d.entry_id);
-    if (!s || !e) throw new RenderError('draft entry missing in master');
-    const list = sections[SECTION_KEY[s.name as keyof typeof SECTION_KEY]];
-    const end = e.end === 'present' && m.language === 'de' ? 'heute' : e.end;
-    const h = (field: keyof NonNullable<typeof d.header>, master: string) => {
-      const mine = d.header?.[field];
-      return mine === undefined ? master : restore(mine);
-    };
-    list.push({
-      first: !list.length,
-      org: h('org', e.org), title: h('title', e.title), start: h('start', e.start), end: h('end', end), location: h('location', e.location),
-      bullets: lines(d.bullets),
-    });
+  const bullets: Record<string, string[]> = {};
+  for (const s of draft.cv.sections) {
+    if ('bullets' in s) {
+      bullets[s.name] = lines(s.bullets);
+      continue;
+    }
+    const list = sections[SECTION_KEY[s.name]];
+    for (const e of s.entries) {
+      list.push({
+        first: !list.length,
+        org: restore(e.org), title: restore(e.title), start: restore(e.start),
+        end: e.end === 'present' && m.language === 'de' ? 'heute' : restore(e.end),
+        location: restore(e.location),
+        bullets: lines(e.bullets),
+      });
+    }
   }
-  const langSection = m.master.sections.find((s) => s.name === 'Languages');
-  const skills = draft.skills_text !== undefined ? items(restore(draft.skills_text)) : draft.skill_ids.flatMap((id) => (m.skills.has(id) ? [m.sources.get(id)!] : []));
-  const languages =
-    draft.languages_text !== undefined ? items(restore(draft.languages_text)) : langSection && 'bullets' in langSection ? langSection.bullets.map((b) => b.text) : [];
+  const skills = bullets.Skills ?? [];
+  const languages = bullets.Languages ?? [];
   return {
     ...(Object.fromEntries(CONTACT_FIELDS.map((f) => [f, contact[f] ?? ''])) as Record<ContactField, string>),
-    summary: draft.summary && !draft.summary.removed ? text(draft.summary) : '',
+    summary: (bullets.Summary ?? []).join('\n'), // one line, or the owner's added lines as line breaks
     ...sections,
     skills,
     skills_text: skills.join(', '),
@@ -135,7 +131,7 @@ export const careerRender =
     mkdirSync(dir, { recursive: true });
 
     const master = readMaster(config.vaultDir);
-    const data = renderModel(latest<Draft>(db, id, 'draft'), master, loadContact(config.vaultDir), latest<Requirements>(db, id, 'requirements'), new Date());
+    const data = renderModel(toDraftV2(latest<Draft | DraftV1>(db, id, 'draft'), master.master), master, loadContact(config.vaultDir), latest<Requirements>(db, id, 'requirements'), new Date());
     const docs = [
       { name: 'cv', own: 'template.docx', starter: 'cv-template.docx' },
       { name: 'letter', own: 'letter-template.docx', starter: 'letter-template.docx' },

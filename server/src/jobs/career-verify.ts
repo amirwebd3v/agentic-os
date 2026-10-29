@@ -2,7 +2,9 @@ import { z } from 'zod';
 import { loadContact } from '../career/contact.ts';
 import type { Requirements } from '../career/intake.ts';
 import { atStep, enqueueStep, event, latest, readMaster, saveText, setApp, TailorError } from '../career/tailor.ts';
-import type { Draft } from '../career/tailor.ts';
+import { toDraftV2 } from '../career/draft.ts';
+import type { Draft } from '../career/draft.ts';
+import type { DraftV1 } from '../career/tailor.ts';
 import { verifyDraft } from '../career/verify.ts';
 import type { Config } from '../config.ts';
 import type { Database } from '../db/index.ts';
@@ -21,9 +23,10 @@ export const careerVerify =
     if (!p.success) throw new TailorError('career_verify: invalid payload');
     const { applicationId: id, attempt } = p.data;
     if (!atStep(db, id, 'verify')) return;
+    const master = readMaster(config.vaultDir);
     const report = verifyDraft(
-      latest<Draft>(db, id, 'draft'),
-      readMaster(config.vaultDir),
+      toDraftV2(latest<Draft | DraftV1>(db, id, 'draft'), master.master),
+      master,
       latest<Requirements>(db, id, 'requirements'),
       loadContact(config.vaultDir),
     );
