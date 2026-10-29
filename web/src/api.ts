@@ -101,10 +101,12 @@ export type ApplicationDetail = ApplicationSummary & {
   /** The master's Languages lines. */
   languages: string[];
   files: { kind: FileKind; bytes: number }[];
+  /** Tracking, oldest date first. */
+  milestones: Milestone[];
 };
 
 export const createApplication = (posting: string) => json<ApplicationSummary>('POST', '/api/career/applications', { posting });
-export const listApplications = () => json<ApplicationSummary[]>('GET', '/api/career/applications');
+export const listApplications = () => json<ApplicationListItem[]>('GET', '/api/career/applications');
 export const getApplication = (id: number) => json<ApplicationDetail>('GET', `/api/career/applications/${id}`);
 export const editDraft = (id: number, edits: DraftEdit[]) =>
   json<ApplicationDetail>('PATCH', `/api/career/applications/${id}/draft`, { edits });
@@ -114,3 +116,18 @@ export const rerenderApplication = (id: number) => json<ApplicationDetail>('POST
 /** A plain link: the browser downloads it with the session cookie (contract §8.2). */
 export const fileUrl = (id: number, kind: FileKind) => `/api/career/applications/${id}/files/${kind}`;
 export const importMaster = () => json<{ approval_id: number; warnings: string[] }>('POST', '/api/career/master/import');
+
+// Tracking (contract §5, §8.2). `note` is the owner's own text: render as text only.
+export type MilestoneKind = 'applied' | 'feedback' | 'interview' | 'offer' | 'rejected' | 'withdrawn' | 'note';
+export type Milestone = { id: number; kind: MilestoneKind; on_date: string; note: string | null; created_at: string; updated_at: string };
+export type MilestoneInput = { kind: MilestoneKind; on_date: string; note: string };
+export type ApplicationListItem = ApplicationSummary & {
+  last_milestone: MilestoneKind | null; last_milestone_on: string | null; next_interview: string | null;
+};
+const appPath = (id: number) => `/api/career/applications/${id}`;
+export const addMilestone = (id: number, m: MilestoneInput) => json<ApplicationDetail>('POST', `${appPath(id)}/milestones`, m);
+export const editMilestone = (id: number, mid: number, m: MilestoneInput) => json<ApplicationDetail>('PATCH', `${appPath(id)}/milestones/${mid}`, m);
+export const deleteMilestone = (id: number, mid: number) => json<ApplicationDetail>('DELETE', `${appPath(id)}/milestones/${mid}`);
+export const setFollowUp = (id: number, follow_up_on: string | null) => json<ApplicationDetail>('PATCH', appPath(id), { follow_up_on });
+export const createManualApplication = (a: { company: string; role_title: string; applied_on: string }) =>
+  json<ApplicationSummary>('POST', '/api/career/applications/manual', a);
