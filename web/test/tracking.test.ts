@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import type { ApplicationDetail, ApplicationListItem, Milestone } from '../src/api';
 import ApplicationsView from '../src/views/ApplicationsView.vue';
 import ApplicationView from '../src/views/ApplicationView.vue';
+import NewApplicationView from '../src/views/NewApplicationView.vue';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -16,7 +17,7 @@ const ms = (id: number, kind: Milestone['kind'], on_date: string, note: string |
   ({ id, kind, on_date, note, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z' });
 const app = (over: Partial<ApplicationDetail> = {}): ApplicationDetail => ({
   id: 1, company: 'Acme', role_title: 'Engineer', language: null, status: 'applied', step: null, fail_code: null,
-  follow_up_on: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+  follow_up_on: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', archived_at: null,
   requirements: null, coverage: null, draft: null, edited_refs: [], verify: null, sources: {}, languages: [], files: [],
   milestones: [ms(7, 'applied', '2026-10-01', EVIL), ms(8, 'interview', '2099-01-05')],
   ...over,
@@ -116,29 +117,38 @@ test('add, edit (Esc cancels) and delete milestones, and set the follow-up date'
   expect(calls.find((c) => c.key === 'PATCH /api/career/applications/1')!.body).toEqual({ follow_up_on: '2026-11-03' });
 });
 
-test('the list shows tracking columns, and an application sent elsewhere can be added', async () => {
+test('the list shows the next step in words, filters and searches; an application sent elsewhere can be added', async () => {
   const row: ApplicationListItem = {
-    ...app(), company: EVIL, follow_up_on: '2026-11-03', last_milestone: 'interview', last_milestone_on: '2026-10-20', next_interview: '2099-01-05',
+    ...app(), company: EVIL, follow_up_on: '2099-11-03', last_milestone: 'interview', last_milestone_on: '2026-10-20', next_interview: '2099-01-05',
   };
+  const other: ApplicationListItem = { ...row, id: 3, role_title: 'Designer', company: 'Globex', status: 'draft_ready', next_interview: null };
   const calls = api({
-    'GET /api/career/applications': () => [row],
+    'GET /api/career/applications': () => [row, other],
     'POST /api/career/applications/manual': () => ({ ...row, id: 2 }),
   });
   const { el, router } = await mount(ApplicationsView);
-  await vi.waitFor(() => expect(el.querySelector('tbody tr')).not.toBeNull());
-  const cells = [...el.querySelectorAll('tbody td')].map((td) => td.textContent?.trim());
-  expect(cells[1]).toBe(EVIL);
-  expect(cells[3]).toMatch(/^Interview, /);
-  expect(el.querySelector('tbody td:nth-child(5) time')?.getAttribute('datetime')).toBe('2099-01-05');
-  expect(el.querySelector('tbody td:nth-child(6) time')?.getAttribute('datetime')).toBe('2026-11-03');
+  await vi.waitFor(() => expect(el.querySelectorAll('tbody tr')).toHaveLength(2));
+  const cells = [...el.querySelector('tbody tr')!.querySelectorAll('td')].map((td) => td.textContent?.trim());
+  expect(cells[1]).toContain(EVIL);
+  expect(cells[3]).toMatch(/^Interview /);
   expect(el.querySelector('img')).toBeNull();
 
-  const form = el.querySelector('.manual form')!;
+  [...el.querySelectorAll<HTMLButtonElement>('.chips button')].find((b) => b.textContent?.startsWith('Needs you'))!.click();
+  await vi.waitFor(() => expect(el.querySelectorAll('tbody tr')).toHaveLength(1));
+  expect(el.querySelector('tbody')!.textContent).toContain('Designer');
+  set(el.querySelector('#q')!, 'nothing like this');
+  await vi.waitFor(() => expect(el.querySelector('tbody')).toBeNull());
+
+  const added = await mount(NewApplicationView);
+  [...added.el.querySelectorAll<HTMLButtonElement>('.seg button')].find((b) => b.textContent === 'I applied elsewhere')!.click();
+  await vi.waitFor(() => expect(added.el.querySelector('form.milestone-form')).not.toBeNull());
+  const form = added.el.querySelector('form.milestone-form')!;
   const [company, role, applied] = [...form.querySelectorAll('input')];
   set(company!, 'Initech');
   set(role!, 'Developer');
   set(applied!, '2026-10-02');
   submit(form);
-  await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/applications/2'));
+  await vi.waitFor(() => expect(added.router.currentRoute.value.path).toBe('/applications/2'));
   expect(calls.find((c) => c.key.startsWith('POST'))!.body).toEqual({ company: 'Initech', role_title: 'Developer', applied_on: '2026-10-02' });
+  void router;
 });

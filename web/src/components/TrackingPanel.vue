@@ -81,7 +81,7 @@ const saveFollowUp = () => act(() => setFollowUp(props.app.id, followUp.value ||
           <time :datetime="m.on_date">{{ dayText(m.on_date) }}</time>
           <div class="milestone">
             <strong>{{ MILESTONE_TEXT[m.kind] }}</strong>
-            <span v-if="m.on_date >= today()" class="tag">Upcoming</span>
+            <span v-if="m.on_date > today()" class="tag">Upcoming</span>
             <p v-if="m.note" class="note">{{ m.note }}</p>
           </div>
           <span class="row">

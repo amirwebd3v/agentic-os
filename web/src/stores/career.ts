@@ -124,3 +124,24 @@ export const MILESTONE_TEXT: Record<MilestoneKind, string> = {
 export const today = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 /** A `YYYY-MM-DD` date in words, read as a local day. */
 export const dayText = (d: string) => new Date(`${d}T00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+// ---------- home and filters ----------
+export type Group = 'needs' | 'follow' | 'progress' | 'done';
+/**
+ * Where an application belongs on Home and the owner's next step, in words. A final draft still needs you: the app
+ * never sends anything, so it waits until you send it and mark it applied.
+ */
+export function nextStep(a: ApplicationListItem, day = today()): { group: Group; text: string } {
+  if (a.status === 'processing') return { group: 'progress', text: a.step ? `${STEP_TEXT[a.step]}…` : 'Working…' };
+  if (a.status === 'final' && a.step === 'render') return { group: 'progress', text: `${STEP_TEXT.render}…` };
+  if (a.status === 'failed') return { group: 'needs', text: 'The run stopped. Retry it' };
+  if (a.status === 'final' && a.fail_code === 'render_failed') return { group: 'needs', text: 'Create the files again' };
+  if (a.status === 'draft_ready') return { group: 'needs', text: 'Read the draft and finalise it' };
+  if (a.status === 'flagged') return { group: 'needs', text: 'Check the marked lines' };
+  if (a.follow_up_on && a.follow_up_on <= day && a.status !== 'withdrawn')
+    return { group: 'follow', text: a.follow_up_on < day ? `Follow up, due ${dayText(a.follow_up_on)}` : 'Follow up today' };
+  if (a.status === 'final') return { group: 'needs', text: 'Send the files yourself, then mark it applied' };
+  if (a.next_interview) return { group: 'done', text: `Interview ${dayText(a.next_interview)}` };
+  if (a.last_milestone) return { group: 'done', text: `${MILESTONE_TEXT[a.last_milestone]}, ${dayText(a.last_milestone_on!)}` };
+  return { group: 'done', text: a.status === 'withdrawn' ? 'Withdrawn' : 'Applied' };
+}
