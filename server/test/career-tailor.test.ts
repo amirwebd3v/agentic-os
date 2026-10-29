@@ -10,7 +10,7 @@ import type { Draft, Selection } from '../src/career/tailor.ts';
 import { verifyDraft } from '../src/career/verify.ts';
 import { parseConfig } from '../src/config.ts';
 import { enqueue } from '../src/db/jobs.ts';
-import { failCareerJob } from '../src/http/routes/career.ts';
+import { failCareerJob, retryRun } from '../src/http/routes/career.ts';
 import { careerDraft } from '../src/jobs/career-draft.ts';
 import { careerIntake } from '../src/jobs/career-intake.ts';
 import { careerMatch } from '../src/jobs/career-match.ts';
@@ -334,4 +334,20 @@ test('a step job for an application that moved on does nothing', async () => {
   expect(t.cap.calls).toHaveLength(0);
   expect(t.app()).toEqual({ status: 'flagged', step: 'verify', fail_code: null });
   expect(t.db.prepare('SELECT count(*) FROM application_events').pluck().get()).toBe(0);
+});
+
+test('a retried run goes through every step again in the same application, with new job keys and text versions', async () => {
+  const t = pipeline({ drafts: [() => { throw new LlmError('overloaded', 'provider error 529', 529); }, bad, good] });
+  await t.run();
+  expect(t.app()).toEqual({ status: 'failed', step: 'draft', fail_code: 'provider_error' });
+  retryRun(t.db, t.id, 'h2');
+  await t.run();
+  expect(t.app()).toEqual({ status: 'draft_ready', step: 'verify', fail_code: null });
+  expect(t.jobs().map((j) => j.key.replace(`:${t.id}:`, ':'))).toEqual([
+    'career:intake:0', 'career:match:0', 'career:draft:1',
+    'career:intake:1', 'career:match:0:1', 'career:draft:1:1', 'career:verify:1:1', 'career:draft:2:1', 'career:verify:2:1',
+  ]);
+  expect(t.texts('requirements')).toHaveLength(2);
+  expect(t.texts('selection')).toHaveLength(2);
+  expect(t.texts('draft')).toEqual([asDraft(bad()), asDraft(good())]);
 });
