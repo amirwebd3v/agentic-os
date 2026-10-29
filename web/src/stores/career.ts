@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import {
   createApplication, editDraft, finaliseApplication, getApplication, listApplications, rerenderApplication,
-  type ApplicationDetail, type ApplicationSummary, type FailCode, type VerifyReport,
+  type ApplicationDetail, type ApplicationSummary, type DraftEdit, type FailCode, type VerifyReport,
 } from '../api';
 
 export const POLL_MS = 1500;
@@ -110,7 +110,7 @@ export const useCareerStore = defineStore('career', () => {
     const app = await fn();
     if (mine === seq) show(app);
   };
-  const edit = (id: number, ref: string, text: string) => change(() => editDraft(id, [{ ref, text }]));
+  const edit = (id: number, edits: DraftEdit[]) => change(() => editDraft(id, edits));
   const finalise = (id: number, acknowledgeFlagged: boolean) => change(() => finaliseApplication(id, acknowledgeFlagged));
   const rerender = (id: number) => change(() => rerenderApplication(id));
   return { list, current, failure, pollError, open, stop, load, create, edit, finalise, rerender };

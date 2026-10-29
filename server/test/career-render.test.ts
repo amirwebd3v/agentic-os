@@ -106,6 +106,49 @@ test('render model: employer, title and dates from the master; placeholders rest
   expect(letter).not.toMatch(/\{|undefined/);
 });
 
+test('render model: the header, skills and languages edits win over the master; removed items vanish; added lines render', async () => {
+  const t = await setup('draft_ready', null);
+  const patch = await t.app.inject(
+    t.authed({
+      method: 'PATCH',
+      url: `/api/career/applications/${t.id}/draft`,
+      payload: {
+        edits: [
+          { ref: `cv.entries.${N}.header.title`, text: 'Platform Lead' },
+          { ref: `cv.entries.${N}.header.end`, text: '2026-09' },
+          { op: 'remove', ref: `cv.entries.${N}.header.location` },
+          { op: 'remove', ref: `cv.entries.${N}.0` },
+          { op: 'add', ref: `cv.entries.${N}`, text: 'Mentored two engineers; reach {{CONTACT_EMAIL}}.' },
+          { op: 'remove', ref: `cv.entries.${E}` },
+          { op: 'remove', ref: 'cv.summary' },
+          { ref: 'cv.skills', text: 'Kubernetes ,  Go,,' },
+          { ref: 'cv.languages', text: 'English (C2)' },
+          { op: 'remove', ref: 'letter.1' },
+          { op: 'add', ref: 'letter', text: 'An added closing paragraph.' },
+        ],
+      },
+    }),
+  );
+  expect(patch.statusCode).toBe(200);
+  const draft = (patch.json() as { draft: Draft }).draft;
+  const model = renderModel(draft, readMaster(t.vaultDir), { email: 'jane.doe@example.com' }, REQ, new Date('2026-10-28T12:00:00Z'));
+  expect(model.experience).toEqual([
+    {
+      first: true, org: 'Northwind Logistics', title: 'Platform Lead', start: '2021-03', end: '2026-09', location: '',
+      bullets: ['Mentored two engineers; reach jane.doe@example.com.'],
+    },
+  ]);
+  expect(model).toMatchObject({ education: [], summary: '', skills: ['Kubernetes', 'Go'], skills_text: 'Kubernetes, Go', languages: ['English (C2)'], languages_text: 'English (C2)' });
+  expect(model.paragraphs).toEqual([DRAFT.letter.paragraphs[0]!.text, expect.stringContaining('Reach me at jane.doe@example.com'), 'An added closing paragraph.']);
+
+  const cv = docxText(fillDocx(readFileSync(join(STARTERS, 'cv-template.docx')), model));
+  for (const s of ['Platform Lead', 'Northwind Logistics', '2026-09', 'Mentored two engineers; reach jane.doe@example.com.', 'Kubernetes, Go', 'English (C2)']) expect(cv).toContain(s);
+  for (const s of ['DevOps Engineer', 'Hamburg', 'Cut deploy time', 'Hochschule Bremen', 'Education', 'Platform engineer with', 'Terraform', 'German']) expect(cv).not.toContain(s);
+  const letter = docxText(fillDocx(readFileSync(join(STARTERS, 'letter-template.docx')), model));
+  expect(letter).toContain('An added closing paragraph.');
+  expect(letter).not.toContain('I cut deploy time');
+});
+
 // ---------- job ----------
 
 test('render: both docx files in out/<id>/, step leaves render, a rendered event; no contact value or draft text outside the files', async () => {
