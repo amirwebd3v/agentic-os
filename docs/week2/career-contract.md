@@ -206,6 +206,7 @@ type RenderModel = {
   languages: string[]; languages_text: string;    // every Languages line of the master
   company: string; role_title: string; date: string;  // from Requirements; date = render day, "28 October 2026" / "28. Oktober 2026"
   paragraphs: string[];                           // the letter
+  salutation: string; closing: string;            // by master language: "Dear Hiring Manager," / "Kind regards,"; German "Sehr geehrte Damen und Herren," / "Mit freundlichen Grüßen"
 };
 ```
 - **Tags for your own template** (Word: type them as plain text; an unknown tag renders as nothing):
@@ -213,7 +214,8 @@ type RenderModel = {
   - Summary: `{summary}`; hide a heading with it: `{#summary}` … `{/summary}`, each tag alone in its paragraph.
   - Entries: `{#experience}` … `{/experience}` (same for `education`, `projects`, `certifications`) repeats the paragraphs between for each entry, with `{org}` `{title}` `{start}` `{end}` `{location}` and the bullets as `{#bullets}` / `{.}` / `{/bullets}` (put `{.}` in a bulleted paragraph). A section heading inside `{#first}` … `{/first}` appears once and vanishes with an empty section. `end` is `present` (`heute` for a German master) for an ongoing entry.
   - Skills and languages: `{skills_text}` / `{languages_text}`, or loops `{#skills}{.}{/skills}`.
-  - Letter: `{company}` `{role_title}` `{date}` and `{#paragraphs}` / `{.}` / `{/paragraphs}`.
+  - Letter: `{company}` `{role_title}` `{date}`, `{salutation}` and `{closing}` (the paragraphs have neither), and `{#paragraphs}` / `{.}` / `{/paragraphs}`.
+  - A headline under the name: `{role_title}` (the posting's), or type your own fixed text in the template.
   - Any condition: `{#x}` … `{/x}` shows its content when `x` is non-empty, `{^x}` … `{/x}` when it is empty.
 - Templates: `dataDir/career/template.docx` (CV) and `dataDir/career/letter-template.docx` win over the synthetic starters in `server/templates/career/` (`cv-template.docx`, `letter-template.docx`).
 - Placeholders in the final text are replaced by the contact values at this step only. Data values are never parsed as tags, so a line containing `{` or `{{x}}` stays literal.
