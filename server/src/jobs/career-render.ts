@@ -39,7 +39,10 @@ export function inside(root: string, rel: string): string {
 type RenderEntry = { first: boolean; org: string; title: string; start: string; end: string; location: string; bullets: string[] };
 const SECTION_KEY = { Experience: 'experience', Education: 'education', Projects: 'projects', Certifications: 'certifications' } as const;
 type SectionKey = (typeof SECTION_KEY)[keyof typeof SECTION_KEY];
-export type RenderModel = Record<ContactField | 'summary' | 'skills_text' | 'languages_text' | 'company' | 'role_title' | 'date', string> &
+export type RenderModel = Record<
+  ContactField | 'summary' | 'skills_text' | 'languages_text' | 'company' | 'role_title' | 'date' | 'salutation' | 'closing',
+  string
+> &
   Record<SectionKey, RenderEntry[]> & { skills: string[]; languages: string[]; paragraphs: string[] };
 
 /**
@@ -72,6 +75,10 @@ export function renderModel(draft: Draft, m: MasterIndex, contact: Contact, req:
     role_title: req.role_title,
     date: new Intl.DateTimeFormat(m.language === 'de' ? 'de-DE' : 'en-GB', { dateStyle: 'long' }).format(now),
     paragraphs: draft.letter.paragraphs.map(text),
+    // The letter's paragraphs carry no salutation or sign-off (tailor prompt), so a template takes them from here.
+    ...(m.language === 'de'
+      ? { salutation: 'Sehr geehrte Damen und Herren,', closing: 'Mit freundlichen Grüßen' }
+      : { salutation: 'Dear Hiring Manager,', closing: 'Kind regards,' }),
   };
 }
 
