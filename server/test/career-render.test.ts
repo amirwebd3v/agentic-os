@@ -87,7 +87,8 @@ test('render model: employer, title and dates from the master; placeholders rest
     { first: true, org: 'Northwind Logistics', title: 'DevOps Engineer', start: '2021-03', end: 'present', location: 'Hamburg', bullets: [DRAFT.entries[0]!.bullets[0]!.text] },
   ]);
   expect(model.education[0]).toMatchObject({ first: true, org: 'Hochschule Bremen', title: 'BSc Computer Science', start: '2015', end: '2018' });
-  expect(model).toMatchObject({ projects: [], certifications: [], skills_text: 'Terraform, AWS', languages_text: 'English (C1), German (native)', date: '28 October 2026', address: '' });
+  expect(model).toMatchObject({ projects: [], certifications: [], skills_text: 'Terraform, AWS', languages_text: 'English (C1), German (native)', date: '28 October 2026', address: '', salutation: 'Dear Hiring Manager,', closing: 'Kind regards,' });
+  expect(renderModel(DRAFT, { ...readMaster(vault), language: 'de' }, contact, REQ, new Date())).toMatchObject({ salutation: 'Sehr geehrte Damen und Herren,', closing: 'Mit freundlichen Grüßen' });
   expect(model.paragraphs[2]).toBe('Reach me at jane.doe@example.com or +49 30 1234567;  is empty. Regards, Jane Mary Doe');
   expect(() => renderModel({ ...DRAFT, entries: [{ entry_id: 'exp-nowhere-2020', bullets: [] }] }, readMaster(vault), contact, REQ, new Date())).toThrow('draft entry missing in master');
 
@@ -100,6 +101,8 @@ test('render model: employer, title and dates from the master; placeholders rest
   const letter = docxText(fillDocx(readFileSync(join(STARTERS, 'letter-template.docx')), model));
   expect(letter).toContain('Marlowe Freight Technologies\nPlatform Engineer\n');
   expect(letter).toContain('Reach me at jane.doe@example.com');
+  expect(letter).toContain('Dear Hiring Manager,\nI am applying');
+  expect(letter).toContain('Kind regards,\nJane Mary Doe');
   expect(letter).not.toMatch(/\{|undefined/);
 });
 
