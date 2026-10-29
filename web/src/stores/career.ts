@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import {
   createApplication, editDraft, finaliseApplication, getApplication, listApplications, rerenderApplication,
-  type ApplicationDetail, type ApplicationSummary, type DraftEdit, type FailCode, type VerifyReport,
+  type ApplicationDetail, type ApplicationListItem, type ApplicationSummary, type DraftEdit, type FailCode, type MilestoneKind, type VerifyReport,
 } from '../api';
 
 export const POLL_MS = 1500;
@@ -61,7 +61,7 @@ export const violationText = (v: Violation) =>
 
 /** Applications; `open(id)` loads one and polls it every 1.5 s while a step runs. */
 export const useCareerStore = defineStore('career', () => {
-  const list = ref<ApplicationSummary[]>([]);
+  const list = ref<ApplicationListItem[]>([]);
   const current = ref<ApplicationDetail | null>(null);
   const pollError = ref(false);
   const failure = computed(() => {
@@ -113,5 +113,14 @@ export const useCareerStore = defineStore('career', () => {
   const edit = (id: number, edits: DraftEdit[]) => change(() => editDraft(id, edits));
   const finalise = (id: number, acknowledgeFlagged: boolean) => change(() => finaliseApplication(id, acknowledgeFlagged));
   const rerender = (id: number) => change(() => rerenderApplication(id));
-  return { list, current, failure, pollError, open, stop, load, create, edit, finalise, rerender };
+  return { list, current, failure, pollError, open, stop, load, create, change, edit, finalise, rerender };
 });
+
+// ---------- tracking ----------
+export const MILESTONE_TEXT: Record<MilestoneKind, string> = {
+  applied: 'Applied', feedback: 'Feedback', interview: 'Interview', offer: 'Offer', rejected: 'Rejected', withdrawn: 'Withdrawn', note: 'Note',
+};
+/** Today as `YYYY-MM-DD` in local time. */
+export const today = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+/** A `YYYY-MM-DD` date in words, read as a local day. */
+export const dayText = (d: string) => new Date(`${d}T00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
