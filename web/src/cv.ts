@@ -33,13 +33,20 @@ export const problems = (sections: CvSection[]): string[] =>
 
 /** As saved: text trimmed, empty lines, entries and sections dropped, the import marks (`new`, `from`) stripped. */
 export function cleaned<T extends CvSection>(sections: T[]): T[] {
-  const line = ({ new: _n, from: _f, ...l }: CvLine) => ({ ...l, text: l.text.trim() });
+  const unmark = <T extends { new?: true; from?: string }>(x: T): T => {
+    const copy = { ...x };
+    delete copy.new;
+    delete copy.from;
+    return copy;
+  };
+  const line = (l: CvLine) => ({ ...unmark(l), text: l.text.trim() });
   const lines = (list: CvLine[]) => list.map(line).filter((l) => l.text);
   return sections
     .map((s) => {
       if (!isEntries(s)) return { ...s, bullets: lines(s.bullets) };
       const entries = s.entries
-        .map(({ new: _n, from: _f, ...e }) => ({
+        .map((x) => unmark(x))
+        .map((e) => ({
           ...e, org: e.org.trim(), title: e.title.trim(), start: e.start.trim(), end: e.end.trim(), location: e.location.trim(), bullets: lines(e.bullets),
         }))
         .filter((e) => e.org || e.title || e.bullets.length);

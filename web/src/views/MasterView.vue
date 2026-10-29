@@ -60,6 +60,8 @@ const PARSE_ERRORS: Record<string, string> = {
   provider_not_configured: 'Connect a provider first (see the banner at the top).',
   provider_error: 'The model provider returned an error. Try again.',
   import_unreadable: 'Those files gave no text. Only Word files (.docx) can be read here.',
+  bad_upload: 'Choose up to 10 Word files (.docx), each under 5 MB.',
+  bad_master: 'Your current career/master.md can’t be read, so nothing can be merged into it. Fix it in Obsidian first.',
 };
 const base64 = (f: File) =>
   new Promise<string>((ok, fail) => {
