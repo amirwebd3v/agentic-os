@@ -1,11 +1,9 @@
 # Agentic OS
 
-A personal, local-first knowledge base for the areas of your life (career first; email, social and blog next), with one-click automations that produce **drafts only** and a review queue for anything the system wants to change in your Obsidian vault. Everything runs on this laptop; data leaves it only as prompts to the configured LLM provider.
+A personal, local-first knowledge base for the areas of your life (career first; email, social and blog next), with one-click automations that produce **drafts only**, a CV editor for every draft, and a dashboard of what's pending and what it cost. Everything runs on this laptop; data leaves it only as prompts to the configured LLM provider.
 
-- **Plan & decisions:** [`docs/plan-review.md`](docs/plan-review.md)
 - **Rules for every Claude session:** [`CLAUDE.md`](CLAUDE.md)
-- **How work is built:** [`docs/Workflow.md`](docs/Workflow.md)
-- **Current plan (Career slice first):** [`docs/week2/implementation-plan.md`](docs/week2/implementation-plan.md), contract in [`docs/week2/career-contract.md`](docs/week2/career-contract.md)
+- **Plans and specs** live in `docs/`, kept on the owner's machine only (gitignored): original review (architecture, threat model) `docs/plan-review.md`; how work is built `docs/Workflow.md`; Career spec `docs/week2/career-v2.md`, status `docs/week2/implementation-plan.md`, shapes `docs/week2/career-contract.md`
 - **Backlog:** the GitHub Project (https://github.com/users/amirwebd3v/projects/1)
 
 ## Prerequisites (Windows 11)
@@ -33,14 +31,16 @@ Then open `vaultDir` in Obsidian (*Open folder as vault*) and edit its `CLAUDE.m
 pnpm dev          # server :3000 + web UI :5173
 ```
 1. Open the login link the server prints. If you've lost it, run `pnpm login-url`.
-2. Open http://127.0.0.1:5173. **Review** lists what the system proposes (a note you edited in Obsidian that the app also wants to change, and your master-CV import: drop your CV into `dataDir/career/import/` as an extracted LinkedIn export or any `.pdf`/`.docx`/`.md`/`.txt`/`.csv`/`.tsv`/`.json` files, whatever their names or columns; every skipped file is named with its reason). Approve or reject each item.
+2. Open http://127.0.0.1:5173. **Home** shows AI usage and cost, system health and each area. **Master CV**: upload one or more Word CVs (merged into one master, you check the new lines, then Save), or drop a LinkedIn export / any CV file into `dataDir/career/import/` and approve it under **Review**. **Applications**: paste a posting, edit the tailored CV and letter, finalise, download the `.docx` files, track milestones and follow-ups.
 3. To add a life area, add a line to the `## Areas` list in the vault's `CLAUDE.md`; the app reads it at every boot.
 
 ## Where things live
 | What | Where |
 |---|---|
 | Notes and the areas list (`CLAUDE.md`) | `vaultDir` (Obsidian vault, git) |
-| Database, logs, provider capabilities | `dataDir/brain.db`, … |
+| Database and logs | `dataDir/brain.db`, … |
+| Generated CVs and letters | `dataDir/career/out/<id>/` |
+| Your Word templates | `dataDir/career/template.docx`, `letter-template.docx` |
 | API keys | `.env` (gitignored), or Windows Credential Manager via `pnpm secrets set anthropic` |
 
 Check where a key is coming from with `pnpm secrets status`.
@@ -67,4 +67,3 @@ New-NetFirewallRule -DisplayName "AgenticOS block inbound" -Direction Inbound -L
 | "Port 8009 is in use by …, not a sidecar" (only when running the sidecar) | Another program holds the port. Free it; the app never kills non-sidecar processes. |
 | `uv` / `bun` not found right after installing | Open a new terminal: winget's PATH change only reaches new shells. |
 | 401 everywhere | The session cookie expired or the database was reset. Open a fresh `pnpm login-url` link. |
-| Memory tools (claude-mem) fail | It needs Bun at `~/.bun/bin/bun.exe`. Check `~/.claude-mem/logs`. |
