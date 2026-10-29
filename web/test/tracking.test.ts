@@ -17,7 +17,7 @@ const ms = (id: number, kind: Milestone['kind'], on_date: string, note: string |
 const app = (over: Partial<ApplicationDetail> = {}): ApplicationDetail => ({
   id: 1, company: 'Acme', role_title: 'Engineer', language: null, status: 'applied', step: null, fail_code: null,
   follow_up_on: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
-  requirements: null, coverage: null, draft: null, edited_refs: [], verify: null, sources: {}, files: [],
+  requirements: null, coverage: null, draft: null, edited_refs: [], verify: null, sources: {}, languages: [], files: [],
   milestones: [ms(7, 'applied', '2026-10-01', EVIL), ms(8, 'interview', '2099-01-05')],
   ...over,
 });
