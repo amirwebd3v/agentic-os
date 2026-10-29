@@ -38,7 +38,7 @@ const ImportPayload = z.object({
 });
 
 /** Writes `text` beside `abs` and fsyncs it; the caller renames it into place as the last step of its transaction. */
-function stage(abs: string, text: string): string {
+export function stage(abs: string, text: string): string {
   mkdirSync(dirname(abs), { recursive: true });
   const tmp = `${abs}.${randomUUID()}.tmp`;
   const fd = openSync(tmp, 'wx');
@@ -51,7 +51,7 @@ function stage(abs: string, text: string): string {
   return tmp;
 }
 
-const fileHash = (abs: string): string | null => (existsSync(abs) ? sha256(readFileSync(abs)) : null);
+export const fileHash = (abs: string): string | null => (existsSync(abs) ? sha256(readFileSync(abs)) : null);
 
 /**
  * Applies one decision atomically: the status change, the audit entry and every DB side effect commit together,
