@@ -69,7 +69,7 @@ export const batchApprovals = (ids: number[], decision: Decision) => json<BatchR
 
 // Career (docs/week2/career-contract.md §4, §6, §8.2). Company, role and draft text are model output: render as text only.
 export type ApplicationStatus = 'processing' | 'draft_ready' | 'flagged' | 'needs_answers' | 'failed' | 'final' | 'applied' | 'withdrawn';
-export type ApplicationStep = 'intake' | 'match' | 'draft' | 'verify' | 'render';
+export type ApplicationStep = 'intake' | 'match' | 'gaps' | 'draft' | 'verify' | 'ats' | 'company' | 'vacancy' | 'questions' | 'letter' | 'render';
 export type FailCode = 'provider_error' | 'selection_invalid' | 'no_match' | 'verify_failed' | 'render_failed' | 'internal';
 export type Requirement = { id: string; text: string; kind: 'skill' | 'experience' | 'education' | 'language' | 'other' };
 export type Requirements = {
@@ -78,20 +78,10 @@ export type Requirements = {
   location_mode: 'onsite' | 'hybrid' | 'remote' | 'unspecified';
   must_have: Requirement[]; nice_to_have: Requirement[]; injection_suspected: boolean;
 };
-/** `removed`: taken out by the user; it keeps its place so the refs after it keep their index. */
-export type Line = { text: string; cites: string[]; removed?: true };
-export type HeaderField = 'org' | 'title' | 'start' | 'end' | 'location';
-export type Draft = {
-  summary: Line | null;
-  /** `header`: the user's overrides of the master's entry header. */
-  entries: { entry_id: string; bullets: Line[]; header?: Partial<Record<HeaderField, string>>; removed?: true }[];
-  skill_ids: string[];
-  /** The user's own skills / languages line; absent → the selected skills / the master's languages. */
-  skills_text?: string; languages_text?: string;
-  letter: { paragraphs: Line[] }; versions: number;
-};
-/** One change to the draft (contract §8.2); `text` for `set` and `add`, none for `remove` and `restore`. */
-export type DraftEdit = { op?: 'set' | 'remove' | 'add' | 'restore'; ref: string; text?: string };
+/** A draft line (career-v2.md §1): stable id, the master lines it cites, and who wrote it. */
+export type Line = { id?: string; text: string; cites?: string[]; origin?: 'model' | 'owner' | 'suggestion' };
+/** Draft v2: the same CV shape as the master, plus the letter. `versions` guards against a stale save. */
+export type Draft = { v: 2; cv: { sections: CvSection[] }; letter: { paragraphs: Line[] }; versions: number };
 export type VerifyReport = { ok: boolean; violations: { code: string; ref: string; token?: string }[] };
 export type ApplicationSummary = {
   id: number; company: string | null; role_title: string | null; language: 'en' | 'de' | null;
@@ -119,8 +109,9 @@ export type ApplicationDetail = ApplicationSummary & {
 export const createApplication = (posting: string) => json<ApplicationSummary>('POST', '/api/career/applications', { posting });
 export const listApplications = () => json<ApplicationListItem[]>('GET', '/api/career/applications');
 export const getApplication = (id: number) => json<ApplicationDetail>('GET', `/api/career/applications/${id}`);
-export const editDraft = (id: number, edits: DraftEdit[]) =>
-  json<ApplicationDetail>('PATCH', `/api/career/applications/${id}/draft`, { edits });
+/** Saves the whole draft (`409 draft_changed` when `versions` is stale). */
+export const saveDraft = (id: number, d: Pick<Draft, 'versions' | 'cv' | 'letter'>) =>
+  json<ApplicationDetail>('PUT', `/api/career/applications/${id}/draft`, d);
 export const finaliseApplication = (id: number, acknowledge_flagged: boolean) =>
   json<ApplicationDetail>('POST', `/api/career/applications/${id}/final`, { acknowledge_flagged });
 export const rerenderApplication = (id: number) => json<ApplicationDetail>('POST', `/api/career/applications/${id}/render`);

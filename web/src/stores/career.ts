@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import {
-  createApplication, editDraft, finaliseApplication, getApplication, listApplications, rerenderApplication,
-  type ApplicationDetail, type ApplicationListItem, type ApplicationSummary, type DraftEdit, type FailCode, type MilestoneKind, type VerifyReport,
+  createApplication, finaliseApplication, saveDraft, getApplication, listApplications, rerenderApplication,
+  type ApplicationDetail, type ApplicationListItem, type ApplicationSummary, type Draft, type FailCode, type MilestoneKind, type VerifyReport,
 } from '../api';
 
 export const POLL_MS = 1500;
@@ -20,8 +20,14 @@ export const FAIL_TEXT: Record<FailCode, string> = {
 export const STEP_TEXT = {
   intake: 'Reading the posting',
   match: 'Matching your master CV',
-  draft: 'Writing the draft',
+  gaps: 'Finding gaps against the posting',
+  draft: 'Writing the CV',
   verify: 'Checking every line against your CV',
+  ats: 'Scoring it like an ATS',
+  company: 'Reading your notes on the company',
+  vacancy: 'Working out what the role is for',
+  questions: 'Looking for missing evidence',
+  letter: 'Writing the cover letter',
   render: 'Creating the Word files',
 } as const;
 
@@ -111,7 +117,7 @@ export const useCareerStore = defineStore('career', () => {
     const app = await fn();
     if (mine === seq) show(app);
   };
-  const edit = (id: number, edits: DraftEdit[]) => change(() => editDraft(id, edits));
+  const edit = (id: number, d: Pick<Draft, 'versions' | 'cv' | 'letter'>) => change(() => saveDraft(id, d));
   const finalise = (id: number, acknowledgeFlagged: boolean) => change(() => finaliseApplication(id, acknowledgeFlagged));
   const rerender = (id: number) => change(() => rerenderApplication(id));
   return { list, current, failure, pollError, open, stop, load, create, change, edit, finalise, rerender };

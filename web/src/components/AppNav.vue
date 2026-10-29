@@ -52,9 +52,8 @@ const inApps = () => route.path.startsWith('/applications');
       <dt><kbd>g</kbd> <kbd>a</kbd></dt><dd>Applications</dd>
       <dt><kbd>g</kbd> <kbd>c</kbd></dt><dd>Master CV</dd>
       <dt><kbd>g</kbd> <kbd>r</kbd></dt><dd>Review</dd>
-      <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next or previous line of a draft</dd>
-      <dt><kbd>e</kbd></dt><dd>Edit the line in focus</dd>
-      <dt><kbd>Ctrl</kbd> <kbd>Enter</kbd></dt><dd>Save while editing; <kbd>Esc</kbd> cancels</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>S</kbd></dt><dd>Save the CV you are editing</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>Enter</kbd></dt><dd>Start tailoring from a pasted posting</dd>
     </dl>
     <form method="dialog"><button type="submit">Close</button></form>
   </dialog>

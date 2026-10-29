@@ -23,11 +23,18 @@ const DATE = /^\d{4}(-(0[1-9]|1[0-2]))?$/;
 export const badStart = (e: CvEntry) => !DATE.test(e.start.trim());
 export const badEnd = (e: CvEntry) => e.end.trim() !== 'present' && !DATE.test(e.end.trim());
 
-/** Entries that can't be saved: a title or lines but no name, or a date outside `2021` / `2021-03` / `present`. */
-export const problems = (sections: CvSection[]): string[] =>
+/**
+ * Entries that can't be saved: a title or lines but no name, or a date outside `2021` / `2021-03` / `present`.
+ * In a draft (`draft`), your own entry (no `source`) may leave both dates empty.
+ */
+export const problems = (sections: CvSection[], draft = false): string[] =>
   sections.flatMap((s) =>
     isEntries(s)
-      ? s.entries.flatMap((e) => ((e.org || e.title) && (badStart(e) || badEnd(e) || !e.org.trim()) ? [`${s.name}: ${e.org || e.title}`] : []))
+      ? s.entries.flatMap((e) => {
+          const undated = draft && !e.source && !e.start.trim() && !e.end.trim();
+          const bad = !e.org.trim() || (!undated && (badStart(e) || badEnd(e)));
+          return (e.org || e.title) && bad ? [`${s.name}: ${e.org || e.title}`] : [];
+        })
       : [],
   );
 

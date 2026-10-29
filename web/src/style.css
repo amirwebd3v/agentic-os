@@ -261,6 +261,10 @@ a.area:hover { border-color: var(--fg); }
 .downloads a { display: inline-flex; gap: var(--s2); align-items: baseline; padding: 6px 14px; border: 1px solid var(--border-strong); border-radius: 999px; text-decoration: none; color: var(--fg); font-weight: 550; }
 .downloads a:hover { background: var(--inset); }
 .asks { max-width: var(--measure); margin: var(--s3) 0; }
+.asks h2 { margin-top: var(--s4); }
+.tabs { margin: var(--s5) 0 0; }
+.letter-tab { max-width: var(--measure); margin-top: var(--s5); }
+.letter-edit textarea { font-family: var(--serif); font-size: 17px; line-height: 26px; }
 .asks summary, .manual summary, details.removed summary { cursor: pointer; color: var(--muted); }
 .asks summary:hover, details.removed summary:hover { color: var(--fg); }
 .asks ul { margin: 0; padding-left: var(--s5); }
@@ -340,6 +344,8 @@ details.removed li s { overflow-wrap: anywhere; }
 .cv-entry-read h3 { font-family: var(--serif); font-size: 19px; margin: 0; }
 .tag.new { background: var(--accent-tint); color: var(--accent); }
 .add-sections { margin-top: var(--s5); }
+.reading .cv-doc .cv-section > header h2 { border: 0; padding: 0; margin: 0 0 var(--s2); }
+.reading .cv-doc .cv-section:first-child { margin-top: 0; }
 .cv { display: grid; grid-template-columns: minmax(0, var(--measure)) minmax(14rem, 1fr); gap: var(--s7); align-items: start; }
 .cv-section { margin-bottom: var(--s6); }
 .cv-section > header { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s3); border-bottom: 1px solid var(--border-strong); margin-bottom: var(--s3); }
