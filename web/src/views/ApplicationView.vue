@@ -5,6 +5,7 @@ import AddLine from '../components/AddLine.vue';
 import DraftLine from '../components/DraftLine.vue';
 import EntryHeader from '../components/EntryHeader.vue';
 import LineSource from '../components/LineSource.vue';
+import TrackingPanel from '../components/TrackingPanel.vue';
 import { STEP_TEXT, statusLabel, useCareerStore, violationText } from '../stores/career';
 
 // Everything in the application (company, role, requirements, draft, sources, tokens) is model or file output:
@@ -194,6 +195,8 @@ onUnmounted(career.stop);
           <ul><li v-for="r in app.requirements.nice_to_have" :key="r.id">{{ r.text }}</li></ul>
         </template>
       </details>
+
+      <TrackingPanel :app="app" />
 
       <div v-if="doc" class="doc">
         <article ref="reading" class="reading" aria-label="Draft" tabindex="-1">

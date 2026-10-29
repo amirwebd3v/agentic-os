@@ -172,6 +172,7 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
     sources: master ? draftSources(master, draft) : {},
     languages: languages && 'bullets' in languages ? languages.bullets.map((b) => b.text) : [],
     files: db.prepare('SELECT kind, bytes FROM application_files WHERE application_id = ? ORDER BY id').all(id),
+    milestones: milestones(db, id),
   };
 }
 
@@ -225,7 +226,7 @@ export const careerRoutes =
     );
 
     api.get('/career/applications', async () =>
-      db.prepare(`SELECT ${SUMMARY} FROM applications ORDER BY created_at DESC, id DESC LIMIT 100`).all(),
+      db.prepare(`SELECT ${SUMMARY}, ${LIST_TRACKING} FROM applications ORDER BY created_at DESC, id DESC LIMIT 100`).all(),
     );
 
     api.get<{ Params: { id: number } }>(
@@ -355,4 +356,189 @@ export const careerRoutes =
           .send(file);
       },
     );
+
+    // ---------- tracking ----------
+    const DATE = { type: 'string', maxLength: 10 } as const; // checked as a real date in the handler: `400 bad_date`
+    const NOTE = { type: ['string', 'null'], maxLength: 2000 } as const;
+    const MID_PARAMS = { type: 'object', properties: { id: { type: 'integer', minimum: 1 }, mid: { type: 'integer', minimum: 1 } }, required: ['id', 'mid'] } as const;
+    type MilestoneBody = { kind?: MilestoneKind; on_date?: string; note?: string | null };
+    const audited = (id: number, detail: object) => audit(db, { actor: 'user', action: 'career.application.track', args: { id, ...detail } });
+
+    /** The `{ code, error }` that refuses a milestone write, or null when the application can be tracked. */
+    const untrackable = (id: number) => {
+      const app = db.prepare('SELECT status, step FROM applications WHERE id = ?').get(id) as { status: string; step: string | null } | undefined;
+      if (!app) return { code: 404, error: 'not_found' };
+      // A running render only completes while the status is `final`, so tracking waits for it.
+      return TRACKED.includes(app.status) && app.step !== 'render' ? null : { code: 409, error: 'wrong_status' };
+    };
+
+    api.get<{ Params: { id: number } }>('/career/applications/:id/milestones', { schema: { params: ID_PARAMS } }, async (req, reply) =>
+      db.prepare('SELECT 1 FROM applications WHERE id = ?').get(req.params.id) ? milestones(db, req.params.id) : reply.code(404).send({ error: 'not_found' }),
+    );
+
+    api.post<{ Params: { id: number }; Body: { kind: MilestoneKind; on_date: string; note?: string | null } }>(
+      '/career/applications/:id/milestones',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: { type: 'object', properties: { kind: { enum: MILESTONE_KINDS }, on_date: DATE, note: NOTE }, required: ['kind', 'on_date'], additionalProperties: false },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        const { kind, on_date, note } = req.body;
+        const no = untrackable(id);
+        if (no) return reply.code(no.code).send({ error: no.error });
+        if (!isDate(db, on_date)) return reply.code(400).send({ error: 'bad_date' });
+        const detail = db.transaction(() => {
+          const mid = db
+            .prepare('INSERT INTO application_milestones (application_id, kind, on_date, note) VALUES (?, ?, ?, ?) RETURNING id')
+            .pluck()
+            .get(id, kind, on_date, cleanNote(note)) as number;
+          return track(db, id, 'add', { id: mid, kind, on_date });
+        })();
+        audited(id, detail);
+        return reply.code(201).send(applicationDetail(db, vaultDir, id));
+      },
+    );
+
+    api.patch<{ Params: { id: number; mid: number }; Body: MilestoneBody }>(
+      '/career/applications/:id/milestones/:mid',
+      {
+        schema: {
+          params: MID_PARAMS,
+          body: { type: 'object', properties: { kind: { enum: MILESTONE_KINDS }, on_date: DATE, note: NOTE }, minProperties: 1, additionalProperties: false },
+        },
+      },
+      async (req, reply) => {
+        const { id, mid } = req.params;
+        const no = untrackable(id);
+        if (no) return reply.code(no.code).send({ error: no.error });
+        const cur = db.prepare('SELECT kind, on_date, note FROM application_milestones WHERE id = ? AND application_id = ?').get(mid, id) as
+          | { kind: MilestoneKind; on_date: string; note: string | null }
+          | undefined;
+        if (!cur) return reply.code(404).send({ error: 'not_found' });
+        const b = req.body;
+        const next = { kind: b.kind ?? cur.kind, on_date: b.on_date ?? cur.on_date, note: 'note' in b ? cleanNote(b.note) : cur.note };
+        if (!isDate(db, next.on_date)) return reply.code(400).send({ error: 'bad_date' });
+        const detail = db.transaction(() => {
+          db.prepare(`UPDATE application_milestones SET kind = ?, on_date = ?, note = ?, updated_at = ${NOW} WHERE id = ?`).run(next.kind, next.on_date, next.note, mid);
+          return track(db, id, 'edit', { id: mid, kind: next.kind, on_date: next.on_date });
+        })();
+        audited(id, detail);
+        return applicationDetail(db, vaultDir, id);
+      },
+    );
+
+    api.delete<{ Params: { id: number; mid: number } }>('/career/applications/:id/milestones/:mid', { schema: { params: MID_PARAMS } }, async (req, reply) => {
+      const { id, mid } = req.params;
+      const no = untrackable(id);
+      if (no) return reply.code(no.code).send({ error: no.error });
+      const cur = db.prepare('SELECT kind, on_date FROM application_milestones WHERE id = ? AND application_id = ?').get(mid, id) as
+        | { kind: MilestoneKind; on_date: string }
+        | undefined;
+      if (!cur) return reply.code(404).send({ error: 'not_found' });
+      const detail = db.transaction(() => {
+        db.prepare('DELETE FROM application_milestones WHERE id = ?').run(mid);
+        return track(db, id, 'delete', { id: mid, ...cur });
+      })();
+      audited(id, detail);
+      return applicationDetail(db, vaultDir, id);
+    });
+
+    // Status moves happen through milestones; this sets only the follow-up date.
+    api.patch<{ Params: { id: number }; Body: { follow_up_on: string | null } }>(
+      '/career/applications/:id',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: { type: 'object', properties: { follow_up_on: { type: ['string', 'null'], maxLength: 10 } }, required: ['follow_up_on'], additionalProperties: false },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        const { follow_up_on } = req.body;
+        if (follow_up_on !== null && !isDate(db, follow_up_on)) return reply.code(400).send({ error: 'bad_date' });
+        if (!db.prepare(`UPDATE applications SET follow_up_on = ?, updated_at = ${NOW} WHERE id = ?`).run(follow_up_on, id).changes)
+          return reply.code(404).send({ error: 'not_found' });
+        audit(db, { actor: 'user', action: 'career.application.follow_up', args: { id, follow_up_on } });
+        return applicationDetail(db, vaultDir, id);
+      },
+    );
+
+    // A job applied to outside the app: no posting and no draft, only its tracking.
+    api.post<{ Body: { company: string; role_title: string; applied_on: string } }>(
+      '/career/applications/manual',
+      {
+        schema: {
+          body: {
+            type: 'object',
+            properties: { company: { type: 'string', pattern: '\\S', maxLength: 200 }, role_title: { type: 'string', pattern: '\\S', maxLength: 200 }, applied_on: DATE },
+            required: ['company', 'role_title', 'applied_on'],
+            additionalProperties: false,
+          },
+        },
+      },
+      async (req, reply) => {
+        const { company, role_title, applied_on } = req.body;
+        if (!isDate(db, applied_on)) return reply.code(400).send({ error: 'bad_date' });
+        const { summary, detail } = db.transaction(() => {
+          const summary = db
+            .prepare(`INSERT INTO applications (company, role_title, status, master_hash) VALUES (?, ?, 'applied', '') RETURNING ${SUMMARY}`)
+            .get(company.trim(), role_title.trim()) as { id: number };
+          db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'created', '{"manual":true}')`).run(summary.id);
+          const mid = db
+            .prepare(`INSERT INTO application_milestones (application_id, kind, on_date) VALUES (?, 'applied', ?) RETURNING id`)
+            .pluck()
+            .get(summary.id, applied_on) as number;
+          return { summary, detail: track(db, summary.id, 'add', { id: mid, kind: 'applied', on_date: applied_on }) };
+        })();
+        audit(db, { actor: 'user', action: 'career.application.create', args: { id: summary.id, manual: true } });
+        audited(summary.id, detail);
+        return reply.code(201).send(summary);
+      },
+    );
   };
+
+// ---------- tracking (helpers) ----------
+// Milestones are the owner's dated notes on an application (contract §5). `note` is personal free text: it is
+// stored and returned to the owner, but never put in an event, the audit log, an error or a log line.
+const MILESTONE_KINDS = ['applied', 'feedback', 'interview', 'offer', 'rejected', 'withdrawn', 'note'] as const;
+type MilestoneKind = (typeof MILESTONE_KINDS)[number];
+/** The statuses milestones may change; the pipeline's own states are left alone. */
+const TRACKED = ['final', 'applied', 'withdrawn'];
+
+/** For the list: the latest milestone and the next interview (today counts). */
+const LIST_TRACKING = `
+  (SELECT kind FROM application_milestones m WHERE m.application_id = applications.id ORDER BY on_date DESC, id DESC LIMIT 1) AS last_milestone,
+  (SELECT on_date FROM application_milestones m WHERE m.application_id = applications.id ORDER BY on_date DESC, id DESC LIMIT 1) AS last_milestone_on,
+  (SELECT min(on_date) FROM application_milestones m WHERE m.application_id = applications.id AND kind = 'interview'
+     AND on_date >= date('now', 'localtime')) AS next_interview`;
+
+function milestones(db: Database, id: number) {
+  return db.prepare('SELECT id, kind, on_date, note, created_at, updated_at FROM application_milestones WHERE application_id = ? ORDER BY on_date, id').all(id);
+}
+
+/** A real calendar date as `YYYY-MM-DD` (SQLite turns 2026-02-30 into 2026-03-02, so that one is refused). */
+const isDate = (db: Database, s: string) => db.prepare('SELECT date(?) IS ?').pluck().get(s, s) === 1;
+
+const cleanNote = (note: string | null | undefined) => note?.trim() || null;
+
+/**
+ * After a milestone write, inside its transaction: moves `applications.status` to the latest `applied` / `withdrawn`
+ * milestone (by date, then id), or back to the base when there is none: `final`, or `applied` for an application sent
+ * elsewhere (it has no draft to be final). Adds a `status` event with ids, kinds and dates only; returns its detail.
+ */
+function track(db: Database, id: number, op: 'add' | 'edit' | 'delete', m: { id: number; kind: MilestoneKind; on_date: string }) {
+  const app = db.prepare('SELECT status, master_hash FROM applications WHERE id = ?').get(id) as { status: string; master_hash: string };
+  const latest = db
+    .prepare(`SELECT kind FROM application_milestones WHERE application_id = ? AND kind IN ('applied', 'withdrawn') ORDER BY on_date DESC, id DESC LIMIT 1`)
+    .pluck()
+    .get(id) as string | undefined;
+  // ponytail: "sent elsewhere" is `master_hash = ''` (POST …/manual); a column if a third origin ever appears.
+  const to = latest ?? (app.master_hash === '' ? 'applied' : 'final');
+  db.prepare(`UPDATE applications SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(to, id);
+  const detail = { op, milestone: m.id, kind: m.kind, on_date: m.on_date, ...(to !== app.status && { from: app.status, to }) };
+  db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'status', ?)`).run(id, JSON.stringify(detail));
+  return detail;
+}

@@ -174,8 +174,25 @@ CREATE TRIGGER application_events_no_update BEFORE UPDATE ON application_events 
 CREATE TRIGGER application_events_no_delete BEFORE DELETE ON application_events BEGIN SELECT RAISE(ABORT, 'application_events is append-only'); END;
 ```
 - **Applications are never deleted in v1** (the append-only trigger would block a cascade). `withdrawn` is the end state. A purge ticket comes later.
-- `applied` and `withdrawn` are set only by `PATCH …/:id` (W2-11), which adds a `status` event with the old and new status.
+- `applied` and `withdrawn` are set only by milestone writes (below), each of which adds a `status` event.
 - Update `server/test/db.test.ts` (it pins `user_version` and the table list).
+
+**Tracking: migration `0007_tracking.sql`.** The owner's dated milestones per application, editable and deletable:
+```sql
+CREATE TABLE application_milestones (
+  id             INTEGER PRIMARY KEY,
+  application_id INTEGER NOT NULL REFERENCES applications(id),
+  kind           TEXT NOT NULL CHECK (kind IN ('applied', 'feedback', 'interview', 'offer', 'rejected', 'withdrawn', 'note')),
+  on_date        TEXT NOT NULL CHECK (date(on_date) IS on_date),   -- a real YYYY-MM-DD; may be in the future
+  note           TEXT CHECK (note IS NULL OR length(note) <= 2000),
+  created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX application_milestones_app_date ON application_milestones (application_id, on_date);
+```
+- **Status is derived, not stored twice.** Milestones are taken only while `status` is `final`, `applied` or `withdrawn` and no render runs (`409 wrong_status` otherwise). After each write, `status` becomes the kind of the latest `applied` / `withdrawn` milestone (by `on_date`, then `id`), or, with none, `final` (`applied` for an application sent elsewhere, which has no draft). `offer`, `rejected`, `feedback`, `interview` and `note` live only in milestones.
+- Each write adds a `status` event `{ op: 'add'|'edit'|'delete', milestone, kind, on_date, from?, to? }` (`from`/`to` when the status changed) and is audited as `career.application.track` with the same fields. **`note` is personal free text: never in events, audit, errors or logs.**
+- **Applied elsewhere:** `POST …/manual` creates an application with `status: 'applied'`, `step: null`, `master_hash: ''` (that empty hash marks it) and its `applied` milestone; event `created { manual: true }`.
 
 ## 6. Verifier (plain code, no model)
 Runs in `career_verify`. Input: `Draft`, the master, `Requirements`. Output stored as `verify_report`:
@@ -254,12 +271,17 @@ Web: add the case to the `Approval` union in `web/src/api.ts` and to `ApprovalCa
 | Method & path | Body | Response |
 |---|---|---|
 | `POST /api/career/applications` | `{ posting: string }` (1–30 000 chars) | `202 ApplicationSummary` with `status:'processing', step:'intake'`. `409 provider_not_configured`, `409 master_missing`, `400 posting_too_long`. |
-| `GET /api/career/applications` | — | `ApplicationSummary[]`, newest first, max 100 |
+| `GET /api/career/applications` | — | `ApplicationListItem[]`, newest first, max 100 |
 | `GET /api/career/applications/:id` | — | `ApplicationDetail` (`404 not_found`) |
 | `PATCH /api/career/applications/:id/draft` | `{ edits: { op?: 'set' \| 'remove' \| 'add'; ref: string; text?: string }[] }` (1–50 edits, `op` defaults to `set`, each text 1–700, see **Edits**) | `ApplicationDetail`. `409 wrong_status` unless `draft_ready` or `flagged`. `400 bad_ref`, `400 bad_edit`; one bad edit rejects the whole batch. |
 | `POST /api/career/applications/:id/final` | `{ acknowledge_flagged?: boolean }` (body optional) | `202 ApplicationDetail` with `status:'final', step:'render'`, enqueues `career_render`. `409 flagged_not_acknowledged` when `flagged` and not acknowledged (`true` only). `409 wrong_status` unless `draft_ready` or `flagged`. |
 | `POST /api/career/applications/:id/render` | — | `202 ApplicationDetail` with `step:'render'`. Retries a failed render (or renders again). `409 wrong_status` unless `final` and not already rendering (`step` ≠ `render`). |
-| `PATCH /api/career/applications/:id` | `{ status?: 'applied' \| 'withdrawn' \| 'final'; follow_up_on?: string \| null }` (W2-11) | `ApplicationDetail`. Allowed moves: `final → applied`, `final \| applied → withdrawn`, `applied → final` (undo). `follow_up_on` is `YYYY-MM-DD` or `null`. `409 wrong_status` for any other move, `400 bad_date`. |
+| `PATCH /api/career/applications/:id` | `{ follow_up_on: string \| null }` | `ApplicationDetail`. `YYYY-MM-DD` or `null`; any status. `400 bad_date`. Audited as `career.application.follow_up { id, follow_up_on }`. Status moves happen through milestones (§5). |
+| `GET /api/career/applications/:id/milestones` | — | `Milestone[]`, oldest date first (`404 not_found`) |
+| `POST /api/career/applications/:id/milestones` | `{ kind: MilestoneKind; on_date: string; note?: string \| null }` (note ≤ 2000, trimmed, empty → `null`) | `201 ApplicationDetail`. `400 bad_date`, `409 wrong_status` (§5). |
+| `PATCH /api/career/applications/:id/milestones/:mid` | any of `{ kind, on_date, note }` | `ApplicationDetail`. `404 not_found` (also a `mid` of another application), `400 bad_date`, `409 wrong_status`. |
+| `DELETE /api/career/applications/:id/milestones/:mid` | — | `ApplicationDetail` (status reverts as in §5). `404 not_found`, `409 wrong_status`. |
+| `POST /api/career/applications/manual` | `{ company: string; role_title: string; applied_on: string }` (each name 1–200 chars, not blank) | `201 ApplicationSummary` with `status:'applied', step:null`. `400 bad_date`. |
 | `GET /api/career/applications/:id/files/:kind` | — | The file (`kind` ∈ `cv_docx`, `letter_docx`). `404 not_found` for an unknown id or kind (`cv_pdf`/`letter_pdf` too) / `409 files_not_ready` when that file isn't recorded (yet, or the render failed). Audited as `career.file.download { id, kind }`. |
 
 **Polling:** the UI polls `GET …/:id` every 1.5 s while `status` is `processing` or `step` is `render`, and stops on any other state. There is no SSE and no generic jobs API.
@@ -297,6 +319,13 @@ type ApplicationDetail = ApplicationSummary & {
                                          // each draft entry_id -> "org | title | start | end | location" for the section heading
   languages: string[];                   // the master's Languages lines ([] when the master is missing)
   files: { kind: 'cv_docx' | 'letter_docx'; bytes: number }[];
+  milestones: Milestone[];               // oldest date first
+};
+type MilestoneKind = 'applied' | 'feedback' | 'interview' | 'offer' | 'rejected' | 'withdrawn' | 'note';
+type Milestone = { id: number; kind: MilestoneKind; on_date: string; note: string | null; created_at: string; updated_at: string };
+type ApplicationListItem = ApplicationSummary & {
+  last_milestone: MilestoneKind | null; last_milestone_on: string | null;   // latest by date, then id
+  next_interview: string | null;                                           // earliest `interview` from today on (server local date)
 };
 ```
 
@@ -308,7 +337,7 @@ Fixed codes only: `provider_not_configured`, `provider_error`, `master_missing`,
 ## 9. Audit
 Through `audit()`, with ids, counts and codes only (the redaction there works by key name, so **never** put text in `args`):
 
-`career.master_import.propose`, `career.application.create`, `career.application.step`, `career.application.fail`, `career.application.edit`, `career.application.final`, `career.file.download`. Approving the import is already audited by `approval.approve`.
+`career.master_import.propose`, `career.application.create`, `career.application.step`, `career.application.fail`, `career.application.edit`, `career.application.final`, `career.file.download`, `career.application.track`, `career.application.follow_up` (tracking, §5; `career.application.create` with `{ id, manual: true }` for an application sent elsewhere). Approving the import is already audited by `approval.approve`.
 
 ## 10. Tests every ticket brings
 | Ticket | Must prove |

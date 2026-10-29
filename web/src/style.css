@@ -210,3 +210,22 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .md table { border-collapse: collapse; }
 .md th, .md td { border: 1px solid var(--border); padding: var(--s1) var(--s2); }
 .md .link { text-decoration: underline dotted; color: var(--muted); word-break: break-all; }
+
+/* ---------- tracking (TrackingPanel.vue, the list) ---------- */
+input[type="date"], select {
+  background: var(--field); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 4px var(--s2); min-height: 32px;
+}
+.tracking { max-width: var(--measure); margin: var(--s4) 0 var(--s5); }
+.tracking h2 { font-size: 16px; padding-bottom: var(--s2); border-bottom: 1px solid var(--border); }
+.timeline { list-style: none; margin: 0 0 var(--s4); padding: 0; }
+.timeline > li { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) auto; gap: var(--s1) var(--s3); align-items: baseline;
+  padding: var(--s2) 0; border-bottom: 1px solid var(--border); }
+.timeline > li > form { grid-column: 1 / -1; }
+.timeline time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.milestone .note { margin: var(--s1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.milestone-form { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: end; margin-bottom: var(--s3); }
+.milestone-form label, .follow-up label { display: grid; gap: var(--s1); font-size: 12px; font-weight: 600; color: var(--muted); }
+.milestone-form label.wide { flex: 1 1 100%; }
+.milestone-form textarea, .milestone-form input[type="text"] { font-weight: 400; color: var(--fg); font-size: 14px; }
+.manual { max-width: var(--measure); margin: 0 0 var(--s4); }
+.manual summary { cursor: pointer; color: var(--muted); margin-bottom: var(--s2); }

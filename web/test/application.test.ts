@@ -29,7 +29,7 @@ const app = (over: Partial<ApplicationDetail> = {}): ApplicationDetail => ({
   },
   edited_refs: [], verify: { ok: true, violations: [] },
   sources: { 'sum-1': 'Master summary.', [N]: 'Acme GmbH | Senior Engineer | 2021-03 | 2024-06 | Berlin', [`${N}-1`]: 'Cut the build from 12 to 4 minutes.', 'skill-x': 'Python' },
-  languages: ['English (C1)'], files: [],
+  languages: ['English (C1)'], files: [], milestones: [],
   ...over,
 });
 
