@@ -92,13 +92,20 @@ export const Selection = z
   .strict();
 export type Selection = z.infer<typeof Selection>;
 
-const Line = z.object({ text: z.string(), cites: z.array(z.string()) }).strict();
+// `removed` marks a line the user took out (§8.2): it stays in place so later refs keep their index.
+const Line = z.object({ text: z.string(), cites: z.array(z.string()), removed: z.literal(true).optional() }).strict();
+export const HEADER_FIELDS = ['org', 'title', 'start', 'end', 'location'] as const;
+/** The user's per-application override of an entry header; a field left out is copied from the master at render. */
+const Header = z.partialRecord(z.enum(HEADER_FIELDS), z.string());
 /** Lengths and cite counts are not limited here: the verifier reports them (§6) instead of failing the step. */
 export const Draft = z
   .object({
     summary: Line.nullable(),
-    entries: z.array(z.object({ entry_id: Id, bullets: z.array(Line) }).strict()),
+    entries: z.array(z.object({ entry_id: Id, bullets: z.array(Line), header: Header.optional(), removed: z.literal(true).optional() }).strict()),
     skill_ids: z.array(z.string()),
+    // The user's own skills and languages lines (§8.2); absent → the selected skills / the master's languages.
+    skills_text: z.string().optional(),
+    languages_text: z.string().optional(),
     letter: z.object({ paragraphs: z.array(Line) }).strict(),
     versions: z.number().int().positive(),
   })

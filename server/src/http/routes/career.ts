@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
 import { editDistance } from '../../approvals/edit-distance.ts';
 import type { Requirements } from '../../career/intake.ts';
-import { coverage, event, readMaster, saveText } from '../../career/tailor.ts';
-import type { Draft, DraftLine, Selection } from '../../career/tailor.ts';
+import { coverage, event, HEADER_FIELDS, readMaster, saveText } from '../../career/tailor.ts';
+import type { Draft, DraftLine, MasterIndex, Selection } from '../../career/tailor.ts';
 import { audit } from '../../db/audit.ts';
 import type { Database } from '../../db/index.ts';
 import { enqueue } from '../../db/jobs.ts';
@@ -75,35 +75,77 @@ function enqueueRender(db: Database, id: number): void {
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } as const;
 const DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-/** Every editable line of a draft by its ref (contract §6): `cv.summary`, `cv.entries.<entry_id>.<i>`, `letter.<i>`. */
-const draftLines = (d: Draft): [string, DraftLine][] => [
-  ...(d.summary ? [['cv.summary', d.summary] as [string, DraftLine]] : []),
-  ...d.entries.flatMap((e) => e.bullets.map((l, i): [string, DraftLine] => [`cv.entries.${e.entry_id}.${i}`, l])),
-  ...d.letter.paragraphs.map((l, i): [string, DraftLine] => [`letter.${i}`, l]),
-];
+export type DraftEdit = { op?: 'set' | 'remove' | 'add'; ref: string; text?: string };
+const INDEX = /^(?:0|[1-9]\d{0,3})$/;
+const live = <T extends { removed?: true | undefined }>(x: T | null | undefined) => (x && !x.removed ? x : undefined);
+const lineAt = (list: DraftLine[], i: string | undefined) => (i !== undefined && INDEX.test(i) ? live(list[Number(i)]) : undefined);
+
+/**
+ * Applies one edit to `d` in place (contract §8.2). Returns the ref it touched (for `add`, the new line's ref) and,
+ * for a model line that was replaced or removed, its old text (for `edit_distance`); or a fixed error code.
+ * Refs: `cv.summary`, `cv.entries.<entry_id>[.<i> | .header.<field>]`, `cv.skills`, `cv.languages`, `letter[.<i>]`.
+ * A removed item stays in place with `removed: true`, so the refs after it keep their index.
+ */
+function applyEdit(d: Draft, { op = 'set', ref, text }: DraftEdit): { ref: string; was?: string } | 'bad_ref' | 'bad_edit' {
+  if ((op === 'remove') !== (text === undefined)) return 'bad_edit';
+  const p = ref.split('.');
+  const entry = p[0] === 'cv' && p[1] === 'entries' ? live(d.entries.find((e) => e.entry_id === p[2])) : undefined;
+  const line =
+    ref === 'cv.summary' ? live(d.summary)
+    : entry && p.length === 4 ? lineAt(entry.bullets, p[3])
+    : p[0] === 'letter' && p.length === 2 ? lineAt(d.letter.paragraphs, p[1])
+    : undefined;
+  if (line && op !== 'add') {
+    const was = line.text;
+    if (op === 'set') line.text = text!; // cites unchanged; the line is yours now and not re-verified
+    else line.removed = true;
+    return { ref, was };
+  }
+  const list = entry && p.length === 3 ? entry.bullets : ref === 'letter' ? d.letter.paragraphs : undefined;
+  if (list && op === 'add') return { ref: `${ref}.${list.push({ text: text!, cites: [] }) - 1}` };
+  if (entry && p.length === 3 && op === 'remove') {
+    entry.removed = true;
+    return { ref };
+  }
+  const field = HEADER_FIELDS.find((f) => f === p[4]);
+  if (entry && p.length === 5 && p[3] === 'header' && field && op !== 'add') {
+    if ((text ?? '').length > 120) return 'bad_edit';
+    entry.header = { ...entry.header, [field]: text ?? '' }; // remove = leave the field blank
+    return { ref };
+  }
+  if ((ref === 'cv.skills' || ref === 'cv.languages') && op === 'set') {
+    d[ref === 'cv.skills' ? 'skills_text' : 'languages_text'] = text!;
+    return { ref };
+  }
+  return 'bad_ref';
+}
+
+/** The master as it is now, or null when it is missing or invalid. */
+function masterOrNull(vaultDir: string): MasterIndex['master'] | null {
+  try {
+    return readMaster(vaultDir).master;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The master text behind every id the draft cites or lists (bullet text without its entry header), plus each
- * entry's header (`org | title | start – end`) under its entry id so the page can title the CV sections.
- * Read from the master as it is now; an id it no longer has is simply missing. A missing or invalid master → `{}`.
+ * entry's header (`org | title | start | end | location`) under its entry id so the page can title the CV sections.
+ * An id the master no longer has is simply missing.
  */
-function draftSources(vaultDir: string, draft: Draft): Record<string, string> {
-  let master;
-  try {
-    master = readMaster(vaultDir).master;
-  } catch {
-    return {};
-  }
+function draftSources(master: MasterIndex['master'], draft: Draft): Record<string, string> {
   const all = new Map<string, string>();
   for (const s of master.sections) {
     if ('bullets' in s) for (const b of s.bullets) all.set(b.id, b.text);
     else
       for (const e of s.entries) {
-        all.set(e.id, `${e.org} | ${e.title} | ${e.start} – ${e.end}`);
+        all.set(e.id, [e.org, e.title, e.start, e.end, e.location].join(' | '));
         for (const b of e.bullets) all.set(b.id, b.text);
       }
   }
-  const ids = [...draft.skill_ids, ...draftLines(draft).flatMap(([, l]) => l.cites), ...draft.entries.map((e) => e.entry_id)];
+  const lines = [draft.summary, ...draft.entries.flatMap((e) => e.bullets), ...draft.letter.paragraphs];
+  const ids = [...draft.skill_ids, ...lines.flatMap((l) => l?.cites ?? []), ...draft.entries.map((e) => e.entry_id)];
   return Object.fromEntries(ids.filter((i) => all.has(i)).map((i) => [i, all.get(i)!]));
 }
 
@@ -114,6 +156,8 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
   const requirements = latest<Requirements>(db, id, 'requirements');
   const selection = latest<Selection>(db, id, 'selection');
   const draft = latest<Draft>(db, id, 'draft');
+  const master = draft && masterOrNull(vaultDir);
+  const languages = master?.sections.find((s) => s.name === 'Languages');
   const edited = db
     .prepare(`SELECT json_extract(detail, '$.refs') FROM application_events WHERE application_id = ? AND kind = 'edited'`)
     .pluck()
@@ -125,7 +169,8 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
     draft,
     edited_refs: [...new Set(edited.flatMap((r) => (JSON.parse(r) as string[] | null) ?? []))],
     verify: latest(db, id, 'verify_report'),
-    sources: draft ? draftSources(vaultDir, draft) : {},
+    sources: master ? draftSources(master, draft) : {},
+    languages: languages && 'bullets' in languages ? languages.bullets.map((b) => b.text) : [],
     files: db.prepare('SELECT kind, bytes FROM application_files WHERE application_id = ? ORDER BY id').all(id),
   };
 }
@@ -190,7 +235,7 @@ export const careerRoutes =
     );
 
     // ---------- W2-08: edit the draft ----------
-    api.patch<{ Params: { id: number }; Body: { edits: { ref: string; text: string }[] } }>(
+    api.patch<{ Params: { id: number }; Body: { edits: DraftEdit[] } }>(
       '/career/applications/:id/draft',
       {
         schema: {
@@ -204,8 +249,12 @@ export const careerRoutes =
                 maxItems: 50,
                 items: {
                   type: 'object',
-                  properties: { ref: { type: 'string', maxLength: 200 }, text: { type: 'string', minLength: 1, maxLength: 700 } },
-                  required: ['ref', 'text'],
+                  properties: {
+                    op: { type: 'string', enum: ['set', 'remove', 'add'] },
+                    ref: { type: 'string', maxLength: 200 },
+                    text: { type: 'string', minLength: 1, maxLength: 700 },
+                  },
+                  required: ['ref'],
                   additionalProperties: false,
                 },
               },
@@ -221,18 +270,19 @@ export const careerRoutes =
         if (status === undefined) return reply.code(404).send({ error: 'not_found' });
         const draft = latest<Draft>(db, id, 'draft');
         if (!draft || (status !== 'draft_ready' && status !== 'flagged')) return reply.code(409).send({ error: 'wrong_status' });
-        const byRef = new Map(draftLines(draft));
+        const touched: string[] = [];
         const distances: number[] = [];
-        for (const { ref, text } of req.body.edits) {
-          const line = byRef.get(ref);
-          if (!line) return reply.code(400).send({ error: 'bad_ref' });
+        for (const edit of req.body.edits) {
+          const done = applyEdit(draft, edit); // one bad edit rejects the batch: nothing is saved
+          if (typeof done === 'string') return reply.code(400).send({ error: done });
+          touched.push(done.ref);
           // ponytail: Levenshtein is O(n·m); the model's line is capped at 2000 chars for the metric only.
-          distances.push(editDistance(line.text.slice(0, 2000), text));
-          line.text = text; // cites unchanged; the line is yours now and not re-verified (§8.2)
+          if (done.was !== undefined) distances.push(edit.text === undefined ? 1 : editDistance(done.was.slice(0, 2000), edit.text));
         }
         draft.versions += 1;
-        const refs = [...new Set(req.body.edits.map((e) => e.ref))];
-        const counts = { lines: refs.length, edit_distance: distances.reduce((a, b) => a + b, 0) / distances.length, version: draft.versions };
+        const refs = [...new Set(touched)];
+        const edit_distance = distances.length ? distances.reduce((a, b) => a + b, 0) / distances.length : null;
+        const counts = { lines: refs.length, edit_distance, version: draft.versions };
         db.transaction(() => {
           saveText(db, id, 'draft', draft);
           // Refs are ids and indexes (`cv.entries.<entry_id>.<i>`), never text: they make `edited_refs` real.
