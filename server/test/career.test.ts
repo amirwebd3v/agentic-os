@@ -2,6 +2,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import type { Draft } from '../src/career/tailor.ts';
 import { claimNext, enqueue, fail, recoverStaleLocks } from '../src/db/jobs.ts';
 import { careerRoutes, failCareerJob, failStuckApplications, MAX_POSTING_CHARS } from '../src/http/routes/career.ts';
 import { runNext, startRunner } from '../src/jobs/runner.ts';
@@ -165,14 +166,15 @@ test('the detail route gives the master text behind every cite and entry, and no
   const d = await t.get(t.id);
   expect(d.sources).toEqual({
     'sum-1': 'Platform engineer with 6 years in DevOps and cloud infrastructure.',
-    [N]: 'Northwind Logistics | DevOps Engineer | 2021-03 – present',
+    [N]: 'Northwind Logistics | DevOps Engineer | 2021-03 | present | Hamburg',
     [`${N}-1a2b3c`]: 'Cut deploy time from 40 to 9 minutes by moving CI to GitHub Actions.',
     [`${N}-4d5e6f`]: 'Automated AWS infrastructure (ECS, RDS, IAM) with Terraform across 3 accounts.',
     'skill-aws': 'AWS',
   });
+  expect(d.languages).toEqual(['English (C1)', 'German (native)']);
   expect(d.edited_refs).toEqual([]);
   rmSync(join(t.vault, 'career', 'master.md'));
-  expect((await t.get(t.id)).sources).toEqual({});
+  expect(await t.get(t.id)).toMatchObject({ sources: {}, languages: [] });
 });
 
 test('PATCH …/draft validates, refuses a wrong status or ref, stores a new version, and logs no text', async () => {
@@ -185,7 +187,7 @@ test('PATCH …/draft validates, refuses a wrong status or ref, stores a new ver
     [{ ref: 'letter.0' }],
   ];
   for (const bad of invalid) expect((await t.patch(bad)).statusCode).toBe(400);
-  for (const ref of ['letter.3', 'cv.entries.exp-other-2020.0', `cv.entries.${N}.2`, 'cv.skills', 'cv', '__proto__', `cv.entries.${N}.-1`]) {
+  for (const ref of ['letter.3', 'cv.entries.exp-other-2020.0', `cv.entries.${N}.2`, 'cv.skill', 'cv', '__proto__', `cv.entries.${N}.-1`]) {
     const res = await t.patch([{ ref: 'letter.0', text: 'fine' }, { ref, text: SECRET }]);
     expect([res.statusCode, res.json()]).toEqual([400, { error: 'bad_ref' }]);
   }
@@ -229,4 +231,74 @@ test.each(['processing', 'failed', 'final', 'applied', 'withdrawn'])('PATCH …/
 test('a flagged draft can be edited', async () => {
   const t = await drafted('flagged');
   expect((await t.patch([{ ref: 'letter.1', text: 'mine' }])).statusCode).toBe(200);
+});
+
+test('PATCH …/draft ops: headers, skills, languages, add and remove; refs stay stable; no text in events or audit', async () => {
+  const t = await drafted();
+  const res = await t.patch([
+    { op: 'set', ref: `cv.entries.${N}.header.title`, text: 'Canary-h1 Platform Lead' },
+    { op: 'remove', ref: `cv.entries.${N}.header.location` },
+    { ref: 'cv.skills', text: 'Terraform, Canary-s1' },
+    { op: 'set', ref: 'cv.languages', text: 'English, German' },
+    { op: 'remove', ref: `cv.entries.${N}.0` },
+    { op: 'add', ref: `cv.entries.${N}`, text: 'Canary-a1 added bullet' },
+    { op: 'remove', ref: 'letter.1' },
+    { op: 'add', ref: 'letter', text: 'Canary-a2 added paragraph' },
+  ]);
+  expect(res.statusCode).toBe(200);
+  const d = res.json() as { draft: Draft; edited_refs: string[] };
+  const e = d.draft.entries[0]!;
+  expect(e.header).toEqual({ title: 'Canary-h1 Platform Lead', location: '' });
+  expect(e.bullets.map((b) => [b.text, b.removed])).toEqual([
+    ['Cut deploy time to 9 minutes.', true], // stays in place, so `.1` is still the same line
+    ['Terraform on AWS.', undefined],
+    ['Canary-a1 added bullet', undefined],
+  ]);
+  expect(e.bullets[2]!.cites).toEqual([]);
+  expect(d.draft.letter.paragraphs.map((p) => p.removed ?? false)).toEqual([false, true, false, false]);
+  expect([d.draft.skills_text, d.draft.languages_text, d.draft.versions]).toEqual(['Terraform, Canary-s1', 'English, German', 2]);
+  expect(d.edited_refs).toEqual([
+    `cv.entries.${N}.header.title`, `cv.entries.${N}.header.location`, 'cv.skills', 'cv.languages', `cv.entries.${N}.0`, `cv.entries.${N}.2`, 'letter.1', 'letter.3',
+  ]);
+
+  // A removed line, a removed entry and its lines are gone for every op; one bad op rejects the whole batch.
+  for (const edit of [
+    { ref: `cv.entries.${N}.0`, text: 'again' },
+    { op: 'remove', ref: 'letter.1' },
+    { op: 'add', ref: 'cv.summary', text: 'x' },
+    { op: 'add', ref: 'letter.0', text: 'x' },
+    { op: 'set', ref: 'letter', text: 'x' },
+    { op: 'remove', ref: 'cv.skills' },
+    { op: 'set', ref: `cv.entries.${N}`, text: 'x' },
+    { ref: `cv.entries.${N}.header.salary`, text: 'x' },
+    { ref: `cv.entries.${N}.header.__proto__`, text: 'x' },
+    { ref: 'cv.entries.__proto__.header.org', text: 'x' },
+    { op: 'add', ref: 'cv.entries.__proto__', text: 'x' },
+  ]) {
+    const bad = await t.patch([{ ref: 'letter.0', text: 'fine' }, edit]);
+    expect([bad.statusCode, bad.json()]).toEqual([400, { error: 'bad_ref' }]);
+  }
+  for (const edit of [
+    { ref: `cv.entries.${N}.header.org`, text: 'x'.repeat(121) },
+    { op: 'add', ref: 'letter' },
+    { op: 'remove', ref: 'letter.0', text: 'x' },
+  ]) {
+    const bad = await t.patch([{ ref: 'letter.0', text: 'fine' }, edit]);
+    expect([bad.statusCode, bad.json()]).toEqual([400, { error: 'bad_edit' }]);
+  }
+  expect((await t.patch([{ op: 'replace', ref: 'letter.0', text: 'x' }])).statusCode).toBe(400);
+  expect(t.db.prepare("SELECT count(*) FROM application_texts WHERE kind = 'draft'").pluck().get()).toBe(2);
+
+  const header = await t.patch([{ ref: `cv.entries.${N}.header.org`, text: 'x'.repeat(120) }, { op: 'remove', ref: `cv.entries.${N}` }]);
+  const after = header.json() as { draft: Draft };
+  expect(after.draft.entries[0]).toMatchObject({ removed: true, header: { org: 'x'.repeat(120), title: 'Canary-h1 Platform Lead', location: '' } });
+  expect(after.draft.versions).toBe(3);
+  expect((await t.patch([{ op: 'add', ref: `cv.entries.${N}`, text: 'x' }])).json()).toEqual({ error: 'bad_ref' });
+
+  const events = t.db.prepare("SELECT detail FROM application_events WHERE kind = 'edited' ORDER BY id").pluck().all() as string[];
+  expect(JSON.parse(events[0]!)).toMatchObject({ lines: 8, version: 2, edit_distance: 1 }); // two model lines removed
+  expect(JSON.parse(events[1]!)).toMatchObject({ lines: 2, version: 3, edit_distance: null }); // no model line touched
+  const everything = t.dump() + JSON.stringify(t.db.prepare('SELECT * FROM application_events').all());
+  expect(everything).not.toContain('Canary-');
+  expect(everything).not.toContain('English, German');
 });

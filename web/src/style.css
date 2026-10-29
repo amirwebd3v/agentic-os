@@ -158,7 +158,13 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 }
 .lines:not(.letter) .line::before { content: "–"; position: absolute; left: var(--s2); top: var(--s2); color: var(--muted); }
 .line-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.line > button { margin-top: 1px; }
+.line > button, .line-actions { margin-top: 1px; }
+.line-actions { display: flex; gap: var(--s1); }
+.entry-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--s2); align-items: start; }
+.entry-head > :not(.line-actions) { grid-column: 1; overflow-wrap: anywhere; }
+.entry-head > .line-actions { grid-column: 2; grid-row: 1; }
+.entry-head > .line-edit { grid-column: 1 / -1; }
+.entry-head .line-edit label { display: grid; gap: var(--s1); font-size: 14px; }
 .line.flagged { border-left-color: var(--attention); }
 .line.focused { background: var(--accent-tint); border-left-color: var(--accent); }
 .line:hover:not(.focused) { background: var(--inset); }

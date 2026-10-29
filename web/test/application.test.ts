@@ -28,8 +28,8 @@ const app = (over: Partial<ApplicationDetail> = {}): ApplicationDetail => ({
     versions: 1,
   },
   edited_refs: [], verify: { ok: true, violations: [] },
-  sources: { 'sum-1': 'Master summary.', [N]: 'Acme GmbH | Senior Engineer | 2021-03 – 2024-06', [`${N}-1`]: 'Cut the build from 12 to 4 minutes.', 'skill-x': 'Python' },
-  files: [],
+  sources: { 'sum-1': 'Master summary.', [N]: 'Acme GmbH | Senior Engineer | 2021-03 | 2024-06 | Berlin', [`${N}-1`]: 'Cut the build from 12 to 4 minutes.', 'skill-x': 'Python' },
+  languages: ['English (C1)'], files: [],
   ...over,
 });
 
@@ -68,8 +68,11 @@ test('model and file text in a draft renders as text, never as HTML', async () =
       app({
         status: 'flagged', company: EVIL, role_title: EVIL,
         requirements: { language: 'en', company: EVIL, role_title: EVIL, seniority: 'mid', location_mode: 'remote', must_have: [{ id: 'm', text: EVIL, kind: 'skill' }], nice_to_have: [], injection_suspected: true },
-        draft: { summary: evilLine, entries: [{ entry_id: EVIL, bullets: [evilLine] }], skill_ids: [EVIL], letter: { paragraphs: [evilLine] }, versions: 1 },
-        sources: { [EVIL]: EVIL },
+        draft: {
+          summary: evilLine, entries: [{ entry_id: EVIL, bullets: [evilLine], header: { title: EVIL, location: EVIL } }], skill_ids: [EVIL],
+          skills_text: EVIL, languages_text: EVIL, letter: { paragraphs: [evilLine] }, versions: 1,
+        },
+        sources: { [EVIL]: EVIL }, languages: [EVIL],
         verify: { ok: false, violations: [{ code: 'unsupported_entity', ref: 'cv.summary', token: EVIL }, { code: EVIL, ref: 'letter' }] },
       }),
   });
@@ -171,5 +174,112 @@ test('the master import shows its outcome and file warnings as text', async () =
   await vi.waitFor(() => expect(el.querySelector('[role="alert"]')).not.toBeNull());
   expect(el.textContent).toContain('No usable file in career/import/');
   expect(el.textContent).toContain(`${EVIL}: skipped`);
+  expect(el.querySelector('img')).toBeNull();
+});
+
+const press = (el: Element, key: string, init: KeyboardEventInit = {}) => el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));
+const type = (el: Element, value: string) => {
+  (el as HTMLInputElement).value = value;
+  el.dispatchEvent(new Event('input'));
+};
+const byLabel = (el: HTMLElement, label: string) => el.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement;
+
+test('an entry header is edited in place: changed fields only, a blank field is a remove, Esc restores focus', async () => {
+  const draft = app().draft!;
+  const calls = api({
+    'GET /api/career/applications/1': () => app(),
+    'PATCH /api/career/applications/1/draft': () =>
+      app({
+        draft: { ...draft, entries: [{ ...draft.entries[0]!, header: { title: 'Staff Engineer', location: '' } }], versions: 2 },
+        edited_refs: [`cv.entries.${N}.header.title`, `cv.entries.${N}.header.location`],
+      }),
+  });
+  const el = await mount();
+  expect(el.querySelector('.entry-head')!.textContent).toContain('2021-03 – 2024-06 · Berlin');
+  byLabel(el, 'Edit the header of Acme GmbH').click();
+  await vi.waitFor(() => expect(el.querySelectorAll('.entry-head input')).toHaveLength(5));
+  expect(document.activeElement).toBe(el.querySelector('.entry-head input'));
+  press(el.querySelector('.entry-head input')!, 'Escape');
+  await vi.waitFor(() => expect(document.activeElement).toBe(byLabel(el, 'Edit the header of Acme GmbH')));
+  expect(calls.some((c) => c.key.startsWith('PATCH'))).toBe(false);
+
+  byLabel(el, 'Edit the header of Acme GmbH').click();
+  await vi.waitFor(() => expect(el.querySelectorAll('.entry-head input')).toHaveLength(5));
+  const [, title, , , location] = el.querySelectorAll('.entry-head input');
+  type(title!, ' Staff Engineer ');
+  type(location!, '');
+  press(title!, 'Enter', { ctrlKey: true });
+  await vi.waitFor(() => expect(el.querySelector('.entry-head input')).toBeNull());
+  expect(calls.find((c) => c.key.startsWith('PATCH'))!.body).toEqual({
+    edits: [{ ref: `cv.entries.${N}.header.title`, text: 'Staff Engineer' }, { op: 'remove', ref: `cv.entries.${N}.header.location` }],
+  });
+  const head = el.querySelector('.entry-head')!.textContent!;
+  expect(head).toContain('Acme GmbH · Staff Engineer');
+  expect(head).not.toContain('Berlin');
+  expect(head).toContain('Edited by you, not re-checked');
+});
+
+test('the skills and languages lines are editable like any line', async () => {
+  const calls = api({
+    'GET /api/career/applications/1': () => app(),
+    'PATCH /api/career/applications/1/draft': () => app({ draft: { ...app().draft!, languages_text: 'English (C2), German' }, edited_refs: ['cv.languages'] }),
+  });
+  const el = await mount();
+  expect(el.querySelector('[aria-label="Skills"]')!.textContent).toContain('Python');
+  byLabel(el, 'Edit the languages').click();
+  await vi.waitFor(() => expect(el.querySelector('textarea')).not.toBeNull());
+  expect(el.querySelector('textarea')!.value).toBe('English (C1)');
+  type(el.querySelector('textarea')!, 'English (C2), German');
+  press(el.querySelector('textarea')!, 'Enter', { ctrlKey: true });
+  await vi.waitFor(() => expect(el.querySelector('textarea')).toBeNull());
+  expect(calls.find((c) => c.key.startsWith('PATCH'))!.body).toEqual({ edits: [{ ref: 'cv.languages', text: 'English (C2), German' }] });
+  const languages = el.querySelector('[aria-label="Languages"]')!.textContent!;
+  expect(languages).toContain('English (C2), German');
+  expect(languages).toContain('Edited by you, not re-checked');
+  expect(byLabel(el, 'Edit the skills')).not.toBeNull();
+});
+
+test('remove asks first and sends a remove op; a removed line keeps the refs after it', async () => {
+  const draft = app().draft!;
+  const two = { ...draft, entries: [{ entry_id: N, bullets: [draft.entries[0]!.bullets[0]!, { text: 'Second bullet.', cites: [`${N}-1`] }] }] };
+  const confirm = vi.fn(() => false);
+  vi.stubGlobal('confirm', confirm);
+  const calls = api({
+    'GET /api/career/applications/1': () => app({ draft: two }),
+    'PATCH /api/career/applications/1/draft': () =>
+      app({ draft: { ...two, entries: [{ entry_id: N, bullets: [{ ...two.entries[0]!.bullets[0]!, removed: true }, two.entries[0]!.bullets[1]!] }] }, edited_refs: [`cv.entries.${N}.0`] }),
+  });
+  const el = await mount();
+  byLabel(el, 'Remove bullet 1 under Acme GmbH').click();
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(calls.some((c) => c.key.startsWith('PATCH'))).toBe(false);
+  confirm.mockReturnValue(true);
+  byLabel(el, 'Remove bullet 1 under Acme GmbH').click();
+  await vi.waitFor(() => expect(el.textContent).not.toContain('Cut build time'));
+  expect(calls.find((c) => c.key.startsWith('PATCH'))!.body).toEqual({ edits: [{ op: 'remove', ref: `cv.entries.${N}.0` }] });
+  expect(byLabel(el, 'Edit bullet 2 under Acme GmbH')).not.toBeNull(); // still `.1`, not renumbered
+  expect(document.activeElement).toBe(el.querySelector('.reading'));
+  byLabel(el, 'Remove Acme GmbH from the CV').click();
+  await vi.waitFor(() => expect(calls.filter((c) => c.key.startsWith('PATCH'))).toHaveLength(2));
+  expect(calls.at(-1)!.body).toEqual({ edits: [{ op: 'remove', ref: `cv.entries.${N}` }] });
+});
+
+test('add a line under an entry and a letter paragraph', async () => {
+  const calls = api({ 'GET /api/career/applications/1': () => app(), 'PATCH /api/career/applications/1/draft': () => app() });
+  const el = await mount();
+  byLabel(el, 'Add line under Acme GmbH').click();
+  await vi.waitFor(() => expect(el.querySelector('textarea')).not.toBeNull());
+  type(el.querySelector('textarea')!, `  ${EVIL}  `);
+  press(el.querySelector('textarea')!, 'Enter', { ctrlKey: true });
+  await vi.waitFor(() => expect(el.querySelector('textarea')).toBeNull());
+  expect(calls.find((c) => c.key.startsWith('PATCH'))!.body).toEqual({ edits: [{ op: 'add', ref: `cv.entries.${N}`, text: EVIL }] });
+  expect(document.activeElement).toBe(byLabel(el, 'Add line under Acme GmbH'));
+
+  byLabel(el, 'Add line to the letter').click();
+  await vi.waitFor(() => expect(el.querySelector('textarea')).not.toBeNull());
+  type(el.querySelector('textarea')!, 'A closing paragraph.');
+  el.querySelector('form')!.dispatchEvent(new Event('submit'));
+  await vi.waitFor(() => expect(calls.filter((c) => c.key.startsWith('PATCH'))).toHaveLength(2));
+  expect(calls.at(-1)!.body).toEqual({ edits: [{ op: 'add', ref: 'letter', text: 'A closing paragraph.' }] });
   expect(el.querySelector('img')).toBeNull();
 });
