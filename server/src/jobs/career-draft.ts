@@ -1,10 +1,9 @@
 import { z } from 'zod';
 import { loadContact } from '../career/contact.ts';
 import type { Requirements } from '../career/intake.ts';
-import { atStep, event, failStep, latest, readMaster, saveText, setApp, TailorError, writeDraft } from '../career/tailor.ts';
+import { atStep, enqueueStep, event, failStep, latest, readMaster, saveText, setApp, TailorError, writeDraft } from '../career/tailor.ts';
 import type { Draft, Retry, Selection } from '../career/tailor.ts';
 import type { VerifyReport } from '../career/verify.ts';
-import { enqueue } from '../db/jobs.ts';
 import { LlmError } from '../llm/errors.ts';
 import type { CareerIntakeDeps } from './career-intake.ts';
 import type { JobHandler } from './runner.ts';
@@ -39,6 +38,6 @@ export const careerDraft =
       saveText(db, id, 'draft', draft);
       setApp(db, id, { step: 'verify' });
       event(db, id, 'step', { from: 'draft', to: 'verify', attempt, cv_lines: lines, paragraphs: draft.letter.paragraphs.length });
-      enqueue(db, 'career_verify', `career:verify:${id}:${attempt}`, { applicationId: id, attempt });
+      enqueueStep(db, id, 'verify', attempt);
     })();
   };

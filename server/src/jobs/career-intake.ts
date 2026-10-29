@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { loadContact } from '../career/contact.ts';
 import { extractRequirements, IntakeError } from '../career/intake.ts';
+import { enqueueStep, saveText } from '../career/tailor.ts';
 import type { Config } from '../config.ts';
 import { audit } from '../db/audit.ts';
 import type { Database } from '../db/index.ts';
-import { enqueue } from '../db/jobs.ts';
 import type { structured } from '../llm/client.ts';
 import { LlmError } from '../llm/errors.ts';
 import type { JobHandler } from './runner.ts';
@@ -50,7 +50,7 @@ export const careerIntake =
 
     const detail = { from: 'intake', to: 'match', must_have: req.must_have.length, nice_to_have: req.nice_to_have.length, injection_suspected: req.injection_suspected };
     db.transaction(() => {
-      db.prepare(`INSERT INTO application_texts (application_id, kind, body) VALUES (?, 'requirements', ?)`).run(id, JSON.stringify(req));
+      saveText(db, id, 'requirements', req); // a retried run (`POST …/retry`) adds a version
       db.prepare(`UPDATE applications SET company = ?, role_title = ?, language = ?, step = 'match', updated_at = ${NOW} WHERE id = ?`).run(
         req.company || null,
         req.role_title || null,
@@ -59,6 +59,6 @@ export const careerIntake =
       );
       db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'step', ?)`).run(id, JSON.stringify(detail));
       audit(db, { actor: 'app', action: 'career.application.step', args: { application_id: id, ...detail } });
-      enqueue(db, 'career_match', `career:match:${id}:0`, { applicationId: id });
+      enqueueStep(db, id, 'match', 0);
     })();
   };

@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import { loadContact } from '../career/contact.ts';
 import type { Requirements } from '../career/intake.ts';
-import { atStep, coverage, event, failStep, latest, readMaster, saveText, selectBullets, setApp, TailorError } from '../career/tailor.ts';
-import { enqueue } from '../db/jobs.ts';
+import { atStep, coverage, enqueueStep, event, failStep, latest, readMaster, saveText, selectBullets, setApp, TailorError } from '../career/tailor.ts';
 import { LlmError } from '../llm/errors.ts';
 import type { CareerIntakeDeps } from './career-intake.ts';
 import type { JobHandler } from './runner.ts';
@@ -35,6 +34,6 @@ export const careerMatch =
       saveText(db, id, 'selection', sel);
       setApp(db, id, { step: 'draft' });
       event(db, id, 'step', { from: 'match', to: 'draft', matched, total, unmatched: sel.unmatched.length, entries: sel.entries.length, bullets, skills: sel.skill_ids.length });
-      enqueue(db, 'career_draft', `career:draft:${id}:1`, { applicationId: id, attempt: 1 });
+      enqueueStep(db, id, 'draft', 1);
     })();
   };

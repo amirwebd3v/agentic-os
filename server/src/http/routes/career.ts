@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
 import { editDistance } from '../../approvals/edit-distance.ts';
@@ -15,7 +15,7 @@ import { sha256 } from '../../vault/writer.ts';
 
 export const MAX_POSTING_CHARS = 30_000;
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
-const SUMMARY = 'id, company, role_title, language, status, step, fail_code, follow_up_on, created_at, updated_at';
+const SUMMARY = 'id, company, role_title, language, status, step, fail_code, follow_up_on, archived_at, created_at, updated_at';
 
 const CAREER_JOB = `kind LIKE 'career\\_%' ESCAPE '\\'`;
 
@@ -72,24 +72,61 @@ function enqueueRender(db: Database, id: number): void {
   enqueue(db, 'career_render', `career:render:${id}:${n}`, { applicationId: id });
 }
 
+/**
+ * `POST …/retry`: a failed application runs the whole pipeline again from its stored posting, as a new run whose
+ * intake key takes the next attempt number; the steps store new versions, and `latest()` reads the newest.
+ */
+export function retryRun(db: Database, id: number, masterHash: string): void {
+  db.transaction(() => {
+    db.prepare(`UPDATE applications SET status = 'processing', step = 'intake', fail_code = NULL, master_hash = ?, updated_at = ${NOW} WHERE id = ?`).run(masterHash, id);
+    event(db, id, 'retry', { to: 'intake' });
+    const n = db.prepare(`SELECT count(*) FROM jobs WHERE kind = 'career_intake' AND json_extract(payload, '$.applicationId') = ?`).pluck().get(id) as number;
+    enqueue(db, 'career_intake', `career:intake:${id}:${n}`, { applicationId: id });
+  })();
+}
+
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } as const;
 const DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-export type DraftEdit = { op?: 'set' | 'remove' | 'add'; ref: string; text?: string };
+export type DraftEdit = { op?: 'set' | 'remove' | 'add' | 'restore'; ref: string; text?: string };
 const INDEX = /^(?:0|[1-9]\d{0,3})$/;
 const live = <T extends { removed?: true | undefined }>(x: T | null | undefined) => (x && !x.removed ? x : undefined);
-const lineAt = (list: DraftLine[], i: string | undefined) => (i !== undefined && INDEX.test(i) ? live(list[Number(i)]) : undefined);
+const at = (list: DraftLine[], i: string | undefined) => (i !== undefined && INDEX.test(i) ? list[Number(i)] : undefined);
+const lineAt = (list: DraftLine[], i: string | undefined) => live(at(list, i));
 
 /**
  * Applies one edit to `d` in place (contract §8.2). Returns the ref it touched (for `add`, the new line's ref) and,
  * for a model line that was replaced or removed, its old text (for `edit_distance`); or a fixed error code.
- * Refs: `cv.summary`, `cv.entries.<entry_id>[.<i> | .header.<field>]`, `cv.skills`, `cv.languages`, `letter[.<i>]`.
- * A removed item stays in place with `removed: true`, so the refs after it keep their index.
+ * Refs: `cv.summary`, `cv.entries[.<entry_id>[.<i> | .header.<field>]]`, `cv.skills`, `cv.languages`, `letter[.<i>]`.
+ * A removed item stays in place with `removed: true`, so the refs after it keep their index, and `restore` brings it
+ * back. `masterEntries` are the entry ids `add cv.entries` may take (text = the id).
  */
-function applyEdit(d: Draft, { op = 'set', ref, text }: DraftEdit): { ref: string; was?: string } | 'bad_ref' | 'bad_edit' {
-  if ((op === 'remove') !== (text === undefined)) return 'bad_edit';
+function applyEdit(d: Draft, { op = 'set', ref, text }: DraftEdit, masterEntries: readonly string[]): { ref: string; was?: string } | 'bad_ref' | 'bad_edit' {
+  if ((op === 'remove' || op === 'restore') !== (text === undefined)) return 'bad_edit';
   const p = ref.split('.');
-  const entry = p[0] === 'cv' && p[1] === 'entries' ? live(d.entries.find((e) => e.entry_id === p[2])) : undefined;
+  const any = p[0] === 'cv' && p[1] === 'entries' ? d.entries.find((e) => e.entry_id === p[2]) : undefined;
+  const entry = live(any);
+  if (op === 'restore') {
+    const item =
+      ref === 'cv.summary' ? d.summary
+      : any && p.length === 3 ? any
+      : entry && p.length === 4 ? at(entry.bullets, p[3])
+      : p[0] === 'letter' && p.length === 2 ? at(d.letter.paragraphs, p[1])
+      : undefined;
+    if (!item?.removed) return 'bad_ref';
+    delete item.removed;
+    return { ref };
+  }
+  if (ref === 'cv.summary' && op === 'add' && !live(d.summary)) {
+    d.summary = { text: text!, cites: [] }; // replaces a removed model summary: the new line is yours
+    return { ref };
+  }
+  if (ref === 'cv.entries' && op === 'add') {
+    // An entry the draft has, even removed, keeps its ref: restore it instead of adding it twice.
+    if (!masterEntries.includes(text!) || d.entries.some((e) => e.entry_id === text)) return 'bad_ref';
+    d.entries.push({ entry_id: text!, bullets: [] });
+    return { ref: `cv.entries.${text}` };
+  }
   const line =
     ref === 'cv.summary' ? live(d.summary)
     : entry && p.length === 4 ? lineAt(entry.bullets, p[3])
@@ -129,21 +166,19 @@ function masterOrNull(vaultDir: string): MasterIndex['master'] | null {
   }
 }
 
+/** Every master entry as `{ id, header }` (`org | title | start | end | location`), in master order. */
+function masterEntries(master: MasterIndex['master']): { id: string; header: string }[] {
+  return master.sections.flatMap((s) => ('entries' in s ? s.entries.map((e) => ({ id: e.id, header: [e.org, e.title, e.start, e.end, e.location].join(' | ') })) : []));
+}
+
 /**
  * The master text behind every id the draft cites or lists (bullet text without its entry header), plus each
  * entry's header (`org | title | start | end | location`) under its entry id so the page can title the CV sections.
  * An id the master no longer has is simply missing.
  */
 function draftSources(master: MasterIndex['master'], draft: Draft): Record<string, string> {
-  const all = new Map<string, string>();
-  for (const s of master.sections) {
-    if ('bullets' in s) for (const b of s.bullets) all.set(b.id, b.text);
-    else
-      for (const e of s.entries) {
-        all.set(e.id, [e.org, e.title, e.start, e.end, e.location].join(' | '));
-        for (const b of e.bullets) all.set(b.id, b.text);
-      }
-  }
+  const all = new Map(masterEntries(master).map((e) => [e.id, e.header]));
+  for (const s of master.sections) for (const b of 'bullets' in s ? s.bullets : s.entries.flatMap((e) => e.bullets)) all.set(b.id, b.text);
   const lines = [draft.summary, ...draft.entries.flatMap((e) => e.bullets), ...draft.letter.paragraphs];
   const ids = [...draft.skill_ids, ...lines.flatMap((l) => l?.cites ?? []), ...draft.entries.map((e) => e.entry_id)];
   return Object.fromEntries(ids.filter((i) => all.has(i)).map((i) => [i, all.get(i)!]));
@@ -151,7 +186,7 @@ function draftSources(master: MasterIndex['master'], draft: Draft): Record<strin
 
 /** `ApplicationDetail` (contract §8.2), or null when there is no such application. */
 function applicationDetail(db: Database, vaultDir: string, id: number) {
-  const summary = db.prepare(`SELECT ${SUMMARY} FROM applications WHERE id = ?`).get(id);
+  const summary = db.prepare(`SELECT ${SUMMARY} FROM applications WHERE id = ? AND deleted_at IS NULL`).get(id);
   if (!summary) return null;
   const requirements = latest<Requirements>(db, id, 'requirements');
   const selection = latest<Selection>(db, id, 'selection');
@@ -170,6 +205,7 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
     edited_refs: [...new Set(edited.flatMap((r) => (JSON.parse(r) as string[] | null) ?? []))],
     verify: latest(db, id, 'verify_report'),
     sources: master ? draftSources(master, draft) : {},
+    master_entries: master ? masterEntries(master) : [], // what `add cv.entries` can take
     languages: languages && 'bullets' in languages ? languages.bullets.map((b) => b.text) : [],
     files: db.prepare('SELECT kind, bytes FROM application_files WHERE application_id = ? ORDER BY id').all(id),
     milestones: milestones(db, id),
@@ -187,6 +223,20 @@ export const careerRoutes =
     const vaultDir = vaultOverride ?? api.config.vaultDir;
     const masterPath = join(vaultDir, 'career', 'master.md');
     failStuckApplications(db); // boot: openDb's recoverStaleLocks fails a career job that was running at a crash
+    type App = { status: string; step: string | null; master_hash: string };
+    // A deleted application is gone for every route: 404, like an unknown id.
+    const appRow = (id: number) => db.prepare('SELECT status, step, master_hash FROM applications WHERE id = ? AND deleted_at IS NULL').get(id) as App | undefined;
+    /** A step runs: the pipeline, or a render (which completes only while the status is `final`). */
+    const running = (a: App) => a.status === 'processing' || (a.status === 'final' && a.step === 'render');
+    /** The master's hash for a new run, or the fixed code that refuses one. */
+    const runHash = (): { hash: string } | { error: 'provider_not_configured' | 'master_missing' } => {
+      if (!getLlm(api.config)) return { error: 'provider_not_configured' };
+      try {
+        return { hash: sha256(readFileSync(masterPath, 'utf8')) };
+      } catch {
+        return { error: 'master_missing' };
+      }
+    };
 
     api.post<{ Body: { posting: string } }>(
       '/career/applications',
@@ -204,17 +254,10 @@ export const careerRoutes =
       async (req, reply) => {
         const { posting } = req.body;
         if (posting.length > MAX_POSTING_CHARS) return reply.code(400).send({ error: 'posting_too_long' });
-        if (!getLlm(api.config)) return reply.code(409).send({ error: 'provider_not_configured' });
-        let master: string;
-        try {
-          master = readFileSync(masterPath, 'utf8');
-        } catch {
-          return reply.code(409).send({ error: 'master_missing' });
-        }
+        const run = runHash();
+        if ('error' in run) return reply.code(409).send(run);
         const summary = db.transaction(() => {
-          const row = db
-            .prepare(`INSERT INTO applications (step, master_hash) VALUES ('intake', ?) RETURNING ${SUMMARY}`)
-            .get(sha256(master)) as { id: number };
+          const row = db.prepare(`INSERT INTO applications (step, master_hash) VALUES ('intake', ?) RETURNING ${SUMMARY}`).get(run.hash) as { id: number };
           db.prepare(`INSERT INTO application_texts (application_id, kind, body) VALUES (?, 'posting', ?)`).run(row.id, posting);
           db.prepare(`INSERT INTO application_events (application_id, kind) VALUES (?, 'created')`).run(row.id);
           enqueue(db, 'career_intake', `career:intake:${row.id}:0`, { applicationId: row.id });
@@ -226,7 +269,7 @@ export const careerRoutes =
     );
 
     api.get('/career/applications', async () =>
-      db.prepare(`SELECT ${SUMMARY}, ${LIST_TRACKING} FROM applications ORDER BY created_at DESC, id DESC LIMIT 100`).all(),
+      db.prepare(`SELECT ${SUMMARY}, ${LIST_TRACKING} FROM applications WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 500`).all(),
     );
 
     api.get<{ Params: { id: number } }>(
@@ -251,7 +294,7 @@ export const careerRoutes =
                 items: {
                   type: 'object',
                   properties: {
-                    op: { type: 'string', enum: ['set', 'remove', 'add'] },
+                    op: { type: 'string', enum: ['set', 'remove', 'add', 'restore'] },
                     ref: { type: 'string', maxLength: 200 },
                     text: { type: 'string', minLength: 1, maxLength: 700 },
                   },
@@ -267,14 +310,16 @@ export const careerRoutes =
       },
       async (req, reply) => {
         const { id } = req.params;
-        const status = db.prepare('SELECT status FROM applications WHERE id = ?').pluck().get(id) as string | undefined;
+        const status = appRow(id)?.status;
         if (status === undefined) return reply.code(404).send({ error: 'not_found' });
         const draft = latest<Draft>(db, id, 'draft');
         if (!draft || (status !== 'draft_ready' && status !== 'flagged')) return reply.code(409).send({ error: 'wrong_status' });
+        const master = req.body.edits.some((e) => e.ref === 'cv.entries') ? masterOrNull(vaultDir) : null;
+        const entryIds = master ? masterEntries(master).map((e) => e.id) : [];
         const touched: string[] = [];
         const distances: number[] = [];
         for (const edit of req.body.edits) {
-          const done = applyEdit(draft, edit); // one bad edit rejects the batch: nothing is saved
+          const done = applyEdit(draft, edit, entryIds); // one bad edit rejects the batch: nothing is saved
           if (typeof done === 'string') return reply.code(400).send({ error: done });
           touched.push(done.ref);
           // ponytail: Levenshtein is O(n·m); the model's line is capped at 2000 chars for the metric only.
@@ -297,14 +342,13 @@ export const careerRoutes =
 
     // ---------- W2-09: finalise, render, download ----------
     const outDir = outRoot(dataOverride ?? api.config.dataDir);
-    const status = (id: number) => db.prepare('SELECT status, step FROM applications WHERE id = ?').get(id) as { status: string; step: string | null } | undefined;
 
     api.post<{ Params: { id: number }; Body: { acknowledge_flagged?: unknown } | undefined }>(
       '/career/applications/:id/final',
       { schema: { params: ID_PARAMS } },
       async (req, reply) => {
         const { id } = req.params;
-        const app = status(id);
+        const app = appRow(id);
         if (!app) return reply.code(404).send({ error: 'not_found' });
         const flagged = app.status === 'flagged';
         if (flagged && req.body?.acknowledge_flagged !== true) return reply.code(409).send({ error: 'flagged_not_acknowledged' });
@@ -321,7 +365,7 @@ export const careerRoutes =
 
     api.post<{ Params: { id: number } }>('/career/applications/:id/render', { schema: { params: ID_PARAMS } }, async (req, reply) => {
       const { id } = req.params;
-      const app = status(id);
+      const app = appRow(id);
       if (!app) return reply.code(404).send({ error: 'not_found' });
       if (app.status !== 'final' || app.step === 'render') return reply.code(409).send({ error: 'wrong_status' });
       db.transaction(() => {
@@ -338,7 +382,7 @@ export const careerRoutes =
       async (req, reply) => {
         const { id, kind } = req.params;
         // An unknown kind is a 404, like an unknown id (contract §10), not a schema 400.
-        if (!(FILE_KINDS as readonly string[]).includes(kind) || !status(id)) return reply.code(404).send({ error: 'not_found' });
+        if (!(FILE_KINDS as readonly string[]).includes(kind) || !appRow(id)) return reply.code(404).send({ error: 'not_found' });
         const relpath = db.prepare('SELECT relpath FROM application_files WHERE application_id = ? AND kind = ?').pluck().get(id, kind) as string | undefined;
         let file: Buffer;
         try {
@@ -366,14 +410,14 @@ export const careerRoutes =
 
     /** The `{ code, error }` that refuses a milestone write, or null when the application can be tracked. */
     const untrackable = (id: number) => {
-      const app = db.prepare('SELECT status, step FROM applications WHERE id = ?').get(id) as { status: string; step: string | null } | undefined;
+      const app = appRow(id);
       if (!app) return { code: 404, error: 'not_found' };
       // A running render only completes while the status is `final`, so tracking waits for it.
       return TRACKED.includes(app.status) && app.step !== 'render' ? null : { code: 409, error: 'wrong_status' };
     };
 
     api.get<{ Params: { id: number } }>('/career/applications/:id/milestones', { schema: { params: ID_PARAMS } }, async (req, reply) =>
-      db.prepare('SELECT 1 FROM applications WHERE id = ?').get(req.params.id) ? milestones(db, req.params.id) : reply.code(404).send({ error: 'not_found' }),
+      appRow(req.params.id) ? milestones(db, req.params.id) : reply.code(404).send({ error: 'not_found' }),
     );
 
     api.post<{ Params: { id: number }; Body: { kind: MilestoneKind; on_date: string; note?: string | null } }>(
@@ -446,25 +490,100 @@ export const careerRoutes =
       return applicationDetail(db, vaultDir, id);
     });
 
-    // Status moves happen through milestones; this sets only the follow-up date.
-    api.patch<{ Params: { id: number }; Body: { follow_up_on: string | null } }>(
+    // Status moves happen through milestones; this sets the follow-up date and renames.
+    type AppPatch = { follow_up_on?: string | null; company?: string; role_title?: string };
+    const NAME = { type: 'string', pattern: '\\S', maxLength: 200 } as const;
+    api.patch<{ Params: { id: number }; Body: AppPatch }>(
       '/career/applications/:id',
       {
         schema: {
           params: ID_PARAMS,
-          body: { type: 'object', properties: { follow_up_on: { type: ['string', 'null'], maxLength: 10 } }, required: ['follow_up_on'], additionalProperties: false },
+          body: {
+            type: 'object',
+            properties: { follow_up_on: { type: ['string', 'null'], maxLength: 10 }, company: NAME, role_title: NAME },
+            minProperties: 1,
+            additionalProperties: false,
+          },
         },
       },
       async (req, reply) => {
         const { id } = req.params;
-        const { follow_up_on } = req.body;
-        if (follow_up_on !== null && !isDate(db, follow_up_on)) return reply.code(400).send({ error: 'bad_date' });
-        if (!db.prepare(`UPDATE applications SET follow_up_on = ?, updated_at = ${NOW} WHERE id = ?`).run(follow_up_on, id).changes)
-          return reply.code(404).send({ error: 'not_found' });
-        audit(db, { actor: 'user', action: 'career.application.follow_up', args: { id, follow_up_on } });
+        const b = req.body;
+        const app = appRow(id);
+        if (!app) return reply.code(404).send({ error: 'not_found' });
+        const dated = b.follow_up_on !== undefined;
+        if (typeof b.follow_up_on === 'string' && !isDate(db, b.follow_up_on)) return reply.code(400).send({ error: 'bad_date' });
+        const fields = (['company', 'role_title'] as const).filter((k) => b[k] !== undefined);
+        // Intake writes both names from the posting, so a rename waits for it.
+        if (fields.length && app.status === 'processing') return reply.code(409).send({ error: 'wrong_status' });
+        const cols: Record<string, string | null> = dated ? { follow_up_on: b.follow_up_on ?? null } : {};
+        for (const k of fields) cols[k] = b[k]!.trim();
+        db.transaction(() => {
+          db.prepare(`UPDATE applications SET ${Object.keys(cols).map((k) => `${k} = ?`).join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...Object.values(cols), id);
+          if (fields.length) db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'edited', ?)`).run(id, JSON.stringify({ fields }));
+        })();
+        if (dated) audit(db, { actor: 'user', action: 'career.application.follow_up', args: { id, follow_up_on: b.follow_up_on } });
+        if (fields.length) audit(db, { actor: 'user', action: 'career.application.rename', args: { id, fields } }); // field names, never the values
         return applicationDetail(db, vaultDir, id);
       },
     );
+
+    // ---------- admin: retry, archive, delete ----------
+    api.post<{ Params: { id: number } }>('/career/applications/:id/retry', { schema: { params: ID_PARAMS } }, async (req, reply) => {
+      const { id } = req.params;
+      const app = appRow(id);
+      if (!app) return reply.code(404).send({ error: 'not_found' });
+      // An application sent elsewhere (`master_hash = ''`) has no posting to run again.
+      if (app.status !== 'failed' || app.master_hash === '') return reply.code(409).send({ error: 'wrong_status' });
+      const run = runHash();
+      if ('error' in run) return reply.code(409).send(run);
+      retryRun(db, id, run.hash);
+      audit(db, { actor: 'user', action: 'career.application.retry', args: { id } });
+      return reply.code(202).send(applicationDetail(db, vaultDir, id));
+    });
+
+    api.post<{ Params: { id: number }; Body: { archived: boolean } }>(
+      '/career/applications/:id/archive',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: { type: 'object', properties: { archived: { type: 'boolean' } }, required: ['archived'], additionalProperties: false },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        const { archived } = req.body;
+        const app = appRow(id);
+        if (!app) return reply.code(404).send({ error: 'not_found' });
+        if (running(app)) return reply.code(409).send({ error: 'wrong_status' });
+        db.transaction(() => {
+          db.prepare(`UPDATE applications SET archived_at = ${archived ? `COALESCE(archived_at, ${NOW})` : 'NULL'}, updated_at = ${NOW} WHERE id = ?`).run(id);
+          db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'status', ?)`).run(id, JSON.stringify({ archived }));
+        })();
+        audit(db, { actor: 'user', action: 'career.application.archive', args: { id, archived } });
+        return applicationDetail(db, vaultDir, id);
+      },
+    );
+
+    // Permanent: the texts, milestones, files and names go; the row and its events stay (events are append-only).
+    api.delete<{ Params: { id: number } }>('/career/applications/:id', { schema: { params: ID_PARAMS } }, async (req, reply) => {
+      const { id } = req.params;
+      const app = appRow(id);
+      if (!app) return reply.code(404).send({ error: 'not_found' });
+      if (running(app)) return reply.code(409).send({ error: 'wrong_status' });
+      const counts = db.transaction(() => {
+        const del = (table: string) => db.prepare(`DELETE FROM ${table} WHERE application_id = ?`).run(id).changes;
+        const counts = { texts: del('application_texts'), milestones: del('application_milestones'), files: del('application_files') };
+        db.prepare(`UPDATE applications SET company = NULL, role_title = NULL, follow_up_on = NULL, deleted_at = ${NOW}, updated_at = ${NOW} WHERE id = ?`).run(id);
+        db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'status', '{"deleted":true}')`).run(id);
+        // Nothing may run on it any more: a queued step would find no texts.
+        db.prepare(`UPDATE jobs SET status = 'failed', error = 'application deleted' WHERE status = 'queued' AND ${CAREER_JOB} AND json_extract(payload, '$.applicationId') = ?`).run(id);
+        return counts;
+      })();
+      rmSync(inside(outDir, String(id)), { recursive: true, force: true }); // after the commit; a missing folder is fine
+      audit(db, { actor: 'user', action: 'career.application.delete', args: { id, ...counts } });
+      return reply.code(204).send();
+    });
 
     // A job applied to outside the app: no posting and no draft, only its tracking.
     api.post<{ Body: { company: string; role_title: string; applied_on: string } }>(

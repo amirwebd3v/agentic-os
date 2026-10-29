@@ -30,8 +30,8 @@ async function setup() {
 test('0007 applies on a database at version 6 and keeps its applications', () => {
   const db = makeTestDb();
   db.prepare("INSERT INTO applications (status, master_hash) VALUES ('final', 'h')").run();
-  db.exec('DROP TABLE application_milestones');
-  db.pragma('user_version = 6');
+  db.exec('DROP TABLE application_milestones; ALTER TABLE applications DROP COLUMN archived_at; ALTER TABLE applications DROP COLUMN deleted_at');
+  db.pragma('user_version = 6'); // 0007 and 0008 apply again
   migrate(db);
   expect(db.pragma('user_version', { simple: true })).toBe(LATEST);
   expect(db.prepare('SELECT status FROM applications').pluck().all()).toEqual(['final']);

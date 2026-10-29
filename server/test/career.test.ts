@@ -1,10 +1,11 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { Draft } from '../src/career/tailor.ts';
 import { claimNext, enqueue, fail, recoverStaleLocks } from '../src/db/jobs.ts';
 import { careerRoutes, failCareerJob, failStuckApplications, MAX_POSTING_CHARS } from '../src/http/routes/career.ts';
+import { outRoot } from '../src/jobs/career-render.ts';
 import { runNext, startRunner } from '../src/jobs/runner.ts';
 import type { JobHandler } from '../src/jobs/runner.ts';
 import { reloadLlm } from '../src/llm/client.ts';
@@ -30,7 +31,7 @@ async function setup({ master = true } = {}) {
     mkdirSync(join(vault, 'career'));
     writeFileSync(join(vault, 'career', 'master.md'), '## Summary\n');
   }
-  const t = await buildTestApp({ loggedIn: true, plugins: [careerRoutes({ vaultDir: vault })] });
+  const t = await buildTestApp({ loggedIn: true, plugins: [careerRoutes({ vaultDir: vault, dataDir: vault })] });
   const post = (payload: unknown) => t.app.inject(t.authed({ method: 'POST', url: '/api/career/applications', payload: payload as object }));
   const get = async (id: number) => (await t.app.inject(t.authed({ url: `/api/career/applications/${id}` }))).json() as Record<string, unknown>;
   const start = async () => ((await post({ posting: POSTING })).json() as { id: number }).id;
@@ -301,4 +302,146 @@ test('PATCH …/draft ops: headers, skills, languages, add and remove; refs stay
   const everything = t.dump() + JSON.stringify(t.db.prepare('SELECT * FROM application_events').all());
   expect(everything).not.toContain('Canary-');
   expect(everything).not.toContain('English, German');
+});
+
+test('PATCH …/draft restore and add: removed items come back, a summary and master entries can be added', async () => {
+  const t = await drafted();
+  const K = 'exp-kestrel-data-2018';
+  expect((await t.get(t.id)).master_entries).toEqual([
+    { id: N, header: 'Northwind Logistics | DevOps Engineer | 2021-03 | present | Hamburg' },
+    { id: K, header: 'Kestrel Data | Systems Administrator | 2018-09 | 2021-02 | Bremen' },
+    { id: 'edu-hochschule-bremen-2015', header: 'Hochschule Bremen | BSc Computer Science | 2015 | 2018 | Bremen' },
+  ]);
+  await t.patch([{ op: 'remove', ref: 'cv.summary' }, { op: 'remove', ref: `cv.entries.${N}.0` }, { op: 'remove', ref: 'letter.1' }]);
+  for (const edit of [
+    { op: 'restore', ref: `cv.entries.${N}.1` }, // not removed
+    { op: 'restore', ref: `cv.entries.${N}` },
+    { op: 'restore', ref: 'letter.9' },
+    { op: 'restore', ref: 'cv.skills' },
+    { op: 'add', ref: 'cv.entries', text: N }, // already in the draft
+    { op: 'add', ref: 'cv.entries', text: 'exp-nowhere-2020' },
+    { op: 'add', ref: 'cv.entries', text: `${N}-1a2b3c` }, // a bullet, not an entry
+  ]) {
+    const bad = await t.patch([{ ref: 'letter.0', text: 'fine' }, edit]);
+    expect([bad.statusCode, bad.json()]).toEqual([400, { error: 'bad_ref' }]);
+  }
+  expect((await t.patch([{ op: 'restore', ref: 'letter.1', text: 'x' }])).json()).toEqual({ error: 'bad_edit' });
+
+  const res = await t.patch([
+    { op: 'restore', ref: `cv.entries.${N}.0` },
+    { op: 'restore', ref: 'letter.1' },
+    { op: 'add', ref: 'cv.summary', text: 'Canary-s1 mine' },
+    { op: 'add', ref: 'cv.entries', text: K },
+    { op: 'add', ref: `cv.entries.${K}`, text: 'Canary-b1 bullet' },
+  ]);
+  expect(res.statusCode).toBe(200);
+  const d = res.json() as { draft: Draft; edited_refs: string[] };
+  expect(d.draft.summary).toEqual({ text: 'Canary-s1 mine', cites: [] });
+  expect(d.draft.entries[0]!.bullets[0]).toEqual(DRAFT.entries[0]!.bullets[0]);
+  expect(d.draft.letter.paragraphs[1]).toEqual(DRAFT.letter.paragraphs[1]);
+  expect(d.draft.entries[1]).toEqual({ entry_id: K, bullets: [{ text: 'Canary-b1 bullet', cites: [] }] });
+  expect(d.edited_refs).toEqual(expect.arrayContaining(['cv.summary', `cv.entries.${K}`, `cv.entries.${K}.0`]));
+  expect((await t.patch([{ op: 'add', ref: 'cv.summary', text: 'x' }])).json()).toEqual({ error: 'bad_ref' }); // live now: `set` it
+
+  await t.patch([{ op: 'remove', ref: `cv.entries.${K}` }]);
+  expect((await t.patch([{ op: 'add', ref: 'cv.entries', text: K }])).json()).toEqual({ error: 'bad_ref' }); // restore it instead
+  expect(((await t.patch([{ op: 'restore', ref: `cv.entries.${K}` }])).json() as { draft: Draft }).draft.entries[1]!.removed).toBeUndefined();
+  expect(t.dump() + JSON.stringify(t.db.prepare('SELECT * FROM application_events').all())).not.toContain('Canary-');
+});
+
+// ---------- admin: rename, retry, archive, delete ----------
+
+type T = Awaited<ReturnType<typeof setup>>;
+const call = (t: T, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) =>
+  t.app.inject(t.authed({ method, url: `/api/career/applications${url}`, ...(payload && { payload }) }));
+const make = (t: T, status: string, step: string | null = null, hash = 'h') =>
+  Number(t.db.prepare('INSERT INTO applications (status, step, master_hash) VALUES (?, ?, ?)').run(status, step, hash).lastInsertRowid);
+const eventsOf = (t: T, id: number) => t.db.prepare('SELECT kind, detail FROM application_events WHERE application_id = ? ORDER BY id').all(id);
+
+test('PATCH renames in any status but processing, trimmed; the event and audit name the fields, never the values', async () => {
+  const t = await setup();
+  const id = make(t, 'draft_ready');
+  for (const bad of [{}, { company: ' ' }, { company: 'x'.repeat(201) }, { follow_up_on: 'soon' }]) expect([bad, (await call(t, 'PATCH', `/${id}`, bad)).statusCode]).toEqual([bad, 400]);
+  const res = await call(t, 'PATCH', `/${id}`, { company: ' Canary-r1 Acme ', role_title: 'Canary-r2 Dev' });
+  expect(res.json()).toMatchObject({ company: 'Canary-r1 Acme', role_title: 'Canary-r2 Dev', follow_up_on: null });
+  const busy = make(t, 'processing', 'match');
+  expect((await call(t, 'PATCH', `/${busy}`, { role_title: 'X' })).json()).toEqual({ error: 'wrong_status' });
+  expect((await call(t, 'PATCH', `/${busy}`, { follow_up_on: '2026-11-03' })).statusCode).toBe(200);
+  expect(eventsOf(t, id)).toEqual([{ kind: 'edited', detail: '{"fields":["company","role_title"]}' }]);
+  const audits = t.db.prepare("SELECT args_redacted FROM audit_log WHERE action = 'career.application.rename'").pluck().all() as string[];
+  expect(audits.map((a) => JSON.parse(a))).toEqual([{ id, fields: ['company', 'role_title'] }]);
+  expect(t.dump()).not.toContain('Canary-r');
+});
+
+test('retry: only a failed run, with the same preconditions as POST; it resets the run and queues a new intake', async () => {
+  const t = await setup();
+  const id = await t.start();
+  expect((await call(t, 'POST', `/${id}/retry`)).json()).toEqual({ error: 'wrong_status' }); // processing
+  expect((await call(t, 'POST', `/${make(t, 'failed', null, '')}/retry`)).json()).toEqual({ error: 'wrong_status' }); // sent elsewhere
+  expect((await call(t, 'POST', '/999/retry')).statusCode).toBe(404);
+  t.db.prepare(`UPDATE applications SET status = 'failed', step = 'draft', fail_code = 'provider_error', master_hash = 'old' WHERE id = ?`).run(id);
+  secret.key = null;
+  expect((await call(t, 'POST', `/${id}/retry`)).json()).toEqual({ error: 'provider_not_configured' });
+  secret.key = 'sk-test';
+  rmSync(join(t.vault, 'career', 'master.md'));
+  expect((await call(t, 'POST', `/${id}/retry`)).json()).toEqual({ error: 'master_missing' });
+  writeFileSync(join(t.vault, 'career', 'master.md'), '## Summary\n');
+
+  const res = await call(t, 'POST', `/${id}/retry`);
+  expect(res.statusCode).toBe(202);
+  expect(res.json()).toMatchObject({ id, status: 'processing', step: 'intake', fail_code: null });
+  expect(t.db.prepare('SELECT master_hash FROM applications WHERE id = ?').pluck().get(id)).toMatch(/^[0-9a-f]{64}$/);
+  expect(t.db.prepare('SELECT idempotency_key FROM jobs ORDER BY id').pluck().all()).toEqual([`career:intake:${id}:0`, `career:intake:${id}:1`]);
+  expect(eventsOf(t, id).at(-1)).toEqual({ kind: 'retry', detail: '{"to":"intake"}' });
+  expect((await call(t, 'POST', `/${id}/retry`)).json()).toEqual({ error: 'wrong_status' });
+});
+
+test('archive and restore; archive and delete are refused while a step runs', async () => {
+  const t = await setup();
+  for (const [status, step] of [['processing', 'draft'], ['final', 'render']] as const) {
+    const busy = make(t, status, step);
+    expect((await call(t, 'POST', `/${busy}/archive`, { archived: true })).json()).toEqual({ error: 'wrong_status' });
+    expect((await call(t, 'DELETE', `/${busy}`)).json()).toEqual({ error: 'wrong_status' });
+  }
+  const id = make(t, 'failed');
+  expect((await call(t, 'POST', `/${id}/archive`, { archived: 'yes' })).statusCode).toBe(400);
+  const archived = (await call(t, 'POST', `/${id}/archive`, { archived: true })).json() as { archived_at: string | null };
+  expect(archived.archived_at).toMatch(/^\d{4}-\d\d-\d\dT/);
+  const list = (await call(t, 'GET', '')).json() as { id: number; archived_at: string | null }[];
+  expect(list.find((a) => a.id === id)?.archived_at).toBe(archived.archived_at); // still listed: the UI filters
+  expect(((await call(t, 'POST', `/${id}/archive`, { archived: false })).json() as { archived_at: null }).archived_at).toBeNull();
+  expect(eventsOf(t, id)).toEqual([{ kind: 'status', detail: '{"archived":true}' }, { kind: 'status', detail: '{"archived":false}' }]);
+});
+
+test('delete is permanent: texts, milestones, files and names go, queued jobs fail, and every route 404s', async () => {
+  const t = await setup();
+  const id = make(t, 'final');
+  t.db.prepare(`UPDATE applications SET company = 'Canary-d1', role_title = 'Canary-d2', follow_up_on = '2026-11-03' WHERE id = ?`).run(id);
+  t.db.prepare(`INSERT INTO application_texts (application_id, kind, body) VALUES (?, 'posting', 'Canary-d3')`).run(id);
+  t.db.prepare(`INSERT INTO application_milestones (application_id, kind, on_date, note) VALUES (?, 'applied', '2026-10-01', 'Canary-d4')`).run(id);
+  t.db.prepare(`INSERT INTO application_files (application_id, kind, relpath, sha256, bytes) VALUES (?, 'cv_docx', ?, 'x', 1)`).run(id, `${id}/cv.docx`);
+  const dir = join(outRoot(t.vault), String(id));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'cv.docx'), 'x');
+  enqueue(t.db, 'career_render', `career:render:${id}:0`, { applicationId: id });
+  const other = make(t, 'final');
+
+  expect((await call(t, 'DELETE', `/${id}`)).statusCode).toBe(204);
+  expect(existsSync(dir)).toBe(false);
+  for (const table of ['application_texts', 'application_milestones', 'application_files'])
+    expect(t.db.prepare(`SELECT count(*) FROM ${table} WHERE application_id = ?`).pluck().get(id)).toBe(0);
+  expect(t.db.prepare('SELECT company, role_title, follow_up_on, deleted_at IS NOT NULL AS gone FROM applications WHERE id = ?').get(id)).toEqual({
+    company: null, role_title: null, follow_up_on: null, gone: 1,
+  });
+  expect(eventsOf(t, id)).toEqual([{ kind: 'status', detail: '{"deleted":true}' }]);
+  expect(t.db.prepare('SELECT status FROM jobs').pluck().get()).toBe('failed');
+  expect(((await call(t, 'GET', '')).json() as { id: number }[]).map((a) => a.id)).toEqual([other]);
+  const routes: [Parameters<typeof call>[1], string, object?][] = [
+    ['GET', `/${id}`], ['PATCH', `/${id}`, { follow_up_on: null }], ['DELETE', `/${id}`], ['POST', `/${id}/retry`], ['POST', `/${id}/archive`, { archived: true }],
+    ['PATCH', `/${id}/draft`, { edits: [{ ref: 'letter.0', text: 'x' }] }], ['POST', `/${id}/final`], ['POST', `/${id}/render`], ['GET', `/${id}/files/cv_docx`],
+    ['GET', `/${id}/milestones`], ['POST', `/${id}/milestones`, { kind: 'note', on_date: '2026-10-01' }],
+  ];
+  for (const [method, url, body] of routes) expect([method, url, (await call(t, method, url, body)).statusCode]).toEqual([method, url, 404]);
+  expect(JSON.parse(t.db.prepare("SELECT args_redacted FROM audit_log WHERE action = 'career.application.delete'").pluck().get() as string)).toEqual({ id, texts: 1, milestones: 1, files: 1 });
+  expect(t.dump() + JSON.stringify(eventsOf(t, id))).not.toContain('Canary-d');
 });

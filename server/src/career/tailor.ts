@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { audit } from '../db/audit.ts';
 import type { Database } from '../db/index.ts';
+import { enqueue } from '../db/jobs.ts';
 import { structured } from '../llm/client.ts';
 import { wrapUntrusted } from '../llm/untrusted.ts';
 import { parseNote } from '../vault/frontmatter.ts';
@@ -285,6 +286,16 @@ export const saveText = (db: Database, id: number, kind: string, value: unknown)
 export function event(db: Database, id: number, kind: 'step' | 'failed' | 'retry' | 'status' | 'rendered', detail: Record<string, unknown>): void {
   db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, ?, ?)`).run(id, kind, JSON.stringify(detail));
   audit(db, { actor: 'app', action: kind === 'failed' ? 'career.application.fail' : 'career.application.step', args: { application_id: id, event: kind, ...detail } });
+}
+
+/**
+ * Queues the next step of the current run, key `career:<step>:<id>:<attempt>` (contract §4). A run restarted by
+ * `POST …/retry` is the n-th `career_intake` of its application and adds `:<n>`, so no key of the failed run repeats.
+ */
+export function enqueueStep(db: Database, id: number, step: Step, attempt: 0 | 1 | 2): void {
+  const runs = db.prepare(`SELECT count(*) FROM jobs WHERE kind = 'career_intake' AND json_extract(payload, '$.applicationId') = ?`).pluck().get(id) as number;
+  const key = `career:${step}:${id}:${attempt}${runs > 1 ? `:${runs - 1}` : ''}`;
+  enqueue(db, `career_${step}`, key, step === 'match' ? { applicationId: id } : { applicationId: id, attempt });
 }
 
 /** An expected failure: status `failed` with a fixed code, in one transaction with its event. Never throws text. */
