@@ -62,8 +62,11 @@ export const requireSession =
     if (!hasValidSession(db, req.headers.cookie)) return reply.code(401).send({ error: 'not logged in' });
   };
 
-/** `GET /login?t=<token>`: exchanges a one-time token for the session cookie, then redirects to `/`. */
-export function loginRoute(app: FastifyInstance, db: Database): void {
+/**
+ * `GET /login?t=<token>`: exchanges a one-time token for the session cookie, then redirects to the app: `/`, or in
+ * dev the Vite page (the server has no web/dist then). Cookies ignore the port, so the session works on both.
+ */
+export function loginRoute(app: FastifyInstance, db: Database, dev = false): void {
   // No HEAD route: a prefetch or link preview must not burn the one-time token.
   app.get('/login', { exposeHeadRoute: false }, async (req, reply) => {
     reply.header('cache-control', 'no-store');
@@ -75,6 +78,6 @@ export function loginRoute(app: FastifyInstance, db: Database): void {
     audit(db, { actor: 'user', action: 'auth.login', args: { ip: req.ip }, decision: session ? 'success' : 'failure' });
     if (!session) return reply.code(401).send({ error: 'invalid or expired login link' });
     reply.header('set-cookie', `${SESSION_COOKIE}=${session}; Max-Age=${SESSION_TTL_S}; Path=/; HttpOnly; SameSite=Strict`);
-    return reply.redirect('/');
+    return reply.redirect(dev ? 'http://127.0.0.1:5173/' : '/');
   });
 }

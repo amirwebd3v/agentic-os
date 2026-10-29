@@ -75,7 +75,7 @@ export async function buildApp({
       ? reply.sendFile('index.html')
       : reply.code(404).send({ error: 'not found' }),
   );
-  loginRoute(app, db);
+  loginRoute(app, db, dev);
 
   await app.register(
     async (api) => {
