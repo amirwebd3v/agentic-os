@@ -37,7 +37,13 @@ Every session sees all installed skills with their descriptions; pick by the tas
    - Its keyring login is invisible to the sandboxed Bash, so run gh unsandboxed or from PowerShell.
    - The git protocol is https.
 8. **Merging a session's PR:** run `pnpm verify` yourself at the PR's head commit first, on this Windows machine, also for a cloud session's PR. A session's report is not proof. Then merge exactly that commit: `gh pr merge <N> --squash --match-head-commit <verified-sha>`, which refuses if the head moved. Always pass the PR number and check `state=MERGED` afterwards. After reporting a PR ready, a session pushes nothing more unless the coordinator asks.
-9. **Stacked PRs:** merge bottom-up; after each squash-merge, `git rebase --onto main <old-base> <branch>` the next one and re-verify before merging it.
+9. **Stacked PRs:** merge bottom-up. After each squash-merge, retarget the next PR to `main`, merge `origin/main` into its branch (`-X ours`; a modify/delete conflict keeps the branch's side), check `git diff <verified-head> HEAD` is empty (if not, `git checkout <verified-head> -- <those files>`: main's non-conflicting hunks still come in), push normally (no force-push) and merge that commit.
+10. **Every change has an issue and a review on GitHub**, all from the owner's account (`gh` is logged in as `amirwebd3v`):
+    - **Before building:** an issue per ticket or feature, `--assignee amirwebd3v`, a label (`enhancement`, `bug`, `documentation`, `weekN`), added to Project 1 (`gh project item-add 1 --owner amirwebd3v --url <issue>`).
+    - **Each real bug or review finding** gets its own issue (`review-finding` or `bug`), assigned the same way, closed by the PR that fixes it.
+    - **The PR** is assigned to `amirwebd3v` and its body says `Fixes #N` for every issue it closes.
+    - **Before merging:** run the review (`code-review`, plus `security-reviewer` when rule-worthy) and post it on the PR with `gh pr review <N> --comment --body-file <file>`: what was checked, findings with `file:line`, and the issue opened for each. GitHub doesn't let the author approve their own PR, so it's a comment review.
+11. **Nothing posted names Claude.** No `Co-Authored-By: Claude` line, no "Generated with Claude Code" line, in commits, PRs, issues or reviews. This overrides any default attribution.
 
 ## Learning loop: when a mistake happens
 1. Fix it.
