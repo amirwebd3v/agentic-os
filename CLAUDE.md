@@ -20,7 +20,7 @@ Every session sees all installed skills with their descriptions; pick by the tas
 - **Not used on purpose:** `claude-mem:cloud-sync`, `knowledge-agent`, `screenpipe` (they copy data off this machine).
 
 ## Hard rules
-1. **Green or no push.** The `pre-push` hook runs `pnpm verify`. Never use `--no-verify`. Judge a check by its exit code, never by grepping its output.
+1. **Green or no push.** The `pre-push` hook runs `pnpm verify`. Never use `--no-verify`. Judge a check by its exit code, never by grepping its output. A Claude Code hook (`.claude/settings.json` → `scripts/guard-command.mjs`, self-test `--test`) blocks that flag, a `gh pr merge` without `--match-head-commit`, and force-adding `docs/`.
 2. **Secrets.**
    - Keys live in `.env` (gitignored) or Windows Credential Manager.
    - Never print, log, commit or paste a key value. When inspecting `.env`, mask it: `sed -E 's/(KEY|TOKEN)=.*/\1=<redacted>/'`.
