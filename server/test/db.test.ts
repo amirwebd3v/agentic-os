@@ -111,7 +111,7 @@ describe('db', () => {
     expect(() => db.prepare("INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'step', 'x')").run(id)).toThrow(/CHECK/);
   });
 
-  test('0009 rebuilds applications and application_texts: rows, indexes, foreign keys and triggers survive', () => {
+  test('0009 and 0010 rebuild applications and application_texts: rows, indexes, foreign keys and triggers survive', () => {
     // A database at 0008 with data in every table that points at applications.
     const old = new BetterSqlite3(':memory:');
     old.pragma('foreign_keys = ON');
@@ -148,8 +148,8 @@ describe('db', () => {
     expect(() => old.prepare('DELETE FROM application_events').run()).toThrow(/append-only/);
     expect(() => old.prepare('DELETE FROM applications WHERE id = 8').run()).toThrow(/FOREIGN KEY/);
     old.prepare("UPDATE applications SET status = 'needs_answers', step = 'questions' WHERE id = 8").run();
-    for (const kind of ['gaps', 'ats', 'company', 'vacancy', 'answers']) old.prepare("INSERT INTO application_texts (application_id, kind, body) VALUES (8, ?, '{}')").run(kind);
-    for (const step of ['gaps', 'ats', 'company', 'vacancy', 'letter']) old.prepare('UPDATE applications SET step = ? WHERE id = 8').run(step);
+    for (const kind of ['gaps', 'ats', 'company', 'vacancy', 'questions', 'answers', 'context']) old.prepare("INSERT INTO application_texts (application_id, kind, body) VALUES (8, ?, '{}')").run(kind);
+    for (const step of ['gaps', 'ats', 'company', 'vacancy', 'letter', 'letter_verify']) old.prepare('UPDATE applications SET step = ? WHERE id = 8').run(step);
     expect(() => old.prepare("UPDATE applications SET status = 'done' WHERE id = 8").run()).toThrow(/CHECK/);
     expect(() => old.prepare("INSERT INTO application_texts (application_id, kind, body) VALUES (8, 'letter', '{}')").run()).toThrow(/CHECK/);
     old.close();

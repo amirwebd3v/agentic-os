@@ -8,7 +8,15 @@ export const ORIGINS = ['model', 'owner', 'suggestion'] as const;
 export const SECTION_ORDER = ['Summary', 'Experience', 'Education', 'Projects', 'Certifications', 'Skills', 'Languages'] as const;
 const ENTRY_NAMES = Object.keys(ENTRY_SECTIONS) as [EntrySectionName, ...EntrySectionName[]];
 
-export const CvLine = z.object({ id: z.string(), text: z.string(), cites: z.array(z.string()), origin: z.enum(ORIGINS) }).strict();
+export const CvLine = z
+  .object({
+    id: z.string(),
+    text: z.string(),
+    cites: z.array(z.string()),
+    origin: z.enum(ORIGINS),
+    suggestion_id: z.string().optional(), // `s-<n>` of the gap suggestion an `origin: 'suggestion'` line came from (§3)
+  })
+  .strict();
 export const CvEntry = z
   .object({
     id: z.string(),

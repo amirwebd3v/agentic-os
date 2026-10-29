@@ -7,7 +7,7 @@ import type { CvEntry, CvLine, CvSection, Draft, Origin } from '../../career/dra
 import type { Requirements } from '../../career/intake.ts';
 import { BULLET_SECTIONS } from '../../career/master.ts';
 import type { BulletSectionName, EntrySectionName } from '../../career/master.ts';
-import { coverage, event, readMaster, saveText } from '../../career/tailor.ts';
+import { coverage, enqueueStep, event, lastIds, readMaster, saveText, setApp, TailorError } from '../../career/tailor.ts';
 import type { DraftV1, MasterIndex, Selection } from '../../career/tailor.ts';
 import { audit } from '../../db/audit.ts';
 import type { Database } from '../../db/index.ts';
@@ -15,9 +15,18 @@ import { enqueue } from '../../db/jobs.ts';
 import type { Job } from '../../db/jobs.ts';
 import { FILE_KINDS, inside, outRoot } from '../../jobs/career-render.ts';
 import { getLlm } from '../../llm/client.ts';
+import type { structured } from '../../llm/client.ts';
+import { LlmError } from '../../llm/errors.ts';
+import { atsCheck } from '../../career/ats.ts';
+import type { AtsReport } from '../../career/ats.ts';
+import { loadContact } from '../../career/contact.ts';
+import type { Gaps } from '../../career/gaps.ts';
+import type { Answers, AppContext, Questions } from '../../career/letter.ts';
+import { currentAnswers, latestRow, postingOf } from '../../jobs/career-steps.ts';
 import { sha256 } from '../../vault/writer.ts';
 
 export const MAX_POSTING_CHARS = 30_000;
+export const MAX_RESEARCH_CHARS = 20_000;
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 const SUMMARY = 'id, company, role_title, language, status, step, fail_code, follow_up_on, archived_at, created_at, updated_at';
 
@@ -92,7 +101,7 @@ export function retryRun(db: Database, id: number, masterHash: string): void {
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } as const;
 const DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-type LineIn = { id?: string; text: string; origin?: Origin };
+type LineIn = { id?: string; text: string; origin?: Origin; suggestion_id?: string };
 type EntryIn = { id?: string; source?: string; org: string; title: string; start: string; end: string; location: string; bullets: LineIn[] };
 type SectionIn = { name: string; bullets?: LineIn[]; entries?: EntryIn[] };
 export type DraftPut = { versions: number; cv: { sections: SectionIn[] }; letter: { paragraphs: LineIn[] } };
@@ -100,11 +109,12 @@ export type DraftPut = { versions: number; cv: { sections: SectionIn[] }; letter
 /**
  * `PUT …/draft` (career-v2.md §1): the client's whole document over the stored one. The server owns ids, cites,
  * origin and an existing entry's `source`: a known id keeps its stored values; an unknown id or none is new and gets
- * the next server id, `cites: []` and `origin: 'owner'` (`'suggestion'` when the client says so). A new entry keeps
+ * the next server id, `cites: []` and `origin: 'owner'`; it is `'suggestion'` only when the client says so and names
+ * in `suggestion_id` a gap suggestion that exists and is not dismissed (`suggestions`). A new entry keeps
  * the client's `source` only when it is a master entry id. `refs`: new lines and lines whose text changed.
  * `distances`: normalised Levenshtein of each changed model line, 1 for each removed one. Null: `bad_draft`.
  */
-function putDraft(stored: Draft, body: DraftPut, masterEntryIds: ReadonlySet<string>, next: { l: number; e: number }) {
+function putDraft(stored: Draft, body: DraftPut, masterEntryIds: ReadonlySet<string>, next: { l: number; e: number }, suggestions: ReadonlySet<string>) {
   const oldLines = new Map([...draftLines(stored)].map(({ line }) => [line.id, line]));
   const oldEntries = new Map(stored.cv.sections.flatMap((s) => ('entries' in s ? s.entries : [])).map((e) => [e.id, e]));
   const seen = new Set<string>();
@@ -123,7 +133,8 @@ function putDraft(stored: Draft, body: DraftPut, masterEntryIds: ReadonlySet<str
     if (!old) {
       const id = `l-${++next.l}`;
       refs.push(id);
-      return { id, text, cites: [], origin: l.origin === 'suggestion' ? 'suggestion' : 'owner' };
+      const s = l.origin === 'suggestion' && l.suggestion_id !== undefined && suggestions.has(l.suggestion_id) ? l.suggestion_id : undefined;
+      return s === undefined ? { id, text, cites: [], origin: 'owner' } : { id, text, cites: [], origin: 'suggestion', suggestion_id: s };
     }
     if (old.text !== text) {
       refs.push(old.id);
@@ -153,13 +164,6 @@ function putDraft(stored: Draft, body: DraftPut, masterEntryIds: ReadonlySet<str
   if (bad) return null;
   for (const old of oldLines.values()) if (old.origin === 'model' && !seen.has(old.id)) distances.push(1);
   return { draft, refs, distances };
-}
-
-/** The highest `l-<n>` and `e-<n>` any version of this application's draft ever used, so a deleted id is never reused. */
-function lastIds(db: Database, id: number, current: Draft): { l: number; e: number } {
-  const bodies = [...(db.prepare("SELECT body FROM application_texts WHERE application_id = ? AND kind = 'draft'").pluck().all(id) as string[]), JSON.stringify(current)];
-  const max = (p: string) => bodies.reduce((n, b) => [...b.matchAll(new RegExp(`"id":"${p}-(\\d+)"`, 'g'))].reduce((k, m) => Math.max(k, Number(m[1])), n), 0);
-  return { l: max('l'), e: max('e') };
 }
 
 /** The master as it is now, or null when it is missing or invalid. */
@@ -215,7 +219,23 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
     languages: languages && 'bullets' in languages ? languages.bullets.map((b) => b.text) : [],
     files: db.prepare('SELECT kind, bytes FROM application_files WHERE application_id = ? ORDER BY id').all(id),
     milestones: milestones(db, id),
+    // career-v2.md §3–§5: model and owner text, rendered as text only.
+    context: latest<AppContext>(db, id, 'context'),
+    gaps: latest<Gaps>(db, id, 'gaps'),
+    ats: atsDetail(db, id),
+    company_brief: latest(db, id, 'company'), // kind `company`; `company` is the application's name column
+    vacancy: latest(db, id, 'vacancy'),
+    questions: latest<Questions>(db, id, 'questions'),
+    answers: currentAnswers(db, id),
   };
+}
+
+/** The latest ATS report and the short history (newest first, at most 20), or null. */
+function atsDetail(db: Database, id: number) {
+  const rows = db.prepare("SELECT body FROM application_texts WHERE application_id = ? AND kind = 'ats' ORDER BY version DESC LIMIT 20").pluck().all(id) as string[];
+  if (!rows.length) return null;
+  const reports = rows.map((r) => JSON.parse(r) as AtsReport);
+  return { ...reports[0]!, history: reports.map(({ score, draft_version, created_at }) => ({ score, draft_version, created_at })) };
 }
 
 /**
@@ -223,7 +243,7 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
  * finalise, render, download. `vaultDir` and `dataDir` override the config (tests).
  */
 export const careerRoutes =
-  ({ vaultDir: vaultOverride, dataDir: dataOverride }: { vaultDir?: string; dataDir?: string } = {}): FastifyPluginAsync =>
+  ({ vaultDir: vaultOverride, dataDir: dataOverride, llm }: { vaultDir?: string; dataDir?: string; llm?: typeof structured } = {}): FastifyPluginAsync =>
   async (api) => {
     const { db } = api;
     const vaultDir = vaultOverride ?? api.config.vaultDir;
@@ -236,7 +256,7 @@ export const careerRoutes =
     const running = (a: App) => a.status === 'processing' || (a.status === 'final' && a.step === 'render');
     /** The master's hash for a new run, or the fixed code that refuses one. */
     const runHash = (): { hash: string } | { error: 'provider_not_configured' | 'master_missing' } => {
-      if (!getLlm(api.config)) return { error: 'provider_not_configured' };
+      if (!llm && !getLlm(api.config)) return { error: 'provider_not_configured' };
       try {
         return { hash: sha256(readFileSync(masterPath, 'utf8')) };
       } catch {
@@ -244,14 +264,22 @@ export const careerRoutes =
       }
     };
 
-    api.post<{ Body: { posting: string } }>(
+    type CreateBody = { posting: string; company_name?: string; company_website?: string; research?: string; target_country?: string };
+    const optional = (max: number) => ({ type: 'string', maxLength: max });
+    api.post<{ Body: CreateBody }>(
       '/career/applications',
       {
         schema: {
           body: {
             type: 'object',
-            // No maxLength: too long is the fixed code `posting_too_long`, not Fastify's validation text.
-            properties: { posting: { type: 'string', minLength: 1 } },
+            // No maxLength on the posting and the research: too long is a fixed code, not Fastify's validation text.
+            properties: {
+              posting: { type: 'string', minLength: 1 },
+              company_name: optional(200),
+              company_website: optional(500),
+              research: { type: 'string' },
+              target_country: optional(100),
+            },
             required: ['posting'],
             additionalProperties: false,
           },
@@ -260,16 +288,30 @@ export const careerRoutes =
       async (req, reply) => {
         const { posting } = req.body;
         if (posting.length > MAX_POSTING_CHARS) return reply.code(400).send({ error: 'posting_too_long' });
+        if ((req.body.research?.length ?? 0) > MAX_RESEARCH_CHARS) return reply.code(400).send({ error: 'research_too_long' });
         const run = runHash();
         if ('error' in run) return reply.code(409).send(run);
+        // career-v2.md §5: the form beyond the posting, one `context` row. The website is text only, never fetched.
+        const oneLine = (v: string | undefined) => v?.replace(/[\p{Cc}\s]+/gu, ' ').trim() || null;
+        const ctx: AppContext = {
+          company_name: oneLine(req.body.company_name),
+          company_website: oneLine(req.body.company_website),
+          target_country: oneLine(req.body.target_country),
+          research: req.body.research?.replace(/\r\n?/g, '\n').replace(/[^\P{Cc}\n\t]/gu, ' ').trim() || null,
+        };
         const summary = db.transaction(() => {
-          const row = db.prepare(`INSERT INTO applications (step, master_hash) VALUES ('intake', ?) RETURNING ${SUMMARY}`).get(run.hash) as { id: number };
+          // The typed company name shows until intake reads the posting's.
+          const row = db.prepare(`INSERT INTO applications (step, master_hash, company) VALUES ('intake', ?, ?) RETURNING ${SUMMARY}`).get(run.hash, ctx.company_name) as { id: number };
           db.prepare(`INSERT INTO application_texts (application_id, kind, body) VALUES (?, 'posting', ?)`).run(row.id, posting);
+          if (Object.values(ctx).some((v) => v !== null)) saveText(db, row.id, 'context', ctx);
           db.prepare(`INSERT INTO application_events (application_id, kind) VALUES (?, 'created')`).run(row.id);
           enqueue(db, 'career_intake', `career:intake:${row.id}:0`, { applicationId: row.id });
           return row;
         })();
-        audit(db, { actor: 'user', action: 'career.application.create', args: { id: summary.id, chars: posting.length } });
+        // Counts and which fields were given, never their values.
+        const given = (['company_name', 'company_website', 'target_country'] as const).filter((k) => ctx[k]);
+        const extra = ctx.research || given.length ? { research_chars: ctx.research?.length ?? 0, fields: given } : {};
+        audit(db, { actor: 'user', action: 'career.application.create', args: { id: summary.id, chars: posting.length, ...extra } });
         return reply.code(202).send(summary);
       },
     );
@@ -291,7 +333,13 @@ export const careerRoutes =
     const END ='^(?:\\d{4}(?:-(?:0[1-9]|1[0-2]))?|present)?$';
     const LINE = {
       type: 'object',
-      properties: { id: { type: 'string', maxLength: 64 }, text: { ...text(2000), minLength: 1 }, cites: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 64 } }, origin: { enum: ORIGINS } },
+      properties: {
+        id: { type: 'string', maxLength: 64 },
+        text: { ...text(2000), minLength: 1 },
+        cites: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 64 } },
+        origin: { enum: ORIGINS },
+        suggestion_id: { type: 'string', maxLength: 64 },
+      },
       required: ['text'],
       additionalProperties: false,
     };
@@ -358,7 +406,9 @@ export const careerRoutes =
         const master = masterOrNull(vaultDir);
         const stored = toDraftV2(raw, master);
         if (req.body.versions !== stored.versions) return reply.code(409).send({ error: 'draft_changed' });
-        const done = putDraft(stored, req.body, new Set(master ? masterEntries(master).map((e) => e.id) : []), lastIds(db, id, stored));
+        const gaps = latest<Gaps>(db, id, 'gaps');
+        const open = new Set((gaps?.suggestions ?? []).map((g) => g.id).filter((g) => !gaps!.dismissed.includes(g)));
+        const done = putDraft(stored, req.body, new Set(master ? masterEntries(master).map((e) => e.id) : []), lastIds(db, id, stored), open);
         if (!done) return reply.code(400).send({ error: 'bad_draft' });
         const { draft, refs, distances } = done;
         const edit_distance = distances.length ? distances.reduce((a, b) => a + b, 0) / distances.length : null;
@@ -559,6 +609,121 @@ export const careerRoutes =
         if (dated) audit(db, { actor: 'user', action: 'career.application.follow_up', args: { id, follow_up_on: b.follow_up_on } });
         if (fields.length) audit(db, { actor: 'user', action: 'career.application.rename', args: { id, fields } }); // field names, never the values
         return applicationDetail(db, vaultDir, id);
+      },
+    );
+
+    // ---------- career v2 §3–§5: gaps, ATS, answers ----------
+    api.patch<{ Params: { id: number }; Body: { dismissed: string[] } }>(
+      '/career/applications/:id/gaps',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: {
+            type: 'object',
+            properties: { dismissed: { type: 'array', maxItems: 50, items: { type: 'string', maxLength: 16 } } },
+            required: ['dismissed'],
+            additionalProperties: false,
+          },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        if (!appRow(id)) return reply.code(404).send({ error: 'not_found' });
+        const gaps = latest<Gaps>(db, id, 'gaps');
+        if (!gaps) return reply.code(409).send({ error: 'wrong_status' });
+        const ids = new Set(gaps.suggestions.map((g) => g.id));
+        const dismissed = [...new Set(req.body.dismissed)];
+        if (!dismissed.every((d) => ids.has(d))) return reply.code(400).send({ error: 'unknown_suggestion' });
+        db.transaction(() => {
+          saveText(db, id, 'gaps', { ...gaps, dismissed }); // the whole set: an id left out is shown again
+          db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'edited', ?)`).run(id, JSON.stringify({ dismissed }));
+        })();
+        audit(db, { actor: 'user', action: 'career.application.gaps', args: { id, dismissed: dismissed.length } });
+        return applicationDetail(db, vaultDir, id);
+      },
+    );
+
+    // Runs in the request (one model call) on the current draft version; the pipeline runs it once after verify.
+    const ATS_STATUSES = ['draft_ready', 'flagged', 'needs_answers', 'final'];
+    api.post<{ Params: { id: number } }>('/career/applications/:id/ats', { schema: { params: ID_PARAMS } }, async (req, reply) => {
+      const { id } = req.params;
+      const app = appRow(id);
+      if (!app) return reply.code(404).send({ error: 'not_found' });
+      const raw = latest<Draft | DraftV1>(db, id, 'draft');
+      const requirements = latest<Requirements>(db, id, 'requirements');
+      if (!raw || !requirements || !ATS_STATUSES.includes(app.status) || app.step === 'render') return reply.code(409).send({ error: 'wrong_status' });
+      if (!llm && !getLlm(api.config)) return reply.code(409).send({ error: 'provider_not_configured' });
+      const draft = toDraftV2(raw, masterOrNull(vaultDir));
+      let report: AtsReport;
+      try {
+        const deps = { db, config: api.config, contact: loadContact(vaultDir), ...(llm ? { llm } : {}) };
+        report = await atsCheck(deps, draft, requirements, postingOf(db, id));
+      } catch (err) {
+        if (!(err instanceof LlmError || err instanceof TailorError)) throw err;
+        audit(db, { actor: 'user', action: 'career.application.ats', args: { id, error: 'provider_error' } });
+        return reply.code(502).send({ error: 'provider_error' });
+      }
+      saveText(db, id, 'ats', report);
+      audit(db, { actor: 'user', action: 'career.application.ats', args: { id, score: report.score, draft_version: report.draft_version } });
+      return applicationDetail(db, vaultDir, id);
+    });
+
+    type AnswersBody = { answers: { id: string; text: string | null }[] };
+    api.post<{ Params: { id: number }; Body: AnswersBody }>(
+      '/career/applications/:id/answers',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: {
+            type: 'object',
+            properties: {
+              answers: {
+                type: 'array',
+                maxItems: 5,
+                items: {
+                  type: 'object',
+                  properties: { id: { type: 'string', maxLength: 16 }, text: { type: ['string', 'null'], maxLength: 2000 } },
+                  required: ['id', 'text'],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ['answers'],
+            additionalProperties: false,
+          },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        const app = appRow(id);
+        if (!app) return reply.code(404).send({ error: 'not_found' });
+        const q = latestRow(db, id, 'questions');
+        if (app.status !== 'needs_answers' || !q) return reply.code(409).send({ error: 'wrong_status' });
+        const questions = (JSON.parse(q.body) as Questions).questions;
+        const given = new Map(req.body.answers.map((a) => [a.id, a.text]));
+        if (given.size !== req.body.answers.length || ![...given.keys()].every((k) => questions.some((x) => x.id === k))) {
+          return reply.code(400).send({ error: 'bad_answers' });
+        }
+        // A question left out is skipped, as `null` is. `a-<n>` answers `q-<n>`; control characters but line breaks go.
+        const answers: Answers['answers'] = questions.map((x) => ({
+          id: x.id.replace(/^q-/, 'a-'),
+          question_id: x.id,
+          text:
+            given
+              .get(x.id)
+              ?.replace(/\r\n?/g, '\n')
+              .replace(/[^\P{Cc}\n]/gu, ' ')
+              .trim() || null,
+        }));
+        const answered = answers.filter((a) => a.text).length;
+        db.transaction(() => {
+          saveText(db, id, 'answers', { answers, questions_version: q.version });
+          setApp(db, id, { status: 'processing', step: 'letter' });
+          event(db, id, 'step', { from: 'questions', to: 'letter', answered, skipped: answers.length - answered });
+          enqueueStep(db, id, 'letter', 1);
+        })();
+        audit(db, { actor: 'user', action: 'career.application.answers', args: { id, answered, skipped: answers.length - answered } });
+        return reply.code(202).send(applicationDetail(db, vaultDir, id));
       },
     );
 

@@ -7,7 +7,10 @@ export function defuse(tag: string, text: string): string {
 }
 
 /** Every block tag a prompt uses. A block's text loses all of them, so it can't close its block or fake another one. */
-const WRAPPER_TAGS = ['posting', 'cv', 'master', 'requirements', 'selection', 'previous_draft', 'violations'];
+const WRAPPER_TAGS = [
+  'posting', 'cv', 'master', 'requirements', 'selection', 'previous_draft', 'violations',
+  'research', 'context', 'company', 'vacancy', 'evidence', 'answers', 'previous_letter',
+];
 
 /** `<tag>…</tag>` around untrusted text. The system prompt must also say the block is data, not instructions. */
 export function wrapUntrusted(tag: string, text: string): string {

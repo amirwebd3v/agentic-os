@@ -213,7 +213,8 @@ test('PUT …/draft: reorder, edit, delete, add an owner entry and lines; the se
         section(d, 'Languages'),
       ],
     },
-    letter: { paragraphs: [l7, { ...l9, text: 'Canary-p2 changed' }, { text: 'Canary-p3 from a gap', origin: 'suggestion' }] },
+    // `suggestion` without the id of an open gap suggestion is the owner's line (career-v2.md §3).
+    letter: { paragraphs: [l7, { ...l9, text: 'Canary-p2 changed' }, { text: 'Canary-p3 from a gap', origin: 'suggestion', suggestion_id: 's-1' }] },
   });
   expect(res.statusCode).toBe(200);
   const after = res.json() as { draft: Draft; edited_refs: string[] };
@@ -224,7 +225,7 @@ test('PUT …/draft: reorder, edit, delete, add an owner entry and lines; the se
     { id: 'e-2', org: 'Canary-o1 Own Co', title: 'Founder', start: '2020', end: 'present', location: '', bullets: [{ id: 'l-10', text: 'Canary-o2 built it', cites: [], origin: 'owner' }] },
     { id: 'e-3', source: K, org: 'Kestrel Data', title: 'Canary-o3 Admin', start: '2018-09', end: '2021-02', location: 'Bremen', bullets: [] },
   ]);
-  expect(after.draft.letter.paragraphs).toEqual([l7, { ...l9, text: 'Canary-p2 changed' }, { id: 'l-11', text: 'Canary-p3 from a gap', cites: [], origin: 'suggestion' }]);
+  expect(after.draft.letter.paragraphs).toEqual([l7, { ...l9, text: 'Canary-p2 changed' }, { id: 'l-11', text: 'Canary-p3 from a gap', cites: [], origin: 'owner' }]);
   expect(after.edited_refs).toEqual(['l-3', 'l-10', 'l-9', 'l-11']);
   expect(t.versions()).toEqual([1, 2]);
   const event = JSON.parse(t.db.prepare("SELECT detail FROM application_events WHERE kind = 'edited'").pluck().get() as string);
