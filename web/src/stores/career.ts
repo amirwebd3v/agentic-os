@@ -61,6 +61,8 @@ const VIOLATION_TEXT: Record<string, string> = {
   bad_placeholder: 'has an unknown placeholder',
   too_long: 'is too long',
   too_many_lines: 'has too many lines',
+  letter_length: 'is not 250 to 350 words long',
+  cliche: 'uses a stock phrase',
 };
 /** A verifier finding in words; `token` is model text and stays plain text wherever this is shown. */
 export const violationText = (v: Violation) =>

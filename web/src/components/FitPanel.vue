@@ -53,7 +53,7 @@ function confirm(s: Suggestion) {
         </div>
         <ul class="rowbars">
           <li v-for="p in ats.parts" :key="p.name">
-            <span class="name">{{ p.name }}</span>
+            <span class="name">{{ p.name.charAt(0).toUpperCase() + p.name.slice(1) }}</span>
             <span class="track"><i :style="{ width: `${(p.score / Math.max(1, p.max)) * 100}%` }"></i></span>
             <span class="val">{{ p.score }}/{{ p.max }}</span>
           </li>

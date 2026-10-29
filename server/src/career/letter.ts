@@ -241,6 +241,10 @@ export async function writeLetter(
       wrapUntrusted('previous_letter', JSON.stringify(retry.letter.map(({ id, text, cites }) => ({ id, text, cites })))),
       wrapUntrusted('violations', JSON.stringify(retry.violations)),
       'The previous letter failed the checks in <violations>. Each ref is a paragraph id in <previous_letter>, or "letter" for the whole letter (its length or paragraph count). Write the whole letter again and fix every one.',
+      // A bare "letter_length" made the model guess; the count tells it which way and how far (both are numbers only).
+      ...(retry.violations.some((v) => v.code === 'letter_length')
+        ? [`The previous letter had ${retry.letter.map((l) => l.text).join(' ').split(/\s+/).filter(Boolean).length} words; this one must have 250 to 350. Add substance from <master>, <answers> and <vacancy>, not filler.`]
+        : []),
     );
   }
   const out = await call(deps, 'career-letter', LETTER_RULES, promptSafe(deps.contact, parts.join('\n\n')), ModelLetter, masterBlock(deps.contact, m), jobId);

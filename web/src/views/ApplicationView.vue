@@ -274,7 +274,10 @@ onUnmounted(() => {
             <strong>Ready for your review.</strong> Read each line beside the master CV line it comes from, change anything, then finalise.
           </p>
           <p v-else>
-            <strong>Needs your check.</strong> The fact check still marks {{ toCheck }} {{ toCheck === 1 ? 'line' : 'lines' }} with “Check”. Edit them, or confirm you have checked them.
+            <strong>Needs your check.</strong>
+            <template v-if="toCheck">The fact check still marks {{ toCheck }} {{ toCheck === 1 ? 'line' : 'lines' }} with “Check”.</template>
+            <template v-for="(v, i) in docViolations" :key="i"> The {{ v.ref.startsWith('letter') ? 'letter' : 'CV' }} {{ violationText(v) }}.</template>
+            Edit it, or confirm you have checked it.
           </p>
           <label v-if="app.status === 'flagged'" class="ack">
             <input v-model="ack" type="checkbox" /> I have checked the marked lines and they are true.
