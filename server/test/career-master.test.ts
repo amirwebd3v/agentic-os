@@ -2,12 +2,13 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symli
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterAll, expect, test, vi } from 'vitest';
 import { expireStale } from '../src/approvals/expire.ts';
 import { loadContact } from '../src/career/contact.ts';
 import { documentText, scrubContactLike } from '../src/career/document.ts';
 import { buildImport, exportDate, readExport, splitBullets } from '../src/career/linkedin.ts';
-import { parseMaster, serialiseMaster, validateMaster } from '../src/career/master.ts';
+import { bulletIdBase, parseMaster, serialiseMaster, validateMaster } from '../src/career/master.ts';
+import type { Section } from '../src/career/master.ts';
 import { approvalRoutes } from '../src/http/routes/approvals.ts';
 import { careerMasterRoutes } from '../src/http/routes/career-master.ts';
 import type { structured } from '../src/llm/client.ts';
@@ -17,16 +18,16 @@ import { buildTestApp, capturePrompts } from './helpers.ts';
 
 const FIXTURE = join(import.meta.dirname, 'fixtures/career/linkedin');
 const NOW = new Date('2026-10-28T10:00:00.000Z');
-// The approval's commit spawns three gits; on Windows under a parallel run that takes over waitFor's 1 s default.
-const GIT_WAIT = { timeout: 15_000, interval: 200 };
+// Real git under a parallel verify on Windows can take seconds: every test that commits waits for it.
+const GIT_WAIT = { timeout: 20_000, interval: 100 };
 const dirs: string[] = [];
 const tmp = (prefix: string) => {
   const d = mkdtempSync(join(tmpdir(), prefix));
   dirs.push(d);
   return d;
 };
-// Async rm: a handle released by the event loop (just after the approval's git commit) makes a sync rm EBUSY on Windows.
-afterEach(() => Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true, maxRetries: 10 }))));
+// Once at the end, and async: right after a vault commit Windows keeps the folder busy (EBUSY) until the event loop runs.
+afterAll(() => Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true, maxRetries: 10 }))));
 
 const fixtureImport = () => buildImport(readExport(FIXTURE).files, NOW)!;
 
@@ -423,4 +424,148 @@ test('nothing usable: only unsupported files → import_empty, supported but emp
     error: 'import_unreadable',
     warnings: ['cv.pages: skipped: unsupported format (.pages)', 'messages.csv: skipped: not CV data', 'cv.json: skipped: no text', 'table.tsv: skipped: no text'],
   });
+});
+
+// --- The owner's direct edits: GET / PUT /api/career/master ---
+
+const masterRoutes = async () => {
+  const t = await setup();
+  const file = join(t.vault, 'career/master.md');
+  const get = () => t.app.inject(t.authed({ method: 'GET', url: '/api/career/master' }));
+  const put = (payload: object) => t.app.inject(t.authed({ method: 'PUT', url: '/api/career/master', payload }));
+  const notes = () => t.db.prepare(`SELECT path, content_hash, last_written_by FROM vault_notes`).all();
+  const saves = () => t.db.prepare(`SELECT args_redacted FROM audit_log WHERE action = 'career.master.save'`).pluck().all().map((a) => JSON.parse(a as string));
+  const seed = (text = MASTER) => {
+    mkdirSync(join(t.vault, 'career'), { recursive: true });
+    writeFileSync(file, text);
+    return sha256(text);
+  };
+  return { ...t, file, get, put, notes, saves, seed };
+};
+
+test('GET: missing → exists false; valid → the parsed sections with ids; unparseable → the fixed error', async () => {
+  const t = await masterRoutes();
+  expect((await t.get()).json()).toEqual({ exists: false });
+  const hash = t.seed();
+  expect((await t.get()).json()).toEqual({ exists: true, hash, sections: parseMaster(MASTER).sections });
+  const bad = MASTER.replace('## Skills', '## Secret hobbies');
+  t.seed(bad);
+  expect((await t.get()).json()).toEqual({ exists: true, hash: sha256(bad), error: 'master.md line 20: unknown section' });
+});
+
+test('PUT creates the master from scratch: ids by code, the user’s file, committed, audit counts only', async () => {
+  const t = await masterRoutes();
+  const sections = [
+    { name: 'Summary', bullets: [{ text: 'Backend engineer.' }] },
+    { name: 'Experience', entries: [{ org: 'Acme GmbH', title: 'Engineer', start: '2021-03', end: 'present', location: 'Berlin', bullets: [{ text: ' Cut builds. ' }] }] },
+    { name: 'Projects', entries: [] }, // empty: dropped
+    { name: 'Skills', bullets: [{ text: 'Python' }, { text: 'Python' }] },
+    { name: 'Languages', bullets: [{ text: 'German (C1)' }] },
+  ];
+  const res = await t.put({ hash: null, sections });
+  expect(res.statusCode).toBe(200);
+  const text = readFileSync(t.file, 'utf8');
+  expect(res.json()).toEqual({ exists: true, hash: sha256(text), sections: parseMaster(text).sections });
+  expect((await t.get()).json()).toEqual(res.json());
+  const ids = parseMaster(text).sections.flatMap((s) => ('bullets' in s ? s.bullets : s.entries.flatMap((e) => [e, ...e.bullets]))).map((x) => x.id);
+  expect(ids).toEqual(['sum-1', 'exp-acme-gmbh-2021', bulletIdBase('exp-acme-gmbh-2021', 'Cut builds.'), 'skill-python', 'skill-python-2', 'lang-german']);
+  expect(text).toContain('- Cut builds.  ^'); // trimmed
+  expect(parseMaster(text).fm).toMatchObject({ id: 'career-master', area: 'career', sensitivity: 2, source: 'web' });
+  expect(t.notes()).toEqual([{ path: 'career/master.md', content_hash: sha256(text), last_written_by: 'user' }]);
+  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe('aos: edit career/master.md\n'), GIT_WAIT);
+  expect(t.saves()).toEqual([{ sections: 4, entries: 1, bullets: 5 }]);
+});
+
+test('PUT edits: kept ids stay, new items get fresh ids that never clash, reorder and delete, frontmatter kept', async () => {
+  const t = await masterRoutes();
+  const hash = t.seed();
+  const res = await t.put({
+    hash,
+    sections: [
+      { name: 'Skills', bullets: [{ text: 'Go' }, { id: 'skill-python', text: 'Python 3' }] }, // moved first, reordered
+      { name: 'Summary', bullets: [{ id: 'sum-1', text: 'Backend engineer.' }, { text: 'Second line.' }] },
+      {
+        name: 'Experience',
+        entries: [
+          { id: 'exp-beispiel-2019', org: 'Beispiel AG', title: 'Dev', start: '2019', end: 'present', location: '', bullets: [] },
+          {
+            id: 'exp-acme-2021',
+            org: 'Acme GmbH',
+            title: 'Senior Engineer',
+            start: '2021-03',
+            end: '2024-06',
+            location: 'Berlin',
+            bullets: [{ text: 'New bullet.' }, { id: 'exp-acme-2021-b27e04', text: 'Led a team of 5 engineers.' }], // 3f9a1c deleted
+          },
+          { org: 'Acme', title: 'Intern', start: '2021', end: '2021', location: '', bullets: [] }, // base exp-acme-2021 is taken
+        ],
+      },
+    ],
+  });
+  expect(res.statusCode).toBe(200);
+  const m = parseMaster(readFileSync(t.file, 'utf8'));
+  expect(res.json().sections).toEqual(m.sections);
+  expect(m.sections.map((s) => s.name)).toEqual(['Skills', 'Summary', 'Experience']);
+  expect(m.sections[0]).toEqual({ name: 'Skills', bullets: [{ id: 'skill-go', text: 'Go' }, { id: 'skill-python', text: 'Python 3' }] });
+  expect(m.sections[1]).toEqual({ name: 'Summary', bullets: [{ id: 'sum-1', text: 'Backend engineer.' }, { id: 'sum-2', text: 'Second line.' }] });
+  const exp = m.sections[2] as Extract<Section, { entries: unknown }>;
+  expect(exp.entries.map((e) => e.id)).toEqual(['exp-beispiel-2019', 'exp-acme-2021', 'exp-acme-2021-2']);
+  expect(exp.entries[1]!.bullets).toEqual([
+    { id: bulletIdBase('exp-acme-2021', 'New bullet.'), text: 'New bullet.' },
+    { id: 'exp-acme-2021-b27e04', text: 'Led a team of 5 engineers.' },
+  ]);
+  expect(m.fm).toMatchObject({ created: '2026-10-01T00:00:00.000Z', source: 'hand' });
+  expect(m.fm.updated).not.toBe('2026-10-01T00:00:00.000Z');
+  expect(t.saves()).toEqual([{ sections: 3, entries: 3, bullets: 6 }]);
+  expect(JSON.stringify(t.saves())).not.toMatch(/Acme|Beispiel|Python|engineer/i);
+
+  // The old hash is stale now: 409, nothing written.
+  const now = readFileSync(t.file, 'utf8');
+  expect([(await t.put({ hash, sections: [] })).statusCode, readFileSync(t.file, 'utf8')]).toEqual([409, now]);
+  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe('aos: edit career/master.md\n'), GIT_WAIT);
+});
+
+test('PUT on a stale hash (edited in Obsidian meanwhile) → 409 master_changed, nothing written', async () => {
+  const t = await masterRoutes();
+  const sections = [{ name: 'Summary', bullets: [{ text: 'Hi.' }] }];
+  const res = await t.put({ hash: sha256('something else'), sections });
+  expect([res.statusCode, res.json()]).toEqual([409, { error: 'master_changed' }]);
+  expect(existsSync(t.file)).toBe(false);
+  const hash = t.seed();
+  expect((await t.put({ hash: null, sections })).json()).toEqual({ error: 'master_changed' }); // it exists now
+  expect(readFileSync(t.file, 'utf8')).toBe(MASTER);
+  expect([t.notes(), t.saves()]).toEqual([[], []]);
+  expect((await t.put({ hash, sections })).statusCode).toBe(200);
+  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe('aos: edit career/master.md\n'), GIT_WAIT);
+});
+
+test('PUT rejects a bad shape, a broken line and an unknown or repeated id with 400 bad_master, writing nothing', async () => {
+  const t = await masterRoutes();
+  const hash = t.seed();
+  const entry = { id: 'exp-acme-2021', org: 'Acme GmbH', title: 'T', start: '2021', end: 'present', location: '', bullets: [] };
+  const exp = (e: object) => [{ name: 'Experience', entries: [{ ...entry, ...e }] }];
+  const bad = [
+    { sections: [] }, // no hash
+    { hash, sections: [{ name: 'Hobbies', bullets: [{ text: 'x' }] }] },
+    { hash, sections: [{ name: 'Skills', bullets: [{ text: 'a' }] }, { name: 'Skills', bullets: [{ text: 'b' }] }] }, // repeated section
+    { hash, sections: [{ name: 'Experience', bullets: [{ text: 'x' }] }] }, // wrong kind of section
+    { hash, sections: [{ name: 'Skills', bullets: [{ text: 'Secret\nline' }] }] }, // newline
+    { hash, sections: [{ name: 'Skills', bullets: [{ text: 'Secret  ^injected' }] }] }, // would read as an id
+    { hash, sections: [{ name: 'Skills', bullets: [{ text: '   ' }] }] }, // empty after trimming
+    { hash, sections: [{ name: 'Skills', bullets: [{ text: 'x'.repeat(501) }] }] },
+    { hash, sections: exp({ org: 'Secret | Org' }) }, // `|` in a header field
+    { hash, sections: exp({ start: 'June 2021' }) },
+    { hash, sections: exp({ end: '2021-13' }) },
+    { hash, sections: exp({ title: undefined }) },
+    { hash, sections: exp({ id: 'exp-nope-2020' }) }, // unknown id
+    { hash, sections: exp({ id: 'skill-python' }) }, // a bullet's id on an entry
+    { hash, sections: [{ name: 'Skills', bullets: [{ id: 'skill-python', text: 'a' }, { id: 'skill-python', text: 'b' }] }] }, // repeated id
+    { hash, sections: [{ name: 'Skills', bullets: [{ id: 'Bad_Id', text: 'a' }] }] },
+  ];
+  for (const payload of bad) {
+    const res = await t.put(payload);
+    expect([res.statusCode, res.json()]).toEqual([400, { error: 'bad_master' }]);
+  }
+  expect(readFileSync(t.file, 'utf8')).toBe(MASTER);
+  expect([t.notes(), t.saves()]).toEqual([[], []]);
 });

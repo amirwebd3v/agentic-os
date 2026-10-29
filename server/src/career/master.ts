@@ -163,6 +163,17 @@ export interface MasterDraft {
   languages: string[];
 }
 
+/** Fresh frontmatter for a new `master.md`. */
+export const masterFm = (source: string, stamp: string): Frontmatter => ({
+  id: 'career-master',
+  area: 'career',
+  tags: [],
+  sensitivity: 2,
+  source,
+  created: stamp,
+  updated: stamp,
+});
+
 /**
  * Gives a draft its ids (by code only: neither an export nor a model ever picks one), serialises it and checks the
  * result. Empty sections are left out; `null` when nothing is left.
@@ -187,11 +198,76 @@ export function buildMaster(d: MasterDraft, source: string, now: Date) {
   ];
   const sections = all.filter((s) => ('bullets' in s ? s.bullets : s.entries).length > 0);
   if (!sections.length) return null;
-  const stamp = now.toISOString();
-  const fm = { id: 'career-master', area: 'career', tags: [], sensitivity: 2 as const, source, created: stamp, updated: stamp };
-  const master = serialiseMaster({ fm, sections });
+  const master = serialiseMaster({ fm: masterFm(source, now.toISOString()), sections });
   parseMaster(master); // self-check: what goes into the queue is valid by construction
   const jobs = sections.flatMap((s) => ('entries' in s ? s.entries : []));
   const stats = { entries: jobs.length, bullets: jobs.reduce((n, e) => n + e.bullets.length, d.summary.length), skills: new Set(d.skills).size };
   return { master, stats };
+}
+
+type BulletEdit = { id?: string; text: string };
+/** A section as the owner edits it in the web app: an item without `id` is new. */
+export interface SectionEdit {
+  name: string;
+  bullets?: BulletEdit[];
+  entries?: (Omit<Entry, 'id' | 'bullets'> & { id?: string; bullets: BulletEdit[] })[];
+}
+
+/**
+ * The owner's edit of the whole master. An id sent must be in `current` (an entry's for an entry, a bullet's for a
+ * bullet) and is used once; it is kept. New items get ids by `buildMaster`'s rules, never one that stays. Empty
+ * sections are dropped. Throws `MasterError` (fixed text) on anything the grammar can't hold.
+ */
+export function editSections(input: SectionEdit[], current: Section[]): Section[] {
+  const entryIds = new Set(current.flatMap((s) => ('entries' in s ? s.entries.map((e) => e.id) : [])));
+  const bulletIds = new Set(current.flatMap((s) => ('entries' in s ? s.entries.flatMap((e) => e.bullets) : s.bullets).map((b) => b.id)));
+  const id = idAllocator();
+  const keep = (sent: string | undefined, known: Set<string>) => {
+    if (sent === undefined) return;
+    if (!known.delete(sent)) throw new MasterError('master: unknown or repeated id'); // deleted: a second use is unknown
+    id(sent); // taken before any new id is handed out
+  };
+  const seen = new Set<string>();
+  for (const s of input) {
+    if (seen.has(s.name)) throw new MasterError('master: section repeated');
+    seen.add(s.name);
+    const shapeOk = isEntrySection(s.name) ? s.entries && !s.bullets : isBulletSection(s.name) && s.bullets && !s.entries;
+    if (!shapeOk) throw new MasterError('master: invalid section');
+    for (const b of s.bullets ?? []) keep(b.id, bulletIds);
+    for (const e of s.entries ?? []) {
+      keep(e.id, entryIds);
+      for (const b of e.bullets) keep(b.id, bulletIds);
+    }
+  }
+  // Trimmed as the parser trims; `  ^` would read as an id, `|` in a header as a field break.
+  const clean = (t: string, header = false) => {
+    const v = t.trim();
+    if (/ {2}\^/.test(v) || (header && v.includes('|'))) throw new MasterError('master: text breaks the grammar');
+    return v;
+  };
+  const bullet = (b: BulletEdit, i: number, base: (text: string, i: number) => string): Bullet => {
+    const text = clean(b.text);
+    if (!text) throw new MasterError('master: empty bullet');
+    return { id: b.id ?? id(base(text, i)), text };
+  };
+  const named = (prefix: string, text: string) => [prefix, slug(text, 40)].filter(Boolean).join('-');
+  const bases: Record<BulletSectionName, (text: string, i: number) => string> = {
+    Summary: (_, i) => `sum-${i + 1}`,
+    Skills: (t) => named('skill', t),
+    Languages: (t) => named('lang', t.replace(/\s*\(.*$/, '')),
+  };
+  const sections = input.map((s): Section => {
+    if (!isEntrySection(s.name)) {
+      const name = s.name as BulletSectionName;
+      return { name, bullets: s.bullets!.map((b, i) => bullet(b, i, bases[name])) };
+    }
+    const name = s.name;
+    const entries = s.entries!.map((e) => {
+      const [org, title, location] = [e.org, e.title, e.location].map((f) => clean(f, true)) as [string, string, string];
+      const entryId = e.id ?? id(entryIdBase(name, org, e.start));
+      return { id: entryId, org, title, start: e.start, end: e.end, location, bullets: e.bullets.map((b, i) => bullet(b, i, (t) => bulletIdBase(entryId, t))) };
+    });
+    return { name, entries };
+  });
+  return sections.filter((s) => ('bullets' in s ? s.bullets : s.entries).length > 0);
 }
