@@ -122,7 +122,7 @@ test.each([
   ['missing_cite', (d) => (d.summary.cites = []), { code: 'missing_cite', ref: 'l-1' }],
   ['missing_cite (> 5)', (d) => (d.summary.cites = Array(6).fill('sum-1')), { code: 'missing_cite', ref: 'l-1' }],
   ['unknown_cite', (d) => (d.entries[0]!.bullets[1]!.cites = [`${N}-ffffff`]), { code: 'unknown_cite', ref: 'l-3', token: `${N}-ffffff`.slice(0, 40) }],
-  ['unknown_cite (an entry id is not a source)', (d) => (d.letter.paragraphs[0]!.cites = [N]), { code: 'unknown_cite', ref: 'l-10', token: N }],
+  ['unknown_cite (a CV line cannot cite a whole job; only the letter may)', (d) => (d.summary.cites = [N]), { code: 'unknown_cite', ref: 'l-1', token: N }],
   ['unknown_cite (entry)', (d) => (d.entries[1]!.entry_id = 'exp-nowhere-2020'), { code: 'unknown_cite', ref: 'e-2', token: 'exp-nowhere-2020' }],
   ['wrong_entry', (d) => (d.entries[1]!.bullets[0]!.cites = [`${N}-1a2b3c`]), { code: 'wrong_entry', ref: 'l-5', token: `${N}-1a2b3c` }],
   ['wrong_entry (a skill under an entry)', (d) => d.entries[0]!.bullets[2]!.cites.push('skill-python'), { code: 'wrong_entry', ref: 'l-4', token: 'skill-python' }],

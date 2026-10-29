@@ -7,7 +7,7 @@ import { openDb } from '../src/db/index.ts';
 import type { Database } from '../src/db/index.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { audit, verifyAuditChain } from '../src/db/audit.ts';
-import { enqueue, claimNext, complete, fail, recoverStaleLocks, MAX_ATTEMPTS } from '../src/db/jobs.ts';
+import { enqueue, claimNext, complete, fail, recoverRunningJobs, recoverStaleLocks, MAX_ATTEMPTS } from '../src/db/jobs.ts';
 import { makeTestDb } from './helpers.ts';
 
 // Highest NNNN_*.sql, so adding a migration needs no test edit.
@@ -98,6 +98,18 @@ describe('db', () => {
     db.prepare(`UPDATE jobs SET attempts = ${MAX_ATTEMPTS}, locked_at = '2000-01-01T00:00:00.000Z' WHERE id = ?`).run(stale.id);
     recoverStaleLocks(db);
     expect(db.prepare('SELECT status FROM jobs WHERE id = ?').get(stale.id)).toEqual({ status: 'failed' });
+  });
+
+  test('server boot recovers every running job, fresh locks too; a career job (one attempt) fails', () => {
+    enqueue(db, 'k', 'a', {});
+    enqueue(db, 'career_letter', 'c', {});
+    claimNext(db);
+    claimNext(db);
+    expect(recoverStaleLocks(db)).toBe(0); // what a CLI's openDb does: fresh locks belong to a live server
+    expect(recoverRunningJobs(db)).toBe(2);
+    expect(db.prepare("SELECT kind, status FROM jobs WHERE idempotency_key IN ('a', 'c') ORDER BY kind").all()).toEqual([
+      { kind: 'career_letter', status: 'failed' }, { kind: 'k', status: 'queued' },
+    ]);
   });
 
   test('career: events are append-only, status and dates are checked', () => {

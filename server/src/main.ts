@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { openDb } from './db/index.ts';
+import { recoverRunningJobs } from './db/jobs.ts';
 import { createLoginToken, loginUrl } from './http/auth.ts';
 import { approvalRoutes } from './http/routes/approvals.ts';
 import { areaRoutes } from './http/routes/areas.ts';
@@ -25,6 +26,7 @@ const plugins: FastifyPluginAsync[] = [providerRoutes, areaRoutes, approvalRoute
 
 const config = loadConfig();
 const db = openDb(join(config.dataDir, 'brain.db'));
+recoverRunningJobs(db); // before the career routes sweep stuck applications, so a job cut off by a restart fails them
 const app = await buildApp({ db, config, plugins, dev: process.argv.includes('--dev') });
 try {
   syncAreasFromVault(db, config.vaultDir);

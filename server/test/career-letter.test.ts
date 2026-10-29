@@ -353,3 +353,24 @@ test('atsCode: the arithmetic of each code check', () => {
   expect(findings.map((f) => f.severity)).toEqual(['medium', 'high', 'medium', 'medium', 'high', 'low']);
   expect(JSON.stringify(parts)).not.toContain('e@x.y');
 });
+
+test('a letter may say "I\'d" and "I\'ve" and cite a whole job by its entry id', async () => {
+  const { verifyDraft } = await import('../src/career/verify.ts');
+  const { indexMaster } = await import('../src/career/tailor.ts');
+  const { parseMaster } = await import('../src/career/master.ts');
+  const { parseNote } = await import('../src/vault/frontmatter.ts');
+  const text = `---\nid: career-master\narea: career\ntags: []\nsensitivity: 2\nsource: hand\ncreated: '2026-10-01T00:00:00.000Z'\nupdated: '2026-10-01T00:00:00.000Z'\n---\n## Experience\n### Acme GmbH | Senior Engineer | 2021-03 | present | Berlin  ^exp-acme-2021\n- Cut the nightly build from 12 to 4 minutes.  ^exp-acme-2021-aaaaaa\n`;
+  const m = indexMaster(parseMaster(text), parseNote(text).body);
+  const para = (id: string, t: string, cites: string[]) => ({ id, text: t, cites, origin: 'model' as const });
+  const words = 'At Acme GmbH in Berlin I cut the nightly build from 12 to 4 minutes. '.repeat(5);
+  const draft = {
+    v: 2 as const, versions: 1, cv: { sections: [] },
+    letter: { paragraphs: [
+      para('l-1', `${words}I'd bring that to the role.`, ['exp-acme-2021-aaaaaa']),
+      para('l-2', `${words}I've worked as a Senior Engineer at Acme GmbH since 2021.`, ['exp-acme-2021', 'exp-acme-2021-aaaaaa']),
+      para('l-3', words, ['exp-acme-2021-aaaaaa']),
+    ] },
+  };
+  const report = verifyDraft(draft, m, { company: 'Northwind', role_title: 'Engineer' }, {});
+  expect(report.violations.filter((v) => v.code === 'unsupported_entity' || v.code === 'unknown_cite')).toEqual([]);
+});

@@ -66,11 +66,12 @@ function tokens(s: string): { t: string; start: boolean }[] {
 
 /** Acronyms, tokens with a digit (and a letter), an inner capital or `+ # .`; for `en` also capitalised non-initial words. */
 const isEntity = ({ t, start }: { t: string; start: boolean }, language: 'en' | 'de') =>
-  /\p{Lu}.*\p{Lu}/u.test(t) ||
+  !/^I(?:['’](?:m|d|ve|ll))?$/u.test(t) && // the letter's "I'd", "I've": first person, not a name
+  (/\p{Lu}.*\p{Lu}/u.test(t) ||
   (/\p{N}/u.test(t) && /\p{L}/u.test(t)) ||
   /.\p{Lu}/u.test(t) ||
   /[+#.]/.test(t) ||
-  (language === 'en' && !start && t.length > 1 && /^\p{Lu}/u.test(t));
+  (language === 'en' && !start && t.length > 1 && /^\p{Lu}/u.test(t)));
 
 /**
  * Checks a draft against the master (contract §6, career-v2.md §1): every model line traced to the lines it cites,
@@ -103,7 +104,9 @@ export function verifyDraft(
     if (model && (l.cites.length < 1 || l.cites.length > MAX.cites)) add('missing_cite', ref);
     const cited: string[] = [];
     for (const c of model ? l.cites : []) {
-      const src = m.sources.get(c) ?? extra?.get(c);
+      // The letter may also cite a whole job (an entry id): its employer, title, dates and place are master facts.
+      const job = extra && m.entries.get(c);
+      const src = m.sources.get(c) ?? extra?.get(c) ?? (job ? [job.org, job.title, job.start, job.end, job.location].join(' | ') : undefined);
       if (src === undefined) add('unknown_cite', ref, idToken(c));
       else if (entry && (entry.source === undefined || m.owner.get(c) !== entry.source)) add('wrong_entry', ref, c);
       else cited.push(src);
