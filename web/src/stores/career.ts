@@ -12,7 +12,7 @@ export const FAIL_TEXT: Record<FailCode, string> = {
   selection_invalid: 'The model picked CV entries that are not in your master CV.',
   no_match: 'Nothing in your master CV matches this posting.',
   verify_failed: 'The draft failed the fact check.',
-  render_failed: 'The Word or PDF files could not be created.',
+  render_failed: 'Check that your own Word template, if you use one, opens in Word.',
   internal: 'Something went wrong inside the app. The server log has the details.',
 };
 
@@ -22,7 +22,7 @@ export const STEP_TEXT = {
   match: 'Matching your master CV',
   draft: 'Writing the draft',
   verify: 'Checking every line against your CV',
-  render: 'Creating the Word and PDF files',
+  render: 'Creating the Word files',
 } as const;
 
 /** A step is still running: intake to verify while `processing`, render after `final` (a failed render sets `step: null`). */

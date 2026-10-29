@@ -73,7 +73,7 @@ function enqueueRender(db: Database, id: number): void {
 }
 
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } as const;
-const CONTENT_TYPE = { docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', pdf: 'application/pdf' } as const;
+const DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 /** Every editable line of a draft by its ref (contract §6): `cv.summary`, `cv.entries.<entry_id>.<i>`, `letter.<i>`. */
 const draftLines = (d: Draft): [string, DraftLine][] => [
@@ -113,10 +113,6 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
   if (!summary) return null;
   const requirements = latest<Requirements>(db, id, 'requirements');
   const selection = latest<Selection>(db, id, 'selection');
-  const rendered = db
-    .prepare(`SELECT detail FROM application_events WHERE application_id = ? AND kind = 'rendered' ORDER BY id DESC LIMIT 1`)
-    .pluck()
-    .get(id) as string | undefined;
   const draft = latest<Draft>(db, id, 'draft');
   const edited = db
     .prepare(`SELECT json_extract(detail, '$.refs') FROM application_events WHERE application_id = ? AND kind = 'edited'`)
@@ -131,7 +127,6 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
     verify: latest(db, id, 'verify_report'),
     sources: draft ? draftSources(vaultDir, draft) : {},
     files: db.prepare('SELECT kind, bytes FROM application_files WHERE application_id = ? ORDER BY id').all(id),
-    render_warnings: rendered ? ((JSON.parse(rendered) as { warnings?: string[] }).warnings ?? []) : [],
   };
 }
 
@@ -302,9 +297,9 @@ export const careerRoutes =
           return reply.code(409).send({ error: 'files_not_ready' });
         }
         audit(db, { actor: 'user', action: 'career.file.download', args: { id, kind } });
-        const name = kind.replace('_', '.'); // cv.docx, letter.pdf, …
+        const name = kind.replace('_', '.'); // cv.docx, letter.docx
         return reply
-          .header('content-type', CONTENT_TYPE[name.endsWith('.pdf') ? 'pdf' : 'docx'])
+          .header('content-type', DOCX_TYPE)
           .header('content-disposition', `attachment; filename="application-${id}-${name}"`)
           .header('cache-control', 'no-store')
           .send(file);

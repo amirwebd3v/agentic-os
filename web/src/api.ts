@@ -82,7 +82,7 @@ export type ApplicationSummary = {
   status: ApplicationStatus; step: ApplicationStep | null; fail_code: FailCode | null;
   follow_up_on: string | null; created_at: string; updated_at: string;
 };
-export type FileKind = 'cv_docx' | 'cv_pdf' | 'letter_docx' | 'letter_pdf';
+export type FileKind = 'cv_docx' | 'letter_docx';
 export type ApplicationDetail = ApplicationSummary & {
   requirements: Requirements | null; coverage: { matched: number; total: number } | null; draft: Draft | null;
   /** Lines the user changed (refs as in VerifyReport). */
@@ -90,8 +90,6 @@ export type ApplicationDetail = ApplicationSummary & {
   /** Cite id → master text; an entry id → its `org | title | start – end` header. */
   sources: Record<string, string>;
   files: { kind: FileKind; bytes: number }[];
-  /** From the latest successful render (contract §7). */
-  render_warnings: 'cv_over_2_pages'[];
 };
 
 export const createApplication = (posting: string) => json<ApplicationSummary>('POST', '/api/career/applications', { posting });

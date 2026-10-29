@@ -19,7 +19,7 @@ const ack = ref(false);
 
 type Row = { ref: string; label: string; line: Line; max: number };
 const PIPELINE = ['intake', 'match', 'draft', 'verify'] as const;
-const FILES: Record<FileKind, string> = { cv_docx: 'CV, Word', cv_pdf: 'CV, PDF', letter_docx: 'Cover letter, Word', letter_pdf: 'Cover letter, PDF' };
+const FILES: Record<FileKind, string> = { cv_docx: 'CV, Word', letter_docx: 'Cover letter, Word' };
 
 const header = (entryId: string) => {
   const [org, title, dates] = (app.value?.sources[entryId] ?? '').split(' | ');
@@ -138,9 +138,9 @@ onUnmounted(career.stop);
         <p v-else-if="rendering" class="notice"><strong>Final.</strong> {{ STEP_TEXT.render }}…</p>
         <div v-else-if="app.fail_code === 'render_failed'" class="notice danger" role="alert">
           <p>
-            <strong>Final, but the export failed.</strong> {{ career.failure }} The draft is unchanged<template v-if="app.files.length">, and the files below are ready</template>.
+            <strong>Final, but the files could not be created.</strong> {{ career.failure }} The draft is unchanged<template v-if="app.files.length">, and the files below are ready</template>.
           </p>
-          <button type="button" :disabled="busy" @click="rerender">Retry export</button>
+          <button type="button" :disabled="busy" @click="rerender">Create the files again</button>
         </div>
         <p v-else-if="app.status === 'final'" class="notice ok"><strong>Final.</strong> Download the files and send them yourself; the app never sends anything.</p>
 
@@ -151,9 +151,6 @@ onUnmounted(career.stop);
               <a :href="fileUrl(app.id, f.kind)" download>{{ FILES[f.kind] }}</a> <span class="hint">{{ kb(f.bytes) }}</span>
             </li>
           </ul>
-          <p v-if="app.render_warnings.includes('cv_over_2_pages')" class="notice attention">
-            The CV runs past two pages. Check it in Word before you send it.
-          </p>
         </div>
 
         <p v-if="actionError" class="notice danger" role="alert">{{ actionError }}</p>
