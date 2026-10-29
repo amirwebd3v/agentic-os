@@ -5,7 +5,7 @@ import { wordDiff } from '../diff';
 
 // Line and source text are model and file output: text only ({{ }}), never v-html.
 const props = defineProps<{ line: Line; sources: Record<string, string> }>();
-const cited = computed(() => props.line.cites.map((id) => ({ id, text: props.sources[id] })));
+const cited = computed(() => (props.line.cites ?? []).map((id) => ({ id, text: props.sources[id] })));
 const diff = computed(() => {
   const source = cited.value.flatMap((c) => (c.text === undefined ? [] : [c.text])).join(' ');
   return source ? wordDiff(source, props.line.text) : [];
@@ -15,7 +15,7 @@ const diff = computed(() => {
 <template>
   <div class="source">
     <h3 class="label">From your master CV</h3>
-    <p v-if="!line.cites.length" class="hint">This line cites no source line.</p>
+    <p v-if="!line.cites?.length" class="hint">{{ line.origin === 'suggestion' ? 'You added this from a gap suggestion and confirmed it is true.' : 'Your own line: it cites nothing in your master CV and is not checked.' }}</p>
     <figure v-for="c in cited" :key="c.id">
       <blockquote v-if="c.text !== undefined">{{ c.text }}</blockquote>
       <p v-else class="missing">Not in your master CV.</p>

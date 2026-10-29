@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue';
 import { ApiError, type Decision } from '../api';
 import ApprovalCard from '../components/ApprovalCard.vue';
-import MasterImport from '../components/MasterImport.vue';
 import { useReviewStore } from '../stores/review';
 
 const review = useReviewStore();
@@ -51,8 +50,7 @@ onMounted(() => {
     </div>
     <p v-if="message" class="error" role="alert">{{ message }}</p>
     <div v-if="!review.items.length && !review.more" class="placeholder">
-      <p>Nothing to review.</p>
-      <MasterImport @done="run(review.load)" />
+      <p>Nothing to review. When the app proposes a change to your notes, it waits here for your yes or no.</p>
     </div>
     <p v-else-if="!review.items.length" class="placeholder">That's today's review done.</p>
     <ApprovalCard

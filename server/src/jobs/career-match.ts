@@ -8,7 +8,7 @@ import type { JobHandler } from './runner.ts';
 
 const Payload = z.object({ applicationId: z.number().int().positive() });
 
-/** Job `career_match` (contract §4 step 2): requirements → `Selection`, then `career_draft` attempt 1. */
+/** Job `career_match` (contract §4 step 2): requirements → `Selection`, then `career_gaps` (career-v2.md §3). */
 export const careerMatch =
   ({ db, config, llm }: CareerIntakeDeps): JobHandler =>
   async (job) => {
@@ -32,8 +32,8 @@ export const careerMatch =
     const bullets = sel.entries.reduce((n, e) => n + e.bullet_ids.length, 0);
     db.transaction(() => {
       saveText(db, id, 'selection', sel);
-      setApp(db, id, { step: 'draft' });
-      event(db, id, 'step', { from: 'match', to: 'draft', matched, total, unmatched: sel.unmatched.length, entries: sel.entries.length, bullets, skills: sel.skill_ids.length });
-      enqueueStep(db, id, 'draft', 1);
+      setApp(db, id, { step: 'gaps' });
+      event(db, id, 'step', { from: 'match', to: 'gaps', matched, total, unmatched: sel.unmatched.length, entries: sel.entries.length, bullets, skills: sel.skill_ids.length });
+      enqueueStep(db, id, 'gaps', 0);
     })();
   };

@@ -6,6 +6,5 @@ agentic-os.json
 .env*
 !.env.example
 sidecar/.venv/
-# Obsidian per-user state
-docs/.obsidian/workspace*.json
-docs/.obsidian/cache
+# Plans and specs stay on this machine only (removed from history 2026-10-29)
+docs/

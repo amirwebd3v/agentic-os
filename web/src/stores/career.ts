@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import {
-  createApplication, editDraft, finaliseApplication, getApplication, listApplications, rerenderApplication,
-  type ApplicationDetail, type ApplicationListItem, type ApplicationSummary, type DraftEdit, type FailCode, type MilestoneKind, type VerifyReport,
+  createApplication, finaliseApplication, saveDraft, getApplication, listApplications, rerenderApplication,
+  type ApplicationDetail, type ApplicationListItem, type ApplicationSummary, type Draft, type FailCode, type MilestoneKind, type VerifyReport,
 } from '../api';
 
 export const POLL_MS = 1500;
@@ -20,8 +20,14 @@ export const FAIL_TEXT: Record<FailCode, string> = {
 export const STEP_TEXT = {
   intake: 'Reading the posting',
   match: 'Matching your master CV',
-  draft: 'Writing the draft',
+  gaps: 'Finding gaps against the posting',
+  draft: 'Writing the CV',
   verify: 'Checking every line against your CV',
+  ats: 'Scoring it like an ATS',
+  company: 'Reading your notes on the company',
+  vacancy: 'Working out what the role is for',
+  questions: 'Looking for missing evidence',
+  letter: 'Writing the cover letter',
   render: 'Creating the Word files',
 } as const;
 
@@ -36,6 +42,7 @@ export function statusLabel(a: ApplicationSummary): { text: string; tone: 'worki
   return {
     draft_ready: { text: 'Ready for review', tone: 'ready' },
     flagged: { text: 'Needs your check', tone: 'attention' },
+    needs_answers: { text: 'Waiting for your answers', tone: 'attention' },
     failed: { text: 'Failed', tone: 'danger' },
     final: { text: 'Final', tone: 'done' },
     applied: { text: 'Applied', tone: 'done' },
@@ -54,6 +61,8 @@ const VIOLATION_TEXT: Record<string, string> = {
   bad_placeholder: 'has an unknown placeholder',
   too_long: 'is too long',
   too_many_lines: 'has too many lines',
+  letter_length: 'is not 250 to 350 words long',
+  cliche: 'uses a stock phrase',
 };
 /** A verifier finding in words; `token` is model text and stays plain text wherever this is shown. */
 export const violationText = (v: Violation) =>
@@ -99,7 +108,7 @@ export const useCareerStore = defineStore('career', () => {
   };
   /** Starts a run and opens it. Rejects with the API's ApiError (e.g. `master_missing`). */
   const create = async (posting: string) => {
-    const created = await createApplication(posting);
+    const created = await createApplication({ posting });
     await open(created.id);
     return created.id;
   };
@@ -110,7 +119,7 @@ export const useCareerStore = defineStore('career', () => {
     const app = await fn();
     if (mine === seq) show(app);
   };
-  const edit = (id: number, edits: DraftEdit[]) => change(() => editDraft(id, edits));
+  const edit = (id: number, d: Pick<Draft, 'versions' | 'cv' | 'letter'>) => change(() => saveDraft(id, d));
   const finalise = (id: number, acknowledgeFlagged: boolean) => change(() => finaliseApplication(id, acknowledgeFlagged));
   const rerender = (id: number) => change(() => rerenderApplication(id));
   return { list, current, failure, pollError, open, stop, load, create, change, edit, finalise, rerender };
@@ -138,6 +147,7 @@ export function nextStep(a: ApplicationListItem, day = today()): { group: Group;
   if (a.status === 'final' && a.fail_code === 'render_failed') return { group: 'needs', text: 'Create the files again' };
   if (a.status === 'draft_ready') return { group: 'needs', text: 'Read the draft and finalise it' };
   if (a.status === 'flagged') return { group: 'needs', text: 'Check the marked lines' };
+  if (a.status === 'needs_answers') return { group: 'needs', text: 'Answer the questions for the cover letter' };
   if (a.follow_up_on && a.follow_up_on <= day && a.status !== 'withdrawn')
     return { group: 'follow', text: a.follow_up_on < day ? `Follow up, due ${dayText(a.follow_up_on)}` : 'Follow up today' };
   if (a.status === 'final') return { group: 'needs', text: 'Send the files yourself, then mark it applied' };

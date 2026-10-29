@@ -271,3 +271,77 @@ export function editSections(input: SectionEdit[], current: Section[]): Section[
   });
   return sections.filter((s) => ('bullets' in s ? s.bullets : s.entries).length > 0);
 }
+
+/** An item `mergeMaster` added: no `id` yet (the master's PUT gives it one), and the name of the file it came from. */
+export type NewMark = { new: true; from: string };
+export type MergedBullet = Bullet | ({ text: string } & NewMark);
+export type MergedEntry = Omit<Entry, 'id' | 'bullets'> & { bullets: MergedBullet[] } & ({ id: string } | NewMark);
+export type MergedSection = { name: BulletSectionName; bullets: MergedBullet[] } | { name: EntrySectionName; entries: MergedEntry[] };
+export interface MergeAdded {
+  entries: number;
+  /** Summary lines and entry bullets. */
+  bullets: number;
+  skills: number;
+  languages: number;
+}
+
+/** Entry key: case and whitespace ignored. */
+const headKey = (s: string) => s.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
+/** Line key: case, whitespace and punctuation ignored. ponytail: `#` is kept so `C#` stays apart from `C`. */
+const lineKey = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[\p{P}\s]/gu, (c) => (c === '#' ? c : ''));
+
+/**
+ * The current master with every file's sections merged in (career-v2 §2), pure. The master's items keep their ids
+ * and order; what a file adds has no `id` and carries `new: true` and `from` (the file's name, for the page only).
+ * - Same entry: same section and `org` + `start`, or same `org` + `title` when either start is empty.
+ * - Same line (bullet, summary, skill, language): same `lineKey` within its entry or bullet section.
+ * - A new line joins its entry; a new entry goes before the first entry of its section that starts earlier, so a
+ *   section kept newest first stays so. A section the master lacks is appended.
+ */
+export function mergeMaster(current: Section[], incoming: { from: string; sections: Section[] }[]): { sections: MergedSection[]; added: MergeAdded } {
+  const added: MergeAdded = { entries: 0, bullets: 0, skills: 0, languages: 0 };
+  const sections: MergedSection[] = structuredClone(current);
+  /** Appends the lines `list` lacks; returns how many. */
+  const addLines = (list: MergedBullet[], lines: Bullet[], from: string) => {
+    const keys = new Set(list.map((b) => lineKey(b.text)));
+    let n = 0;
+    for (const { text } of lines) {
+      if (keys.has(lineKey(text))) continue;
+      keys.add(lineKey(text));
+      list.push({ text, new: true, from });
+      n++;
+    }
+    return n;
+  };
+  const same = (a: MergedEntry, b: Entry) =>
+    headKey(a.org) === headKey(b.org) && (a.start && b.start ? headKey(a.start) === headKey(b.start) : headKey(a.title) === headKey(b.title));
+
+  for (const { from, sections: file } of incoming) {
+    for (const s of file) {
+      let target = sections.find((t) => t.name === s.name);
+      if (!target) {
+        target = 'entries' in s ? { name: s.name, entries: [] } : { name: s.name, bullets: [] };
+        sections.push(target);
+      }
+      if ('bullets' in s) {
+        const n = addLines((target as { bullets: MergedBullet[] }).bullets, s.bullets, from);
+        added[s.name === 'Skills' ? 'skills' : s.name === 'Languages' ? 'languages' : 'bullets'] += n;
+        continue;
+      }
+      const entries = (target as { entries: MergedEntry[] }).entries;
+      for (const e of s.entries) {
+        const match = entries.find((t) => same(t, e));
+        if (match) {
+          added.bullets += addLines(match.bullets, e.bullets, from);
+          continue;
+        }
+        const entry: MergedEntry = { org: e.org, title: e.title, start: e.start, end: e.end, location: e.location, bullets: [], new: true, from };
+        added.bullets += addLines(entry.bullets, e.bullets, from);
+        const at = entries.findIndex((t) => t.start < e.start);
+        entries.splice(at < 0 ? entries.length : at, 0, entry);
+        added.entries++;
+      }
+    }
+  }
+  return { sections, added };
+}

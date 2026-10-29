@@ -62,6 +62,11 @@ export const requireSession =
     if (!hasValidSession(db, req.headers.cookie)) return reply.code(401).send({ error: 'not logged in' });
   };
 
+/** `GET /session`: `{ ok }`, always 200, so the app can tell it isn't logged in without a failed request in the console. */
+export function sessionRoute(app: FastifyInstance, db: Database): void {
+  app.get('/session', async (req, reply) => reply.header('cache-control', 'no-store').send({ ok: hasValidSession(db, req.headers.cookie) }));
+}
+
 /**
  * `GET /login?t=<token>`: exchanges a one-time token for the session cookie, then redirects to the app: `/`, or in
  * dev the Vite page (the server has no web/dist then). Cookies ignore the port, so the session works on both.

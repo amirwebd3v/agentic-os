@@ -51,7 +51,8 @@ export const careerIntake =
     const detail = { from: 'intake', to: 'match', must_have: req.must_have.length, nice_to_have: req.nice_to_have.length, injection_suspected: req.injection_suspected };
     db.transaction(() => {
       saveText(db, id, 'requirements', req); // a retried run (`POST …/retry`) adds a version
-      db.prepare(`UPDATE applications SET company = ?, role_title = ?, language = ?, step = 'match', updated_at = ${NOW} WHERE id = ?`).run(
+      // The posting's company name replaces the one typed on the form; a posting that names none keeps the typed one.
+      db.prepare(`UPDATE applications SET company = COALESCE(?, company), role_title = ?, language = ?, step = 'match', updated_at = ${NOW} WHERE id = ?`).run(
         req.company || null,
         req.role_title || null,
         req.language,

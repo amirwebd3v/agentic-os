@@ -5,7 +5,9 @@ import PizZip from 'pizzip';
 import { afterAll, expect, test } from 'vitest';
 import type { Requirements } from '../src/career/intake.ts';
 import { readMaster, saveText } from '../src/career/tailor.ts';
-import type { Draft } from '../src/career/tailor.ts';
+import { toDraftV2 } from '../src/career/draft.ts';
+import type { Draft } from '../src/career/draft.ts';
+import type { DraftV1 } from '../src/career/tailor.ts';
 import { enqueue } from '../src/db/jobs.ts';
 import { careerRoutes, failCareerJob, failStuckApplications } from '../src/http/routes/career.ts';
 import { careerRender, fillDocx, inside, outRoot, renderModel } from '../src/jobs/career-render.ts';
@@ -26,7 +28,8 @@ const N = 'exp-northwind-logistics-2021';
 const E = 'edu-hochschule-bremen-2015';
 const CONTACT_VALUES = ['Jane Mary Doe', 'jane.doe@example.com', '+49 30 1234567', 'jane-doe.example.dev'];
 const REQ = { language: 'en', company: 'Marlowe Freight Technologies', role_title: 'Platform Engineer', must_have: [], nice_to_have: [] } as unknown as Requirements;
-const DRAFT: Draft = {
+/** Stored in the v1 shape, so the job and the routes also read it through `toDraftV2`. */
+const DRAFT: DraftV1 = {
   summary: { text: 'Platform engineer with 6 years in DevOps.', cites: ['sum-1'] },
   entries: [
     { entry_id: N, bullets: [{ text: 'Cut deploy time from 40 to 9 minutes; kept {braces}, {{x}} and {#loop} literal.', cites: [`${N}-1a2b3c`] }] },
@@ -82,15 +85,16 @@ test('render model: employer, title and dates from the master; placeholders rest
   mkdirSync(join(vault, 'career'));
   copyFileSync(join(FIXTURES, 'master.md'), join(vault, 'career', 'master.md'));
   const contact = { name: 'Jane Mary Doe', email: 'jane.doe@example.com', phone: '+49 30 1234567' };
-  const model = renderModel(DRAFT, readMaster(vault), contact, REQ, new Date('2026-10-28T12:00:00Z'));
+  const v2 = toDraftV2(DRAFT, readMaster(vault).master);
+  const model = renderModel(v2, readMaster(vault), contact, REQ, new Date('2026-10-28T12:00:00Z'));
   expect(model.experience).toEqual([
     { first: true, org: 'Northwind Logistics', title: 'DevOps Engineer', start: '2021-03', end: 'present', location: 'Hamburg', bullets: [DRAFT.entries[0]!.bullets[0]!.text] },
   ]);
   expect(model.education[0]).toMatchObject({ first: true, org: 'Hochschule Bremen', title: 'BSc Computer Science', start: '2015', end: '2018' });
   expect(model).toMatchObject({ projects: [], certifications: [], skills_text: 'Terraform, AWS', languages_text: 'English (C1), German (native)', date: '28 October 2026', address: '', salutation: 'Dear Hiring Manager,', closing: 'Kind regards,' });
-  expect(renderModel(DRAFT, { ...readMaster(vault), language: 'de' }, contact, REQ, new Date())).toMatchObject({ salutation: 'Sehr geehrte Damen und Herren,', closing: 'Mit freundlichen Grüßen' });
+  // English only (career-v2.md): a master the old heuristic would have called German still renders English.
+  expect(renderModel(v2, { language: 'de' }, contact, REQ, new Date())).toMatchObject({ salutation: 'Dear Hiring Manager,', closing: 'Kind regards,' });
   expect(model.paragraphs[2]).toBe('Reach me at jane.doe@example.com or +49 30 1234567;  is empty. Regards, Jane Mary Doe');
-  expect(() => renderModel({ ...DRAFT, entries: [{ entry_id: 'exp-nowhere-2020', bullets: [] }] }, readMaster(vault), contact, REQ, new Date())).toThrow('draft entry missing in master');
 
   const cv = docxText(fillDocx(readFileSync(join(STARTERS, 'cv-template.docx')), model));
   expect(cv).toContain('Jane Mary Doe\n');
@@ -106,31 +110,32 @@ test('render model: employer, title and dates from the master; placeholders rest
   expect(letter).not.toMatch(/\{|undefined/);
 });
 
-test('render model: the header, skills and languages edits win over the master; removed items vanish; added lines render', async () => {
+test('render model: the v2 document in section order; header edits and an owner entry render with their own fields; removed items vanish', async () => {
   const t = await setup('draft_ready', null);
-  const patch = await t.app.inject(
+  const before = (await t.req('GET', '')).json() as { draft: Draft };
+  const { cv: doc, letter: stored, versions } = before.draft;
+  const exp = doc.sections.find((s) => s.name === 'Experience') as Extract<Draft['cv']['sections'][number], { entries: unknown }>;
+  const north = exp.entries[0]!;
+  const put = await t.app.inject(
     t.authed({
-      method: 'PATCH',
+      method: 'PUT',
       url: `/api/career/applications/${t.id}/draft`,
       payload: {
-        edits: [
-          { ref: `cv.entries.${N}.header.title`, text: 'Platform Lead' },
-          { ref: `cv.entries.${N}.header.end`, text: '2026-09' },
-          { op: 'remove', ref: `cv.entries.${N}.header.location` },
-          { op: 'remove', ref: `cv.entries.${N}.0` },
-          { op: 'add', ref: `cv.entries.${N}`, text: 'Mentored two engineers; reach {{CONTACT_EMAIL}}.' },
-          { op: 'remove', ref: `cv.entries.${E}` },
-          { op: 'remove', ref: 'cv.summary' },
-          { ref: 'cv.skills', text: 'Kubernetes ,  Go,,' },
-          { ref: 'cv.languages', text: 'English (C2)' },
-          { op: 'remove', ref: 'letter.1' },
-          { op: 'add', ref: 'letter', text: 'An added closing paragraph.' },
-        ],
+        versions,
+        cv: {
+          sections: [
+            { name: 'Experience', entries: [{ ...north, title: 'Platform Lead', end: '2026-09', location: '', bullets: [{ text: 'Mentored two engineers; reach {{CONTACT_EMAIL}}.' }] }] },
+            { name: 'Projects', entries: [{ org: 'Side Project', title: 'Maintainer', start: '', end: '', location: '', bullets: [{ text: 'Wrote a CLI.' }] }] },
+            { name: 'Skills', bullets: [{ text: 'Kubernetes' }, { text: 'Go' }] },
+            { name: 'Languages', bullets: [{ text: 'English (C2)' }] },
+          ],
+        },
+        letter: { paragraphs: [stored.paragraphs[0], stored.paragraphs[2], { text: 'An added closing paragraph.' }] },
       },
     }),
   );
-  expect(patch.statusCode).toBe(200);
-  const draft = (patch.json() as { draft: Draft }).draft;
+  expect(put.statusCode).toBe(200);
+  const draft = (put.json() as { draft: Draft }).draft;
   const model = renderModel(draft, readMaster(t.vaultDir), { email: 'jane.doe@example.com' }, REQ, new Date('2026-10-28T12:00:00Z'));
   expect(model.experience).toEqual([
     {
@@ -138,11 +143,12 @@ test('render model: the header, skills and languages edits win over the master; 
       bullets: ['Mentored two engineers; reach jane.doe@example.com.'],
     },
   ]);
+  expect(model.projects).toEqual([{ first: true, org: 'Side Project', title: 'Maintainer', start: '', end: '', location: '', bullets: ['Wrote a CLI.'] }]);
   expect(model).toMatchObject({ education: [], summary: '', skills: ['Kubernetes', 'Go'], skills_text: 'Kubernetes, Go', languages: ['English (C2)'], languages_text: 'English (C2)' });
   expect(model.paragraphs).toEqual([DRAFT.letter.paragraphs[0]!.text, expect.stringContaining('Reach me at jane.doe@example.com'), 'An added closing paragraph.']);
 
   const cv = docxText(fillDocx(readFileSync(join(STARTERS, 'cv-template.docx')), model));
-  for (const s of ['Platform Lead', 'Northwind Logistics', '2026-09', 'Mentored two engineers; reach jane.doe@example.com.', 'Kubernetes, Go', 'English (C2)']) expect(cv).toContain(s);
+  for (const s of ['Platform Lead', 'Northwind Logistics', '2026-09', 'Mentored two engineers; reach jane.doe@example.com.', 'Kubernetes, Go', 'English (C2)', 'Side Project', 'Wrote a CLI.']) expect(cv).toContain(s);
   for (const s of ['DevOps Engineer', 'Hamburg', 'Cut deploy time', 'Hochschule Bremen', 'Education', 'Platform engineer with', 'Terraform', 'German']) expect(cv).not.toContain(s);
   const letter = docxText(fillDocx(readFileSync(join(STARTERS, 'letter-template.docx')), model));
   expect(letter).toContain('An added closing paragraph.');
@@ -222,7 +228,7 @@ test('POST final: draft_ready → final/render with a render job; flagged needs 
   expect((await t.req('POST', '/final', { acknowledge_flagged: 'yes' })).json()).toEqual({ error: 'flagged_not_acknowledged' });
   const res = await t.req('POST', '/final', { acknowledge_flagged: true });
   expect(res.statusCode).toBe(202);
-  expect(res.json()).toMatchObject({ id: t.id, status: 'final', step: 'render', fail_code: null, draft: DRAFT, files: [] });
+  expect(res.json()).toMatchObject({ id: t.id, status: 'final', step: 'render', fail_code: null, draft: toDraftV2(DRAFT, readMaster(t.vaultDir).master), files: [] });
   expect(t.db.prepare('SELECT kind, idempotency_key, payload FROM jobs').get()).toEqual({
     kind: 'career_render', idempotency_key: `career:render:${t.id}:0`, payload: JSON.stringify({ applicationId: t.id }),
   });

@@ -1,112 +1,73 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import {
-  ApiError, archiveApplication, deleteApplication, fileUrl, renameApplication, retryApplication,
-  type Draft, type DraftEdit, type FileKind, type HeaderField, type Line,
+  ApiError, archiveApplication, checkAts, deleteApplication, dismissSuggestions, fileUrl, renameApplication, retryApplication, sendAnswers,
+  type FileKind, type Line, type Suggestion,
 } from '../api';
-import { useKeys } from '../keys';
-import AddLine from '../components/AddLine.vue';
-import DraftLine from '../components/DraftLine.vue';
-import EntryHeader from '../components/EntryHeader.vue';
+import CvEditor from '../components/CvEditor.vue';
+import FitPanel from '../components/FitPanel.vue';
+import LetterBrief from '../components/LetterBrief.vue';
+import { addToMaster, type MasterTarget } from '../masterAdd';
 import LineSource from '../components/LineSource.vue';
 import TrackingPanel from '../components/TrackingPanel.vue';
+import { allLines, blankSection, cleaned, isEntries, problems, type CvSection, type SectionName } from '../cv';
 import { STEP_TEXT, statusLabel, useCareerStore, violationText } from '../stores/career';
 
-// Everything in the application (company, role, requirements, draft, sources, tokens) is model or file output:
-// it is rendered with {{ }} only. Nothing here uses v-html.
+// Everything in the application (company, role, requirements, draft, sources, tokens) is model, file or owner text:
+// it is rendered with {{ }} and v-model only. Nothing here uses v-html.
 const props = defineProps<{ id: string }>();
 const id = Number(props.id);
 const career = useCareerStore();
+const router = useRouter();
 const app = computed(() => (career.current?.id === id ? career.current : null));
 const loadError = ref<string | null>(null);
 const actionError = ref<string | null>(null);
 const busy = ref(false);
-const focused = ref<string | null>(null);
 const ack = ref(false);
-const reading = ref<HTMLElement>();
+const focused = ref<string | null>(null);
 
-type Row = { ref: string; label: string; line: Line; max: number };
-const PIPELINE = ['intake', 'match', 'draft', 'verify'] as const;
+type Tab = 'cv' | 'letter' | 'fit' | 'posting' | 'tracking';
+const tab = ref<Tab>('cv');
 const FILES: Record<FileKind, string> = { cv_docx: 'CV, Word', letter_docx: 'Cover letter, Word' };
+const PIPELINE = ['intake', 'match', 'gaps', 'draft', 'verify', 'ats', 'company', 'vacancy', 'questions', 'letter'] as const;
 
-const HEADER: HeaderField[] = ['org', 'title', 'start', 'end', 'location'];
-/** The master's `org | title | start | end | location`, with the user's overrides on top. */
-const header = (e: Draft['entries'][number]) => {
-  const master = (app.value?.sources[e.entry_id] ?? '').split(' | ');
-  return Object.fromEntries(HEADER.map((f, i) => [f, e.header?.[f] ?? master[i] ?? ''])) as Record<HeaderField, string>;
-};
-/** Removed lines are left out after numbering, so every ref keeps its index (contract §8.2). */
-const kept = (rows: Row[]) => rows.filter((r) => !r.line.removed);
-const doc = computed(() => {
-  const d = app.value?.draft;
-  if (!d) return null;
-  const typed = (ref: string, label: string, text: string): Row => ({ ref, label, line: { text, cites: [] }, max: 700 });
-  return {
-    summary: kept(d.summary ? [{ ref: 'cv.summary', label: 'the summary', line: d.summary, max: 300 }] : []),
-    entries: d.entries.flatMap((e) => {
-      if (e.removed) return [];
-      const h = header(e);
-      const name = h.org || e.entry_id;
-      const rows = e.bullets.map((line, i): Row => ({ ref: `cv.entries.${e.entry_id}.${i}`, label: `bullet ${i + 1} under ${name}`, line, max: 300 }));
-      const headerEdited = app.value!.edited_refs.some((r) => r.startsWith(`cv.entries.${e.entry_id}.header.`));
-      return [{ id: e.entry_id, name, header: h, headerEdited, rows: kept(rows) }];
-    }),
-    // Shown while empty only when editable, so a skills or languages line can be written from nothing.
-    lists: [
-      { title: 'Skills', row: typed('cv.skills', 'the skills', d.skills_text ?? d.skill_ids.map((s) => app.value?.sources[s] ?? s).join(', ')) },
-      { title: 'Languages', row: typed('cv.languages', 'the languages', d.languages_text ?? app.value!.languages.join(', ')) },
-    ].filter((l) => l.row.line.text || editable.value),
-    letter: kept(d.letter.paragraphs.map((line, i): Row => ({ ref: `letter.${i}`, label: `letter paragraph ${i + 1}`, line, max: 700 }))),
-  };
-});
-const rows = computed(() => (doc.value ? [...doc.value.summary, ...doc.value.entries.flatMap((e) => e.rows), ...doc.value.letter] : []));
-/** What you removed, newest structure first, so it can be put back (op `restore`). */
-const removed = computed(() => {
-  const d = app.value?.draft;
-  if (!d) return { cv: [], letter: [] };
-  const out = (ref: string, text: string) => ({ ref, text });
-  return {
-    cv: [
-      ...(d.summary?.removed ? [out('cv.summary', d.summary.text)] : []),
-      ...d.entries.flatMap((e) => {
-        const name = header(e).org || e.entry_id;
-        if (e.removed) return [out(`cv.entries.${e.entry_id}`, `${name} and its lines`)];
-        return e.bullets.flatMap((b, i) => (b.removed ? [out(`cv.entries.${e.entry_id}.${i}`, b.text)] : []));
-      }),
-    ],
-    letter: d.letter.paragraphs.flatMap((p, i) => (p.removed ? [out(`letter.${i}`, p.text)] : [])),
-  };
-});
-/** Master entries the draft doesn't have yet (live or removed), to add one. */
-const addable = computed(() => {
-  const inDraft = new Set(app.value?.draft?.entries.map((e) => e.entry_id));
-  return (app.value?.master_entries ?? []).filter((e) => !inDraft.has(e.id)).map((e) => {
-    const [org, title, start, end] = e.header.split(' | ');
-    return { id: e.id, text: [org, title].filter(Boolean).join(', ') + (start ? ` (${start}–${end})` : '') };
-  });
-});
-const toAdd = ref('');
-const current = computed(() => rows.value.find((r) => r.ref === focused.value) ?? rows.value[0] ?? null);
-const edited = computed(() => new Set(app.value?.edited_refs));
-const violations = (ref: string) => app.value?.verify?.violations.filter((v) => v.ref === ref) ?? [];
-const toCheck = computed(() => rows.value.filter((r) => !edited.value.has(r.ref) && violations(r.ref).length).length);
+// ---------- the draft: a local copy edited in place, saved as a whole ----------
+const sections = ref<CvSection[]>([]);
+const paragraphs = ref<Line[]>([]);
+const saved = ref('');
+/** A plain copy: the store's detail is reactive, which structuredClone can't copy. */
+const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+const snapshot = () => JSON.stringify([sections.value, paragraphs.value]);
+const dirty = computed(() => !!app.value?.draft && snapshot() !== saved.value);
+watch(
+  () => app.value?.draft,
+  (d) => {
+    if (!d || (saved.value && dirty.value)) return; // never throw away unsaved edits when a poll brings a new detail
+    sections.value = clone(d.cv.sections);
+    paragraphs.value = clone(d.letter.paragraphs);
+    saved.value = snapshot();
+  },
+  { immediate: true },
+);
 const editable = computed(() => app.value?.status === 'draft_ready' || app.value?.status === 'flagged');
-const label = computed(() => (app.value ? statusLabel(app.value) : null));
-const rendering = computed(() => label.value?.text === 'Creating files');
-const stepState = (s: (typeof PIPELINE)[number]) => {
-  const now = PIPELINE.indexOf(app.value?.step as (typeof PIPELINE)[number]);
-  const i = PIPELINE.indexOf(s);
-  return i < now ? 'Done' : i === now ? 'Now' : 'Next';
-};
-const kb = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} kB`;
+const lines = computed(() => [...allLines(sections.value), ...paragraphs.value]);
+const current = computed(() => lines.value.find((l) => l.id && l.id === focused.value) ?? null);
+const edited = computed(() => new Set(app.value?.edited_refs));
+const violations = (ref?: string) => (ref ? app.value?.verify?.violations.filter((v) => v.ref === ref) ?? [] : []);
+const toCheck = computed(() => lines.value.filter((l) => l.id && !edited.value.has(l.id) && violations(l.id).length).length);
+const docViolations = computed(() => app.value?.verify?.violations.filter((v) => !v.ref.startsWith('l-')) ?? []);
 
 const ACTION_ERRORS: Record<string, string> = {
   wrong_status: 'This application changed in the meantime. Reload the page.',
-  bad_ref: 'That line no longer exists. Reload the page.',
-  bad_edit: 'That change was not saved: a header field takes at most 120 characters.',
+  draft_changed: 'The draft changed since you opened it (another tab?). Reload to get the latest version; your unsaved edits are lost.',
+  bad_draft: 'Something is not in the expected form: every line needs text, dates are 2021 or 2021-03 (or “present”), and no field may hold “|”.',
   flagged_not_acknowledged: 'Tick the box first: some lines still need your check.',
   master_missing: 'There is no master CV any more. Add it on the Master CV page, then retry.',
+  master_changed: 'Your master CV changed in Obsidian meanwhile, so the line was not added there. Add it on the Master CV page.',
+  provider_error: 'The model provider returned an error. Try again in a moment.',
+  bad_answers: 'Those answers no longer match the questions. Reload the page.',
+  unknown_suggestion: 'That suggestion no longer exists. Reload the page.',
   provider_not_configured: 'Connect a provider first (see the banner at the top).',
 };
 async function act(fn: () => Promise<void>) {
@@ -121,27 +82,82 @@ async function act(fn: () => Promise<void>) {
     busy.value = false;
   }
 }
-const send = (edits: DraftEdit[], done: () => void) => act(() => career.edit(id, edits).then(done));
-const save = (ref: string, text: string, done: () => void) => send([{ ref, text }], done);
-const add = (ref: string, text: string, done: () => void) => send([{ op: 'add', ref, text }], done);
-/** Removing can't be undone (add a line instead), so it asks first; focus then goes to the draft, not the page top. */
-async function remove(ref: string, what: string) {
-  if (!window.confirm(`Remove ${what}? You can't undo this.`)) return;
-  await send([{ op: 'remove', ref }], () => {});
-  await nextTick();
-  reading.value?.focus();
+async function save() {
+  const wrong = problems(sections.value, true);
+  if (wrong.length) return void (actionError.value = `Fix the dates or names first: ${wrong.join('; ')}.`);
+  const letter = paragraphs.value.map((p) => ({ ...p, text: p.text.trim() })).filter((p) => p.text);
+  await act(async () => {
+    const d = app.value!.draft!;
+    saved.value = ''; // let the new detail replace the local copy
+    await career.edit(id, { versions: d.versions, cv: { sections: cleaned(sections.value) }, letter: { paragraphs: letter } });
+    sections.value = clone(app.value!.draft!.cv.sections);
+    paragraphs.value = clone(app.value!.draft!.letter.paragraphs);
+    saved.value = snapshot();
+  });
 }
-const restore = (ref: string) => send([{ op: 'restore', ref }], () => {});
-const addEntry = () => toAdd.value && send([{ op: 'add', ref: 'cv.entries', text: toAdd.value }], () => (toAdd.value = ''));
-const finalise = () => act(() => career.finalise(id, ack.value));
+function discard() {
+  const d = app.value?.draft;
+  if (!d) return;
+  sections.value = clone(d.cv.sections);
+  paragraphs.value = clone(d.letter.paragraphs);
+  actionError.value = null;
+}
+function move<T>(list: T[], i: number, by: number) {
+  const j = i + by;
+  if (j >= 0 && j < list.length) [list[i], list[j]] = [list[j]!, list[i]!];
+}
+async function addParagraph() {
+  paragraphs.value.push({ text: '' });
+  await nextTick();
+  [...document.querySelectorAll<HTMLTextAreaElement>('.letter-edit textarea')].at(-1)?.focus();
+}
+// ---------- gaps, ATS and the letter agent ----------
+const recheck = () => act(() => career.change(() => checkAts(id)));
+const dismiss = (ids: string[]) => act(() => career.change(() => dismissSuggestions(id, ids)));
+const answer = (answers: { id: string; text: string | null }[]) => act(() => career.change(() => sendAnswers(id, answers)));
+const toMaster = (t: MasterTarget, text: string) =>
+  act(async () => {
+    if (!(await addToMaster(t, text))) actionError.value = 'That part of your master CV no longer exists. Add the line on the Master CV page.';
+  });
+/** A confirmed suggestion goes into the draft as a new line (saved with the next Save) and, if asked, into the master. */
+async function accept(sg: Suggestion, text: string, alsoMaster: boolean) {
+  const line: Line = { text, origin: 'suggestion', suggestion_id: sg.id };
+  const entry = sections.value.flatMap((x) => (isEntries(x) ? x.entries : [])).find((e) => sg.entry_id && (e.source === sg.entry_id || e.id === sg.entry_id));
+  if (entry) entry.bullets.push(line);
+  else {
+    const name = (SECTION_NAMES.includes(sg.section as SectionName) ? sg.section : 'Summary') as SectionName;
+    let sec = sections.value.find((x) => x.name === name);
+    if (!sec) sections.value.push((sec = blankSection(name)));
+    if (isEntries(sec)) (sec.entries[0] ?? sec.entries[sec.entries.push({ org: '', title: '', start: '', end: '', location: '', bullets: [] }) - 1]!).bullets.push(line);
+    else sec.bullets = [...sec.bullets.filter((b) => b.text.trim()), line];
+  }
+  tab.value = 'cv';
+  if (alsoMaster) await toMaster(sg.entry_id ? { entry: sg.entry_id } : { section: name4master(sg.section) }, text);
+}
+const SECTION_NAMES: readonly string[] = ['Summary', 'Experience', 'Education', 'Projects', 'Certifications', 'Skills', 'Languages'];
+const name4master = (section: string) => (section === 'Skills' || section === 'Languages' ? section : 'Summary') as 'Summary' | 'Skills' | 'Languages';
+
+const words = computed(() => paragraphs.value.map((p) => p.text).join(' ').split(/\s+/).filter(Boolean).length);
+
+// ---------- status and actions ----------
+const label = computed(() => (app.value ? statusLabel(app.value) : null));
+const rendering = computed(() => label.value?.text === 'Creating files');
+const running = computed(() => app.value?.status === 'processing' || rendering.value);
+const stepState = (s: (typeof PIPELINE)[number]) => {
+  const now = PIPELINE.indexOf(app.value?.step as (typeof PIPELINE)[number]);
+  const i = PIPELINE.indexOf(s);
+  return i < now ? 'Done' : i === now ? 'Now' : 'Next';
+};
+const kb = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} kB`;
+const finalise = () => (dirty.value ? void (actionError.value = 'Save or discard your changes first.') : act(() => career.finalise(id, ack.value)));
 const rerender = () => act(() => career.rerender(id));
 const retry = () => act(() => career.change(() => retryApplication(id)));
 const archive = (on: boolean) => act(() => career.change(() => archiveApplication(id, on)));
-const router = useRouter();
 async function destroy() {
   if (!window.confirm("Delete this application for good? The posting, the draft, the files and the notes are deleted. This can't be undone.")) return;
   await act(async () => {
     await deleteApplication(id);
+    saved.value = snapshot();
     await router.push('/applications');
   });
 }
@@ -161,23 +177,41 @@ const rename = () =>
     if (Object.keys(changed).length) await career.change(() => renameApplication(id, changed));
     naming.value = false;
   });
-const running = computed(() => app.value?.status === 'processing' || rendering.value);
 
-// j / k move through the draft's lines, e edits the one in focus (each line's first button carries its focus).
-const lineButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.reading .line > .line-actions > button:first-child, .reading .line > button')];
-const move = (by: number) => {
-  const all = lineButtons();
-  const at = all.findIndex((b) => b.closest('.line')?.classList.contains('focused'));
-  all[Math.min(all.length - 1, Math.max(0, at + by))]?.focus();
+const tracked = computed(() => !!app.value && ['final', 'applied', 'withdrawn'].includes(app.value.status));
+const TABS = computed(() =>
+  [
+    { key: 'cv', label: 'CV', show: !!app.value?.draft },
+    { key: 'letter', label: 'Cover letter', show: !!app.value?.draft || !!app.value?.questions },
+    { key: 'fit', label: 'Fit and ATS', show: !!app.value?.gaps || !!app.value?.ats },
+    { key: 'posting', label: 'The posting', show: !!app.value?.requirements },
+    { key: 'tracking', label: 'Tracking', show: tracked.value },
+  ].filter((t) => t.show) as { key: Tab; label: string }[],
+);
+watch(TABS, (t) => {
+  if (t.length && !t.some((x) => x.key === tab.value)) tab.value = t[0]!.key;
+}, { immediate: true });
+
+const onKey = (e: KeyboardEvent) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's' && dirty.value) {
+    e.preventDefault();
+    void save();
+  }
 };
-useKeys({ j: () => move(1), k: () => move(-1), e: () => document.querySelector<HTMLButtonElement>('.reading .line.focused .line-actions > button')?.click() });
-
-onMounted(() =>
+const beforeUnload = (e: BeforeUnloadEvent) => dirty.value && e.preventDefault();
+onBeforeRouteLeave(() => !dirty.value || window.confirm('Leave without saving your changes to this draft?'));
+onMounted(() => {
+  window.addEventListener('keydown', onKey);
+  window.addEventListener('beforeunload', beforeUnload);
   career.open(id).catch((err) => {
     loadError.value = err instanceof ApiError && err.status === 404 ? 'There is no application with this number.' : "Couldn't load this application.";
-  }),
-);
-onUnmounted(career.stop);
+  });
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKey);
+  window.removeEventListener('beforeunload', beforeUnload);
+  career.stop();
+});
 </script>
 
 <template>
@@ -225,6 +259,11 @@ onUnmounted(career.stop);
           </ol>
         </div>
 
+        <div v-else-if="app.status === 'needs_answers'" class="notice attention">
+          <p><strong>Waiting for your answers.</strong> The CV is drafted. Before writing the cover letter, the agent needs a few facts your CVs don't show.</p>
+          <button type="button" class="primary" @click="tab = 'letter'">Answer the questions</button>
+        </div>
+
         <div v-else-if="app.status === 'failed'" class="notice danger" role="alert">
           <p><strong>This run stopped.</strong> {{ career.failure }}</p>
           <button type="button" :disabled="busy" @click="retry">Retry with the same posting</button>
@@ -232,11 +271,13 @@ onUnmounted(career.stop);
 
         <div v-else-if="editable" class="notice" :class="{ attention: app.status === 'flagged' }">
           <p v-if="app.status === 'draft_ready'">
-            <strong>Ready for your review.</strong> Read each line next to the master CV line it comes from, edit what you would say differently, then finalise.
+            <strong>Ready for your review.</strong> Read each line beside the master CV line it comes from, change anything, then finalise.
           </p>
           <p v-else>
-            <strong>Needs your check.</strong> After a second attempt, the fact check still marks {{ toCheck }} {{ toCheck === 1 ? 'line' : 'lines' }}
-            with “Check”. Edit them, or confirm you have checked them.
+            <strong>Needs your check.</strong>
+            <template v-if="toCheck">The fact check still marks {{ toCheck }} {{ toCheck === 1 ? 'line' : 'lines' }} with “Check”.</template>
+            <template v-for="(v, i) in docViolations" :key="i"> The {{ v.ref.startsWith('letter') ? 'letter' : 'CV' }} {{ violationText(v) }}.</template>
+            Edit it, or confirm you have checked it.
           </p>
           <label v-if="app.status === 'flagged'" class="ack">
             <input v-model="ack" type="checkbox" /> I have checked the marked lines and they are true.
@@ -249,127 +290,85 @@ onUnmounted(career.stop);
 
         <p v-else-if="rendering" class="notice"><strong>Final.</strong> {{ STEP_TEXT.render }}…</p>
         <div v-else-if="app.fail_code === 'render_failed'" class="notice danger" role="alert">
-          <p>
-            <strong>Final, but the files could not be created.</strong> {{ career.failure }} The draft is unchanged<template v-if="app.files.length">, and the files below are ready</template>.
-          </p>
+          <p><strong>Final, but the files could not be created.</strong> {{ career.failure }} The draft is unchanged.</p>
           <button type="button" :disabled="busy" @click="rerender">Create the files again</button>
         </div>
         <p v-else-if="app.status === 'final'" class="notice ok"><strong>Final.</strong> Download the files and send them yourself; the app never sends anything.</p>
 
-        <div v-if="app.files.length" class="downloads">
-          <h2 class="label">Files</h2>
-          <ul>
-            <li v-for="f in app.files" :key="f.kind">
-              <a :href="fileUrl(app.id, f.kind)" download>{{ FILES[f.kind] }}</a> <span class="hint">{{ kb(f.bytes) }}</span>
-            </li>
-          </ul>
-        </div>
+        <ul v-if="app.files.length" class="downloads">
+          <li v-for="f in app.files" :key="f.kind"><a :href="fileUrl(app.id, f.kind)" download>{{ FILES[f.kind] }} <span class="hint">{{ kb(f.bytes) }}</span></a></li>
+        </ul>
 
         <p v-if="actionError" class="notice danger" role="alert">{{ actionError }}</p>
         <p v-if="app.requirements?.injection_suspected" class="notice attention">
           The posting contains text that tries to give the model instructions. It was treated as data only; read the draft with care.
         </p>
-        <p v-if="app.language === 'de'" class="notice">The posting is in German. The draft is in your master CV's language; it is not translated.</p>
       </section>
 
-      <details v-if="app.requirements" class="asks">
-        <summary>What the posting asks for</summary>
-        <h3 class="label">Must have</h3>
+      <div v-if="TABS.length > 1" class="seg tabs" role="group" aria-label="Parts of this application">
+        <button v-for="t in TABS" :key="t.key" type="button" :aria-pressed="tab === t.key" @click="tab = t.key">{{ t.label }}</button>
+      </div>
+
+      <div v-if="tab === 'cv' && app.draft" class="doc">
+        <div class="reading">
+          <p v-for="(v, i) in docViolations" :key="i" class="tag attention">Check: the {{ v.ref.startsWith('letter') ? 'letter' : 'CV' }} {{ violationText(v) }}</p>
+          <CvEditor v-model="sections" :editable="editable" :focused="focused" id-prefix="draft" @focus="(l) => (focused = l.id ?? null)">
+            <template #meta="{ line }">
+              <p v-if="line.id && edited.has(line.id)" class="line-meta"><span class="tag">Edited by you, not re-checked</span></p>
+              <p v-else-if="line.origin === 'owner' || (!line.id && editable)" class="line-meta"><span class="tag">Your own line, not checked</span></p>
+              <p v-else-if="line.origin === 'suggestion'" class="line-meta"><span class="tag">From a suggestion you confirmed</span></p>
+              <p v-else-if="violations(line.id).length" class="line-meta">
+                <span v-for="(v, i) in violations(line.id)" :key="i" class="tag attention">Check: this line {{ violationText(v) }}</span>
+              </p>
+            </template>
+          </CvEditor>
+        </div>
+        <aside class="source-panel" aria-label="Source of the selected line">
+          <LineSource v-if="current" :line="current" :sources="app.sources" />
+          <p v-else class="hint">Select a line to see the master CV line it comes from and what changed.</p>
+        </aside>
+      </div>
+
+      <FitPanel v-else-if="tab === 'fit'" :app="app" :editable="editable" :busy="busy" :dirty="dirty" @recheck="recheck" @dismiss="dismiss" @accept="accept" />
+
+      <section v-else-if="tab === 'letter'" class="letter-tab" aria-label="Cover letter">
+        <LetterBrief :app="app" :busy="busy" @answer="answer" @to-master="toMaster" />
+        <p class="hint">{{ words }} words · aim for 250 to 350.</p>
+        <ol class="lines letter-edit">
+          <li v-for="(p, i) in paragraphs" :key="p.id ?? `new-${i}`" class="cv-item" :class="{ focused: p.id && p.id === focused }" @focusin="focused = p.id ?? null">
+            <textarea v-if="editable" v-model="p.text" rows="3" maxlength="2000" :aria-label="`Letter paragraph ${i + 1}`"></textarea>
+            <p v-else class="line-text">{{ p.text }}</p>
+            <span v-if="editable" class="cv-tools">
+              <button type="button" class="quiet" :aria-label="`Move paragraph ${i + 1} up`" :disabled="i === 0" @click="move(paragraphs, i, -1)">Up</button>
+              <button type="button" class="quiet" :aria-label="`Move paragraph ${i + 1} down`" :disabled="i === paragraphs.length - 1" @click="move(paragraphs, i, 1)">Down</button>
+              <button type="button" class="quiet danger" :aria-label="`Remove paragraph ${i + 1}`" @click="paragraphs.splice(i, 1)">Remove</button>
+            </span>
+            <p v-if="p.id && violations(p.id).length" class="line-meta">
+              <span v-for="(v, k) in violations(p.id)" :key="k" class="tag attention">Check: this paragraph {{ violationText(v) }}</span>
+            </p>
+          </li>
+        </ol>
+        <p v-if="!paragraphs.length" class="hint">The letter is written after the CV, once any questions are answered.</p>
+        <button v-if="editable" type="button" class="quiet" @click="addParagraph">Add paragraph</button>
+      </section>
+
+      <section v-else-if="tab === 'posting' && app.requirements" class="asks" aria-label="What the posting asks for">
+        <h2>Must have</h2>
         <ul><li v-for="r in app.requirements.must_have" :key="r.id">{{ r.text }}</li></ul>
         <template v-if="app.requirements.nice_to_have.length">
-          <h3 class="label">Nice to have</h3>
+          <h2>Nice to have</h2>
           <ul><li v-for="r in app.requirements.nice_to_have" :key="r.id">{{ r.text }}</li></ul>
         </template>
-      </details>
+      </section>
 
-      <TrackingPanel :app="app" />
+      <TrackingPanel v-else-if="tab === 'tracking'" :app="app" />
 
-      <div v-if="doc" class="doc">
-        <article ref="reading" class="reading" aria-label="Draft" tabindex="-1">
-          <h2>CV</h2>
-          <p v-for="(v, i) in violations('cv')" :key="i" class="tag attention">Check: the CV {{ violationText(v) }}</p>
-          <ul v-if="doc.summary.length" class="lines">
-            <DraftLine
-              v-for="r in doc.summary" :key="r.ref" :line-ref="r.ref" :label="r.label" :line="r.line" :max="r.max"
-              :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)" removable
-              @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)" @remove="remove(r.ref, r.label)"
-            >
-              <LineSource v-if="current?.ref === r.ref" class="inline-source" :line="r.line" :sources="app.sources" />
-            </DraftLine>
-          </ul>
-          <AddLine
-            v-if="editable && !app.draft!.summary" id="cv-summary" label="Add a summary" button="Add a summary" :max="300" :busy="busy"
-            @save="(t, done) => add('cv.summary', t, done)"
-          />
-          <section v-for="e in doc.entries" :key="e.id" class="entry" :aria-label="e.name">
-            <EntryHeader
-              :entry-id="e.id" :header="e.header" :editable="editable" :edited="e.headerEdited" :busy="busy"
-              @save="send" @remove="remove(`cv.entries.${e.id}`, `${e.name} and all its lines`)"
-            />
-            <ul class="lines">
-              <DraftLine
-                v-for="r in e.rows" :key="r.ref" :line-ref="r.ref" :label="r.label" :line="r.line" :max="r.max"
-                :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)" removable
-                @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)" @remove="remove(r.ref, r.label)"
-              >
-                <LineSource v-if="current?.ref === r.ref" class="inline-source" :line="r.line" :sources="app.sources" />
-              </DraftLine>
-            </ul>
-            <AddLine v-if="editable" :id="`cv-${e.id}`" :label="`Add line under ${e.name}`" :max="300" :busy="busy" @save="(t, done) => add(`cv.entries.${e.id}`, t, done)" />
-          </section>
-          <form v-if="editable && addable.length" class="add-row" @submit.prevent="addEntry">
-            <label for="add-entry" class="hint">Add from your master CV</label>
-            <select id="add-entry" v-model="toAdd">
-              <option value="" disabled>Choose an entry…</option>
-              <option v-for="e in addable" :key="e.id" :value="e.id">{{ e.text }}</option>
-            </select>
-            <button type="submit" class="quiet" :disabled="busy || !toAdd">Add entry</button>
-          </form>
-          <details v-if="editable && removed.cv.length" class="removed">
-            <summary>Removed from the CV ({{ removed.cv.length }})</summary>
-            <ul>
-              <li v-for="r in removed.cv" :key="r.ref">
-                <s>{{ r.text }}</s>
-                <button type="button" class="quiet" :disabled="busy" @click="restore(r.ref)">Put back</button>
-              </li>
-            </ul>
-          </details>
-          <section v-for="{ title, row: r } in doc.lists" :key="r.ref" class="entry" :aria-label="title">
-            <h3>{{ title }}</h3>
-            <ul class="lines letter">
-              <DraftLine
-                :line-ref="r.ref" :label="r.label" :line="r.line" :max="r.max" :focused="false" :editable="editable" :edited="edited.has(r.ref)"
-                :busy="busy" :violations="violations(r.ref)" @save="(t, done) => save(r.ref, t, done)"
-              />
-            </ul>
-          </section>
-
-          <h2>Cover letter</h2>
-          <p v-for="(v, i) in violations('letter')" :key="i" class="tag attention">Check: the letter {{ violationText(v) }}</p>
-          <ul class="lines letter">
-            <DraftLine
-              v-for="r in doc.letter" :key="r.ref" :line-ref="r.ref" :label="r.label" :line="r.line" :max="r.max"
-              :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)" removable
-              @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)" @remove="remove(r.ref, r.label)"
-            >
-              <LineSource v-if="current?.ref === r.ref" class="inline-source" :line="r.line" :sources="app.sources" />
-            </DraftLine>
-          </ul>
-          <AddLine v-if="editable" id="letter" label="Add a paragraph to the letter" button="Add paragraph" :max="700" :busy="busy" @save="(t, done) => add('letter', t, done)" />
-          <details v-if="editable && removed.letter.length" class="removed">
-            <summary>Removed from the letter ({{ removed.letter.length }})</summary>
-            <ul>
-              <li v-for="r in removed.letter" :key="r.ref">
-                <s>{{ r.text }}</s>
-                <button type="button" class="quiet" :disabled="busy" @click="restore(r.ref)">Put back</button>
-              </li>
-            </ul>
-          </details>
-        </article>
-
-        <aside v-if="current" class="source-panel" aria-label="Source of the selected line">
-          <LineSource :line="current.line" :sources="app.sources" />
-        </aside>
+      <div v-if="dirty" class="savebar" role="region" aria-label="Unsaved changes">
+        <span>Unsaved changes to the draft</span>
+        <span class="row">
+          <button type="button" :disabled="busy" @click="discard">Discard</button>
+          <button type="button" class="primary" :disabled="busy" @click="save">{{ busy ? 'Saving…' : 'Save' }} <kbd>Ctrl S</kbd></button>
+        </span>
       </div>
     </template>
   </main>

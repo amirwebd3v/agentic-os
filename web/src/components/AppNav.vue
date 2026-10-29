@@ -41,9 +41,6 @@ const inApps = () => route.path.startsWith('/applications');
         </RouterLink>
       </nav>
       <button type="button" class="quiet" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" @click="help?.showModal()"><kbd>?</kbd></button>
-      <RouterLink v-slot="{ navigate }" to="/new" custom>
-        <button type="button" @click="navigate">New application</button>
-      </RouterLink>
     </div>
   </header>
   <dialog ref="help" class="keys" aria-labelledby="keys-title" @click.self="help?.close()">
@@ -55,9 +52,8 @@ const inApps = () => route.path.startsWith('/applications');
       <dt><kbd>g</kbd> <kbd>a</kbd></dt><dd>Applications</dd>
       <dt><kbd>g</kbd> <kbd>c</kbd></dt><dd>Master CV</dd>
       <dt><kbd>g</kbd> <kbd>r</kbd></dt><dd>Review</dd>
-      <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Next or previous line of a draft</dd>
-      <dt><kbd>e</kbd></dt><dd>Edit the line in focus</dd>
-      <dt><kbd>Ctrl</kbd> <kbd>Enter</kbd></dt><dd>Save while editing; <kbd>Esc</kbd> cancels</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>S</kbd></dt><dd>Save the CV you are editing</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>Enter</kbd></dt><dd>Start tailoring from a pasted posting</dd>
     </dl>
     <form method="dialog"><button type="submit">Close</button></form>
   </dialog>

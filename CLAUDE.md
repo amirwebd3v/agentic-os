@@ -3,22 +3,31 @@
 Every session reads this file automatically, including parallel sessions in `.claude/worktrees/`. Keep it short. A rule earns its place by preventing a real mistake.
 
 ## Where things are
-- **Plan:** `docs/plan-review.md`
-- **Week 1 plan:** `docs/week1/implementation-plan.md`
-- **Ticket specs:** `docs/week1/tickets/*.md`
-- **Week 2 plan (Career slice first):** `docs/week2/implementation-plan.md`; shared shapes `docs/week2/career-contract.md`; specs `docs/week2/tickets/*.md`; which skill at which step `docs/week2/skills-map.md`
+- **Docs are local only.** `docs/` is gitignored and was removed from history (2026-10-29). It exists only in the main checkout, `E:\Projects\Agentic OS\docs\`: a worktree session reads it by that absolute path; a cloud session has no docs and asks the owner. Never commit a file under `docs/`.
+- **Original review (threat model, architecture):** `docs/plan-review.md`
+- **Career (current):** spec `docs/week2/career-v2.md` (wins over `career-contract.md` where they differ); status and open work in `docs/week2/implementation-plan.md` §0; shapes `docs/week2/career-contract.md`. **UI:** `web/DESIGN.md`, `web/PRODUCT.md`.
 - **Build loop:** `docs/Workflow.md` (fullstack-dev-skills + ponytail + claude-mem)
 - **Backlog:** GitHub Project https://github.com/users/amirwebd3v/projects/1. Status lives only there.
 
+## Skills by task
+Every session sees all installed skills with their descriptions; pick by the task, combine as many as apply, skip the rest. The ones this repo relies on:
+- **Always:** `ponytail` (on by default). Before a ticket: `claude-mem:mem-search` on its topic; `claude-mem:smart-explore` before reading a long file.
+- **Build:** `typescript-pro`, `vue-expert`, `sql-pro` (migrations, queries), `api-designer` (new routes), `claude-api` + `prompt-engineer` (any LLM prompt or model call), `anthropic-skills:docx` (Word templates and output), `dataviz` (any chart).
+- **UI:** `impeccable` (shape → critique → polish → harden → audit) with `web/DESIGN.md` as the direction; `design-taste-frontend` once before building a new screen; check with `run` + the built-in browser.
+- **Bugs:** `debugging-wizard` (root cause first). **Tests:** `test-master`, `playwright-expert`.
+- **Check before a PR:** `pnpm verify`, then `simplify`, `ponytail:ponytail-review`, `code-review`. Add `security-reviewer` (cloud: `security-review`) when the change touches auth, uploads, prompts, contact data or spawns a process.
+- **New slice or big decision:** `feature-dev:feature-dev`, `architecture-designer`, `the-fool` (pre-mortem), `anthropic-skills:deep-research`.
+- **Not used on purpose:** `claude-mem:cloud-sync`, `knowledge-agent`, `screenpipe` (they copy data off this machine).
+
 ## Hard rules
-1. **Green or no push.** The `pre-push` hook runs `pnpm verify`. Never use `--no-verify`. Judge a check by its exit code, never by grepping its output.
+1. **Green or no push.** The `pre-push` hook runs `pnpm verify`. Never use `--no-verify`. Judge a check by its exit code, never by grepping its output. A Claude Code hook (`.claude/settings.json` → `scripts/guard-command.mjs`, self-test `--test`) blocks that flag, a `gh pr merge` without `--match-head-commit`, and force-adding `docs/`.
 2. **Secrets.**
    - Keys live in `.env` (gitignored) or Windows Credential Manager.
    - Never print, log, commit or paste a key value. When inspecting `.env`, mask it: `sed -E 's/(KEY|TOKEN)=.*/\1=<redacted>/'`.
 3. **App config comes from `.env` only**, through `readAppEnv()` / `loadConfig()` in `server/src/config.ts`.
    - Never read `ANTHROPIC_*` from `process.env`: Claude Code exports its own `ANTHROPIC_BASE_URL`.
    - Tests never read the real `.env` (`AOS_ENV_FILE=''` is set in `server/vitest.config.ts`).
-4. **No personal data in this repo.** The vault and data dirs live outside it (enforced by `parseConfig`).
+4. **No personal data in this repo, logs or error messages.** The vault and data dirs live outside it (enforced by `parseConfig`). Throw typed errors with fixed messages; never put model, posting, CV or user text in an error, log, job payload or audit arg.
 5. **TypeScript stays `~6.0.x`.** typescript-eslint supports only `<6.1`.
 6. **Native packages:** use the prebuilt binaries.
    - There's no Visual Studio on this machine.
@@ -27,7 +36,8 @@ Every session reads this file automatically, including parallel sessions in `.cl
 7. **gh** is `C:\Program Files\GitHub CLI\gh.exe`.
    - Its keyring login is invisible to the sandboxed Bash, so run gh unsandboxed or from PowerShell.
    - The git protocol is https.
-8. **Merging a session's PR:** run `pnpm verify` yourself at the PR's head commit first. A session's report is not proof. Then merge exactly that commit: `gh pr merge <N> --squash --match-head-commit <verified-sha>`, which refuses if the head moved. After reporting a PR ready, a session pushes nothing more unless the coordinator asks.
+8. **Merging a session's PR:** run `pnpm verify` yourself at the PR's head commit first, on this Windows machine, also for a cloud session's PR. A session's report is not proof. Then merge exactly that commit: `gh pr merge <N> --squash --match-head-commit <verified-sha>`, which refuses if the head moved. Always pass the PR number and check `state=MERGED` afterwards. After reporting a PR ready, a session pushes nothing more unless the coordinator asks.
+9. **Stacked PRs:** merge bottom-up; after each squash-merge, `git rebase --onto main <old-base> <branch>` the next one and re-verify before merging it.
 
 ## Learning loop: when a mistake happens
 1. Fix it.
@@ -36,22 +46,13 @@ Every session reads this file automatically, including parallel sessions in `.cl
 4. Save a claude-mem note (`save_memory`, project `Agentic OS`) with cause → fix. Before starting a ticket, run `mem-search` on its topic.
 
 ## Lessons (append, newest last)
-- 2026-10-26: a grep-filtered check hid a failing lint and it was pushed. → `pre-push` hook (rule 1).
-- 2026-10-26: `onlyBuiltDependencies: [better-sqlite3]` forced node-gyp and broke `pnpm install`. → rule 6.
 - 2026-10-26: when a test fails, re-derive the *correct* behaviour before editing the code or the test. In the `..data` case, the test's assumption was wrong.
 - 2026-10-26: very long temp paths break native installs. Verify a PR in the session's own worktree instead.
 - 2026-10-26: claude-mem's worker needs Bun at `~/.bun/bin/bun.exe`. If memory tools fail, check `~/.claude-mem/logs` first.
-- 2026-10-26: Claude Code's inherited `ANTHROPIC_BASE_URL` would override the app's 9router URL. → rule 3, with a test.
-- 2026-10-26: git hooks export `GIT_DIR`. A `git -C <other repo>` run inside one (vault tests under pre-push) retargeted the code repo, and `git init` set `core.bare=true` for every worktree. → `vaultGit()` strips `GIT_*` (with a test) and `pre-push` unsets `GIT_*` before verify. Spawn git for any other repo with a clean env.
-- 2026-10-26: a vault test spawning real git took 5.19 s against vitest's 5 s default and failed one verify at random. → `testTimeout: 30_000` in `server/vitest.config.ts`. Re-run a failure once before blaming the diff, then fix the flakiness at the root.
-- 2026-10-26: `gh pr merge` without a number targets the *current* branch's PR. After `gh pr create --head <other>` it silently merged nothing. → Always pass the PR number, and confirm `state=MERGED` before reporting a merge.
-- 2026-10-26: on Windows a hard-killed `pnpm sidecar` leaves uv → python running (port 8009 + ~1.6 GB VRAM). → `scripts/sidecar.ts` reaps a stale `laya` listener on start, and refuses to kill anything else. Tested live in all three cases.
+- 2026-10-26: git hooks export `GIT_*`; spawning git for another repo inherited them. → Spawn git for any other repo with a clean env, as `vaultGit()` does.
+- Git-spawning tests are slow on Windows (5 s timeout, EBUSY on sync `rm`). → `testTimeout: 30_000`, async `rm` in afterEach, generous `vi.waitFor`. Re-run a failure once before blaming the diff, then fix the flakiness at the root.
 - 2026-10-26: tools installed mid-session (winget: uv, bun) aren't on PATH in already-running shells. Prefer fixed install locations (`~/.bun/bin`) and don't mistake ENOENT in an old shell for a bug.
-- 2026-10-26: a catch-all `none` option pulls Laya away from correct answers (0.45 `none` on clear EN/DE cases). → Decider questions never offer a catch-all; low confidence escalates instead (W1-10 spec).
-- 2026-10-26: `buildTestApp` used the real `web/dist`, so tests changed result after `pnpm build`, and static's wildcard returned 404 instead of 401 for unknown `/api/*`. → Test helpers never depend on build artifacts (`webDist` is injected), and static uses `wildcard: false`. Found by W1-07.
-- 2026-10-26: stopping a backgrounded `pnpm … tsx src/main.ts` left node holding its port (same as the sidecar case). → After stopping a dev server, check the port with `netstat -ano` and stop that PID once its command line confirms it is yours.
+- 2026-10-26: test helpers never depend on build artifacts (`web/dist`).
+- 2026-10-26: stopping a backgrounded `pnpm … tsx src/main.ts` left node holding its port. → After stopping a dev server, check the port with `netstat -ano` and stop that PID once its command line confirms it is yours.
 - 2026-10-26: `/tmp` is shared by parallel sessions. A `pnpm verify > /tmp/v.log` showed a sibling worktree's failure as if it were ours. → Write logs and scratch files to the session's own scratchpad, never a fixed `/tmp` name.
-- 2026-10-26: four sessions pushed to their PR branch after it was verified and merged; the late commits were stranded and needed follow-up PRs. → rule 8: `--match-head-commit`, and no pushes after reporting ready.
-- 2026-10-26: `mapError` copied local error messages verbatim, so a parse error on truncated model output could put personal text into `llm_calls.error`, job errors and logs (found by W1-12). → Errors without a status keep only their type name and no `cause` (tested). Never put model or user text in an error message.
-- 2026-10-27: `/code-review <sha>` checked out that commit and left a detached HEAD, so the next commit and my edits landed off the branch (nothing was pushed; recovered with stash, checkout, cherry-pick). → After any review skill run `git branch --show-current` before committing, and review a past commit with `git show` or a worktree, not a checkout.
-- 2026-10-29: `career-master.test.ts` was green in the Linux cloud session but red on Windows: the approval's git commit outlived `vi.waitFor`'s 1 s default, and a sync `rmSync` hit EBUSY on the vault. → `GIT_WAIT` timeout and an async `rm` in afterEach. Run `pnpm verify` on this machine before merging a cloud session's PR.
+- 2026-10-27: `/code-review <sha>` checked out that commit and left a detached HEAD, so the next commit and my edits landed off the branch. → After any review skill run `git branch --show-current` before committing, and review a past commit with `git show` or a worktree, not a checkout.

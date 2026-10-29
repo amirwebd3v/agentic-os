@@ -14,6 +14,8 @@ import { ID_RE, parseMaster } from './master.ts';
 import type { Entry, Master } from './master.ts';
 import { promptSafe } from './redact.ts';
 import type { Violation } from './verify.ts';
+import { toDraftV2 } from './draft.ts';
+import type { Draft } from './draft.ts';
 
 /** Fixed messages only (contract §1). */
 export class TailorError extends Error {}
@@ -33,9 +35,6 @@ export interface MasterIndex {
   language: 'en' | 'de';
 }
 
-// ponytail: stop-word count; a `language:` key in the master's frontmatter if a mixed CV ever guesses wrong.
-const EN = new Set(['the', 'and', 'with', 'for', 'of', 'to', 'on', 'at', 'a', 'from', 'by']);
-const DE = new Set(['und', 'der', 'die', 'das', 'mit', 'für', 'von', 'zur', 'zum', 'bei', 'auf', 'ein', 'eine', 'den', 'dem']);
 
 /** Reads and indexes `career/master.md`. Throws `TailorError` when it is missing or outside the grammar. */
 export function readMaster(vaultDir: string): MasterIndex {
@@ -73,9 +72,8 @@ export function indexMaster(master: Master, body: string): MasterIndex {
       }
     }
   }
-  const words = [...sources.values()].join(' ').toLowerCase().match(/\p{L}+/gu) ?? [];
-  const count = (set: Set<string>) => words.filter((w) => set.has(w)).length;
-  return { master, body, entries, sources, owner, skills, language: count(DE) > count(EN) ? 'de' : 'en' };
+  // Every application is written in English (career-v2.md), whatever the master's or the posting's language.
+  return { master, body, entries, sources, owner, skills, language: 'en' };
 }
 
 // ---------- shapes (contract §4.2, §4.3) ----------
@@ -93,26 +91,24 @@ export const Selection = z
   .strict();
 export type Selection = z.infer<typeof Selection>;
 
-// `removed` marks a line the user took out (§8.2): it stays in place so later refs keep their index.
+// Draft v1 (career-contract.md §4.3): the model's answer is built in this shape, then turned into v2 (`draft.ts`).
+// Stored v1 drafts (from before v2) are converted on read; `removed` marks a line the user took out.
 const Line = z.object({ text: z.string(), cites: z.array(z.string()), removed: z.literal(true).optional() }).strict();
-export const HEADER_FIELDS = ['org', 'title', 'start', 'end', 'location'] as const;
-/** The user's per-application override of an entry header; a field left out is copied from the master at render. */
+const HEADER_FIELDS = ['org', 'title', 'start', 'end', 'location'] as const;
 const Header = z.partialRecord(z.enum(HEADER_FIELDS), z.string());
 /** Lengths and cite counts are not limited here: the verifier reports them (§6) instead of failing the step. */
-export const Draft = z
+const DraftV1 = z
   .object({
     summary: Line.nullable(),
     entries: z.array(z.object({ entry_id: Id, bullets: z.array(Line), header: Header.optional(), removed: z.literal(true).optional() }).strict()),
     skill_ids: z.array(z.string()),
-    // The user's own skills and languages lines (§8.2); absent → the selected skills / the master's languages.
     skills_text: z.string().optional(),
     languages_text: z.string().optional(),
     letter: z.object({ paragraphs: z.array(Line) }).strict(),
     versions: z.number().int().positive(),
   })
   .strict();
-export type Draft = z.infer<typeof Draft>;
-export type DraftLine = z.infer<typeof Line>;
+export type DraftV1 = z.infer<typeof DraftV1>;
 
 /** `matched must_have / total must_have` (contract §4.2), shared with the detail route. */
 export function coverage(req: Pick<Requirements, 'must_have'>, sel: Pick<Selection, 'picks'>) {
@@ -136,20 +132,20 @@ ${DATA_RULE}
 
 const LANGUAGE_NAME = { en: 'English', de: 'German' } as const;
 
-const draftRules = (language: 'en' | 'de') => `You write a tailored CV and cover letter from the candidate's master CV. Every line you write must be backed by the master lines it cites.
+const draftRules = (language: 'en' | 'de') => `You write a tailored CV from the candidate's master CV. Every line you write must be backed by the master lines it cites. (The cover letter is written later, in its own step.)
 
 ${DATA_RULE}
 
 - Write in ${LANGUAGE_NAME[language]}, the language of the master CV, whatever the posting's language.
 - cites: 1 to 5 ids of master bullets or skills (the " ^<id>" at a line's end) that support the line. A CV bullet cites only bullets of the entry it is listed under.
-- Reword lightly, never add facts: every number, name, product, tool and acronym in a line must appear in the lines it cites. The cover letter may also name the company and the role title from <requirements>.
+- Reword lightly, never add facts: every number, name, product, tool and acronym in a line must appear in the lines it cites.
 - Do not write employer names, job titles or dates as CV bullets: they are copied from the master separately.
-- Never write a name, e-mail address, phone number, street address or URL. If the letter must refer to one, use only {{CONTACT_NAME}}, {{CONTACT_EMAIL}}, {{CONTACT_PHONE}}, {{CONTACT_ADDRESS}}, {{CONTACT_URL}}.
-- The letter is prose for a hiring manager: first person ("I"), complete sentences, a natural professional tone, and each paragraph links what you did to what this role needs. Use the cited facts; never add a claim about yourself (an ability, a trait, a "comfortable with") that the cited lines don't state.
-- Summary at most 300 characters; each CV bullet at most 300; at most 18 CV bullets in all. Letter: 3 to 5 paragraphs, each at most 700 characters, no salutation and no sign-off.`;
+- Never write a name, e-mail address, phone number, street address or URL.
+- Never add a claim about the candidate (an ability, a trait, a "comfortable with") that the cited lines don't state.
+- Summary at most 300 characters; each CV bullet at most 300; at most 18 CV bullets in all.`;
 
-const masterBlock = (contact: Contact, m: MasterIndex) => promptSafe(contact, wrapUntrusted('master', m.body));
-const requirementsBlock = (req: Requirements) =>
+export const masterBlock = (contact: Contact, m: MasterIndex) => promptSafe(contact, wrapUntrusted('master', m.body));
+export const requirementsBlock = (req: Requirements) =>
   wrapUntrusted('requirements', JSON.stringify({ company: req.company, role_title: req.role_title, must_have: req.must_have, nice_to_have: req.nice_to_have }));
 
 // Sent to the model: no length or array limits (plan R1), they live in the descriptions; code checks the answer.
@@ -172,7 +168,6 @@ const ModelDraft = z.object({
     .array(z.object({ entry_id: z.string(), bullets: z.array(ModelLine).describe('Each at most 300 characters') }))
     .describe('The selected entries in order; at most 18 bullets in all'),
   skill_ids: z.array(z.string()).describe('Ids from the Skills section'),
-  letter: z.object({ paragraphs: z.array(ModelLine).describe('3 to 5 paragraphs, each at most 700 characters') }),
 });
 
 /**
@@ -207,19 +202,29 @@ export async function selectBullets(deps: IntakeDeps, m: MasterIndex, req: Requi
   return sel.success ? sel.data : 'selection_invalid'; // valid ids already match ID_RE; this is the shape guard
 }
 
+/** A model line as one line, NFKC (full-width digits), invisible format characters removed so `Kuber\u200bnetes` is checked whole. */
+export const flat = (l: { text: string; cites: string[] }) => ({
+  text: line(l.text.normalize('NFKC').replace(/\p{Cf}/gu, ''), Infinity),
+  cites: l.cites.map((c) => c.trim()),
+});
+
 export interface Retry {
   draft: Draft;
   violations: Violation[];
 }
 
-/** Step 3: writes the draft; attempt 2 gets the previous draft and its violations. Throws like `selectBullets`. */
+/**
+ * Step 3: writes the draft's CV (v2) with an empty letter (the `letter` step writes it, career-v2.md §5); attempt 2
+ * gets the previous draft and its violations. Throws like `selectBullets`.
+ */
 export async function writeDraft(deps: IntakeDeps, m: MasterIndex, req: Requirements, sel: Selection, retry?: Retry, jobId?: number): Promise<Draft> {
   const parts = [requirementsBlock(req), wrapUntrusted('selection', JSON.stringify({ entries: sel.entries, skill_ids: sel.skill_ids, picks: sel.picks }))];
   if (retry) {
     parts.push(
-      wrapUntrusted('previous_draft', JSON.stringify({ summary: retry.draft.summary, entries: retry.draft.entries, skill_ids: retry.draft.skill_ids, letter: retry.draft.letter })),
+      // Entries carry their master entry id as `source`; refs name a line ("l-7") or an entry ("e-2") of this document.
+      wrapUntrusted('previous_draft', JSON.stringify({ cv: retry.draft.cv })),
       wrapUntrusted('violations', JSON.stringify(retry.violations)),
-      'The previous draft failed the checks listed in <violations> (ref = cv.summary, cv.entries.<entry_id>.<index>, letter.<index>, counted from 0). Write the whole draft again and fix every one: drop or reword the claim, or cite the lines that back it.',
+      'The previous draft failed the checks listed in <violations>. Each ref is the id of a line ("l-7") or an entry ("e-2") in <previous_draft>, or "cv" or "cv.skills" for the whole CV or the skills. Write the whole draft again and fix every one: drop or reword the claim, or cite the lines that back it.',
     );
   }
   const raw = await (deps.llm ?? structured)(deps, {
@@ -232,12 +237,7 @@ export async function writeDraft(deps: IntakeDeps, m: MasterIndex, req: Requirem
   });
   const res = ModelDraft.safeParse(raw);
   if (!res.success) throw new TailorError('model output does not match Draft');
-  // One line each, NFKC (full-width digits), invisible format characters removed so `Kuber\u200bnetes` is checked whole.
-  const flat = (l: { text: string; cites: string[] }) => ({
-    text: line(l.text.normalize('NFKC').replace(/\p{Cf}/gu, ''), Infinity),
-    cites: l.cites.map((c) => c.trim()),
-  });
-  const entries: Draft['entries'] = [];
+  const entries: DraftV1['entries'] = [];
   for (const e of res.data.entries) {
     const id = e.entry_id.trim();
     const bullets = e.bullets.map(flat);
@@ -245,21 +245,23 @@ export async function writeDraft(deps: IntakeDeps, m: MasterIndex, req: Requirem
     if (same) same.bullets.push(...bullets);
     else entries.push({ entry_id: id, bullets });
   }
-  const draft = Draft.safeParse({
+  const draft = DraftV1.safeParse({
     summary: res.data.summary && flat(res.data.summary),
     entries,
     skill_ids: res.data.skill_ids.map((s) => s.trim()),
-    letter: { paragraphs: res.data.letter.paragraphs.map(flat) },
+    letter: { paragraphs: [] },
     versions: 1,
   });
   if (!draft.success) throw new TailorError('model output does not match Draft');
-  return draft.data;
+  // The doc is built in code: entries in master section order with master header values, every line `model`.
+  return toDraftV2(draft.data, m.master, true);
 }
 
 // ---------- step bookkeeping ----------
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
-type Step = 'match' | 'draft' | 'verify';
+/** Pipeline steps with a job (career-v2.md §5); intake and render keep their own handling. */
+export type Step = 'match' | 'gaps' | 'draft' | 'verify' | 'ats' | 'company' | 'vacancy' | 'questions' | 'letter' | 'letter_verify';
 
 /** True when the application is `processing` at `step`; a job for one that moved on does nothing. */
 export const atStep = (db: Database, id: number, step: Step): boolean => {
@@ -310,3 +312,10 @@ export const setApp = (db: Database, id: number, cols: Record<string, string>): 
   const keys = Object.keys(cols);
   db.prepare(`UPDATE applications SET ${keys.map((k) => `${k} = ?`).join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);
 };
+
+/** The highest `l-<n>` and `e-<n>` any version of this application's draft ever used, so a deleted id is never reused. */
+export function lastIds(db: Database, id: number, current: Draft): { l: number; e: number } {
+  const bodies = [...(db.prepare("SELECT body FROM application_texts WHERE application_id = ? AND kind = 'draft'").pluck().all(id) as string[]), JSON.stringify(current)];
+  const max = (p: string) => bodies.reduce((n, b) => [...b.matchAll(new RegExp(`"id":"${p}-(\\d+)"`, 'g'))].reduce((k, m) => Math.max(k, Number(m[1])), n), 0);
+  return { l: max('l'), e: max('e') };
+}

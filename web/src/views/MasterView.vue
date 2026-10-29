@@ -1,45 +1,36 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
-import {
-  ApiError, getMaster, saveMaster,
-  type MasterBulletSection, type MasterEntry, type MasterEntrySection, type MasterSection, type MasterState,
-} from '../api';
-import MasterImport from '../components/MasterImport.vue';
+import { ApiError, getMaster, parseCvFiles, saveMaster, type MasterSection, type MasterState } from '../api';
+import CvEditor from '../components/CvEditor.vue';
+import { allLines, cleaned, isEntries, problems, type CvSection } from '../cv';
 
 // Every text here is the owner's CV: bound with v-model and rendered with {{ }} only.
-const ORDER = ['Summary', 'Experience', 'Education', 'Projects', 'Certifications', 'Skills', 'Languages'] as const;
-type Name = (typeof ORDER)[number];
-const ENTRY_SECTIONS: readonly Name[] = ['Experience', 'Education', 'Projects', 'Certifications'];
-const ADD_TEXT: Record<Name, string> = {
-  Summary: 'Add a summary line', Experience: 'Add a job', Education: 'Add a school or degree', Projects: 'Add a project',
-  Certifications: 'Add a certification', Skills: 'Add a skill', Languages: 'Add a language',
-};
-const PLACEHOLDER: Partial<Record<Name, string>> = { Skills: 'e.g. TypeScript', Languages: 'e.g. German (C1)' };
-const DATE = /^\d{4}(-(0[1-9]|1[0-2]))?$/;
-
 const state = ref<MasterState | null>(null);
-const sections = ref<MasterSection[]>([]);
+const sections = ref<CvSection[]>([]);
 const saved = ref('[]');
+const hash = ref<string | null>(null);
 const loadError = ref<string | null>(null);
 const error = ref<string | null>(null);
 const notice = ref<string | null>(null);
+const warnings = ref<string[]>([]);
 const busy = ref(false);
+const reading = ref(false);
 const starting = ref(false);
+const dragging = ref(false);
+const picker = ref<HTMLInputElement>();
 
-const isEntries = (s: MasterSection): s is MasterEntrySection => 'entries' in s;
 const dirty = computed(() => JSON.stringify(sections.value) !== saved.value);
-const editing = computed(() => (state.value?.exists && 'sections' in state.value) || starting.value);
-const missing = computed(() => ORDER.filter((n) => !sections.value.some((s) => s.name === n)));
-const sorted = computed(() => [...sections.value].sort((a, b) => ORDER.indexOf(a.name) - ORDER.indexOf(b.name)));
-
-// Stable keys for items that have no id yet, without sending anything extra to the server.
-const keys = new WeakMap<object, number>();
-let next = 0;
-const key = (o: object) => keys.get(o) ?? (keys.set(o, ++next), next);
+const editing = computed(() => sections.value.length > 0 || starting.value);
+const counts = computed(() => ({
+  entries: sections.value.reduce((n, s) => n + (isEntries(s) ? s.entries.length : 0), 0),
+  lines: allLines(sections.value).length,
+  fresh: allLines(sections.value).filter((l) => l.new).length + sections.value.reduce((n, s) => n + (isEntries(s) ? s.entries.filter((e) => e.new).length : 0), 0),
+}));
 
 function show(m: MasterState) {
   state.value = m;
+  hash.value = m.exists ? m.hash : null;
   sections.value = m.exists && 'sections' in m ? structuredClone(m.sections) : [];
   saved.value = JSON.stringify(sections.value);
 }
@@ -55,69 +46,78 @@ function startFresh() {
   starting.value = true;
   sections.value = [
     { name: 'Summary', bullets: [{ text: '' }] },
-    { name: 'Experience', entries: [blankEntry()] },
+    { name: 'Experience', entries: [{ org: '', title: '', start: '', end: 'present', location: '', bullets: [{ text: '' }] }] },
     { name: 'Skills', bullets: [{ text: '' }] },
     { name: 'Languages', bullets: [{ text: '' }] },
   ];
 }
-const blankEntry = (): MasterEntry => ({ org: '', title: '', start: '', end: 'present', location: '', bullets: [{ text: '' }] });
-function addSection(name: Name) {
-  sections.value.push(ENTRY_SECTIONS.includes(name) ? { name, entries: [blankEntry()] } as MasterEntrySection : { name, bullets: [{ text: '' }] } as MasterBulletSection);
+
+// ---------- import Word CVs: merged into the editor, nothing saved until you press Save ----------
+const MAX_FILES = 10;
+const MAX_BYTES = 5 * 1024 * 1024;
+const PARSE_ERRORS: Record<string, string> = {
+  contact_missing: 'Fill in at least your name in career/contact.md in your vault first, so it is kept away from the model.',
+  provider_not_configured: 'Connect a provider first (see the banner at the top).',
+  provider_error: 'The model provider returned an error. Try again.',
+  import_unreadable: 'Those files gave no text. Only Word files (.docx) can be read here.',
+  bad_upload: 'Choose up to 10 Word files (.docx), each under 5 MB.',
+  bad_master: 'Your current career/master.md can’t be read, so nothing can be merged into it. Fix it in Obsidian first.',
+};
+const base64 = (f: File) =>
+  new Promise<string>((ok, fail) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(',')[1] ?? '');
+    r.onerror = () => fail(r.error);
+    r.readAsDataURL(f);
+  });
+async function importFiles(list: FileList | File[] | null) {
+  const files = [...(list ?? [])];
+  if (!files.length) return;
+  const bad = files.filter((f) => !f.name.toLowerCase().endsWith('.docx') || f.size > MAX_BYTES);
+  if (bad.length || files.length > MAX_FILES)
+    return void (error.value = `Choose up to ${MAX_FILES} Word files (.docx), each under 5 MB.${bad.length ? ` Not accepted: ${bad.map((f) => f.name).join(', ')}.` : ''}`);
+  reading.value = true;
+  error.value = null;
+  notice.value = null;
+  warnings.value = [];
+  try {
+    const res = await parseCvFiles(await Promise.all(files.map(async (f) => ({ name: f.name, data: await base64(f) }))));
+    // The merge replaces the editor's content, so anything typed meanwhile is kept only if it was saved.
+    hash.value = res.hash;
+    sections.value = res.sections;
+    starting.value = true;
+    warnings.value = res.warnings;
+    const a = res.added;
+    notice.value = `Read ${files.length} ${files.length === 1 ? 'file' : 'files'}: ${a.entries} new entries, ${a.bullets} new lines, ${a.skills} skills and ${a.languages} languages, marked “New”. Check them, then Save.`;
+  } catch (err) {
+    const code = err instanceof ApiError ? err.detail : undefined;
+    error.value = (code && PARSE_ERRORS[code]) || "Couldn't read the files. Is the server running?";
+    warnings.value = err instanceof ApiError ? err.warnings : [];
+  } finally {
+    reading.value = false;
+    if (picker.value) picker.value.value = '';
+  }
 }
-function moveIn<T>(list: T[], i: number, by: number) {
-  const j = i + by;
-  if (j < 0 || j >= list.length) return;
-  [list[i], list[j]] = [list[j]!, list[i]!];
-}
-const drop = <T>(list: T[], i: number) => list.splice(i, 1);
-/** Adds an empty item and puts the cursor in it (the last field of `box`). */
-async function add<T>(list: T[], item: T, box: string) {
-  list.push(item);
-  await nextTick();
-  [...document.querySelectorAll<HTMLElement>(`${box} :is(textarea, input)`)].at(-1)?.focus();
-}
-const removeSection = (s: MasterSection) => {
-  if (window.confirm(`Remove the whole ${s.name} section?`)) sections.value = sections.value.filter((x) => x !== s);
+const drop = (e: DragEvent) => {
+  dragging.value = false;
+  void importFiles(e.dataTransfer?.files ?? null);
 };
 
-/** The draft as it will be saved: empty lines dropped, empty sections left out, text trimmed. */
-function cleaned(): MasterSection[] {
-  return sections.value
-    .map((s): MasterSection => {
-      const bullets = (b: { id?: string; text: string }[]) => b.map((x) => ({ ...x, text: x.text.trim() })).filter((x) => x.text);
-      if (!isEntries(s)) return { ...s, bullets: bullets(s.bullets) };
-      const entries = s.entries
-        .map((e) => ({ ...e, org: e.org.trim(), title: e.title.trim(), start: e.start.trim(), end: e.end.trim(), location: e.location.trim(), bullets: bullets(e.bullets) }))
-        .filter((e) => e.org || e.title || e.bullets.length);
-      return { ...s, entries };
-    })
-    .filter((s) => (isEntries(s) ? s.entries.length : s.bullets.length));
-}
-const badDate = (e: MasterEntry) => !DATE.test(e.start.trim());
-const badEnd = (e: MasterEntry) => e.end.trim() !== 'present' && !DATE.test(e.end.trim());
-const problems = computed(() =>
-  sections.value.flatMap((s) =>
-    isEntries(s)
-      ? s.entries.flatMap((e) =>
-          (e.org || e.title) && (badDate(e) || badEnd(e) || !e.org.trim()) ? [`${s.name}: ${e.org || e.title || 'an entry'}`] : [],
-        )
-      : [],
-  ),
-);
-
+// ---------- save ----------
 const ERRORS: Record<string, string> = {
   master_changed: 'career/master.md changed in Obsidian since you opened this page. Load the new version, then make your change again.',
   bad_master: 'Something is not in the expected form. Dates are a year or year-month (2021 or 2021-03), the end can be “present”, and no field may hold a line break or “|”.',
 };
 async function save() {
-  if (problems.value.length) return void (error.value = `Fix the dates or names first: ${problems.value.join('; ')}.`);
+  const wrong = problems(sections.value);
+  if (wrong.length) return void (error.value = `Fix the dates or names first: ${wrong.join('; ')}.`);
   busy.value = true;
   error.value = null;
   notice.value = null;
   try {
-    const hash = state.value?.exists ? state.value.hash : null;
-    show(await saveMaster(hash, cleaned()));
+    show(await saveMaster(hash.value, cleaned(sections.value) as MasterSection[]));
     starting.value = false;
+    warnings.value = [];
     notice.value = 'Saved to career/master.md.';
   } catch (err) {
     const code = err instanceof ApiError ? err.detail : undefined;
@@ -127,9 +127,12 @@ async function save() {
   }
 }
 function discard() {
-  sections.value = JSON.parse(saved.value) as MasterSection[];
+  sections.value = JSON.parse(saved.value) as CvSection[];
+  hash.value = state.value?.exists ? state.value.hash : null;
   starting.value = false;
   error.value = null;
+  notice.value = null;
+  warnings.value = [];
 }
 
 const jump = (name: string) => document.getElementById(`cv-${name}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -153,116 +156,73 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="page master">
-    <header class="page-head">
-      <h1>Master CV</h1>
-      <p class="lede">Everything the app may say about you. Each drafted line cites a line here, so keep it true and complete; tailoring picks from it.</p>
+  <main class="page master" @dragover.prevent="dragging = true" @dragleave.self="dragging = false" @drop.prevent="drop">
+    <header class="page-head spread">
+      <div>
+        <h1>Master CV</h1>
+        <p class="lede">Everything the app may say about you, from all your CVs in one place. Each tailored line cites a line here.</p>
+      </div>
+      <div class="row">
+        <input ref="picker" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple class="sr-only" aria-label="Word CVs to import" @change="importFiles(($event.target as HTMLInputElement).files)" />
+        <button type="button" :disabled="reading || busy" @click="picker?.click()">{{ reading ? 'Reading your CVs…' : 'Import Word CVs' }}</button>
+      </div>
     </header>
+
+    <div v-if="dragging" class="dropzone" aria-hidden="true">Drop Word CVs to merge them into your master CV</div>
     <p v-if="loadError" class="notice danger" role="alert">{{ loadError }} <button type="button" @click="load">Try again</button></p>
     <p v-else-if="!state" class="placeholder" role="status">Loading…</p>
 
-    <template v-else-if="!editing && !state.exists">
-      <div class="composer">
+    <template v-else>
+      <p v-if="error" class="notice danger" role="alert">
+        {{ error }} <button v-if="error.includes('Obsidian')" type="button" @click="load">Load the new version</button>
+      </p>
+      <div v-else-if="notice" class="notice ok" role="status">
+        <p>{{ notice }}</p>
+        <ul v-if="warnings.length"><li v-for="(w, i) in warnings" :key="i">{{ w }}</li></ul>
+      </div>
+      <p v-if="reading" class="notice" role="status">Reading your CVs with the model. Your contact details are removed before anything is sent. This takes about a minute.</p>
+
+      <div v-if="state.exists && 'error' in state && !editing" class="notice danger" role="alert">
+        <p><strong>career/master.md can't be read.</strong> {{ state.error }}</p>
+        <p>Fix that line in Obsidian, then load it again.</p>
+        <button type="button" @click="load">Load again</button>
+      </div>
+
+      <div v-else-if="!editing" class="composer">
         <section class="notice">
-          <h2>Import the CV you have</h2>
-          <p>Put your CV (Word, PDF, Markdown or text) or your LinkedIn data export in <code>career/import/</code> inside your data folder, then import. You approve the result in Review before anything is written.</p>
-          <MasterImport />
+          <h2>Import the CVs you have</h2>
+          <p>Choose or drop one or more Word CVs. The app reads them, merges everything into one master CV without duplicates, and shows you the result to correct before saving.</p>
+          <button type="button" class="primary" :disabled="reading" @click="picker?.click()">Import Word CVs</button>
         </section>
         <section class="notice">
           <h2>Or write it here</h2>
-          <p>Start from an empty master CV with a summary, your jobs, skills and languages. It is saved as <code>career/master.md</code> in your vault, so you can also edit it in Obsidian.</p>
-          <button type="button" class="primary" @click="startFresh">Start writing</button>
+          <p>Start from an empty master CV. It is saved as <code>career/master.md</code> in your vault, so you can also edit it in Obsidian.</p>
+          <button type="button" @click="startFresh">Start writing</button>
         </section>
+      </div>
+
+      <div v-else class="cv">
+        <div>
+          <CvEditor v-model="sections" />
+          <div v-if="dirty" class="savebar" role="region" aria-label="Unsaved changes">
+            <span>{{ counts.fresh ? `${counts.fresh} new items to check` : 'Unsaved changes' }}</span>
+            <span class="row">
+              <button type="button" :disabled="busy" @click="discard">Discard</button>
+              <button type="button" class="primary" :disabled="busy" @click="save">{{ busy ? 'Saving…' : 'Save' }} <kbd>Ctrl S</kbd></button>
+            </span>
+          </div>
+        </div>
+        <aside aria-label="Sections">
+          <nav class="hint" aria-label="Jump to a section">
+            <p class="label">{{ counts.entries }} {{ counts.entries === 1 ? 'entry' : 'entries' }} · {{ counts.lines }} {{ counts.lines === 1 ? 'line' : 'lines' }}</p>
+            <p v-for="s in sections" :key="s.name">
+              <a :href="`#cv-${s.name}`" @click.prevent="jump(s.name)">{{ s.name }}</a>
+              · {{ isEntries(s) ? `${s.entries.length} ${s.entries.length === 1 ? 'entry' : 'entries'}` : `${s.bullets.length} ${s.bullets.length === 1 ? 'line' : 'lines'}` }}
+            </p>
+          </nav>
+          <p class="hint">Saved as <code>career/master.md</code> in your vault. If you edit it in Obsidian too, the app notices and won't overwrite your change. Applications you already drafted keep their lines.</p>
+        </aside>
       </div>
     </template>
-
-    <div v-else-if="state.exists && 'error' in state && !starting" class="notice danger" role="alert">
-      <p><strong>career/master.md can't be read.</strong> {{ state.error }}</p>
-      <p>Fix that line in Obsidian, then load it again.</p>
-      <button type="button" @click="load">Load again</button>
-    </div>
-
-    <div v-else class="cv">
-      <div>
-        <p v-if="error" class="notice danger" role="alert">
-          {{ error }} <button v-if="error.includes('Obsidian')" type="button" @click="load">Load the new version</button>
-        </p>
-        <p v-else-if="notice && !dirty" class="notice ok" role="status">{{ notice }}</p>
-
-        <section v-for="s in sorted" :id="`cv-${s.name}`" :key="s.name" class="cv-section" :aria-label="s.name">
-          <header>
-            <h2>{{ s.name }}</h2>
-            <button type="button" class="quiet danger" :aria-label="`Remove the ${s.name} section`" @click="removeSection(s)">Remove section</button>
-          </header>
-
-          <template v-if="isEntries(s)">
-            <article v-for="(e, i) in s.entries" :key="key(e)" class="cv-entry" :aria-label="e.org || `New ${s.name} entry`">
-              <div class="cv-entry-head">
-                <label>{{ s.name === 'Education' ? 'School' : s.name === 'Certifications' ? 'Issuer' : 'Employer' }}
-                  <input v-model="e.org" class="org" type="text" maxlength="120" :aria-invalid="!!(e.title || e.bullets.length > 1) && !e.org.trim()" />
-                </label>
-                <label>{{ s.name === 'Education' ? 'Degree' : 'Title' }} <input v-model="e.title" type="text" maxlength="120" /></label>
-                <label>From <input v-model="e.start" type="text" maxlength="7" placeholder="2021-03" :aria-invalid="!!e.start && badDate(e)" /></label>
-                <label>To <input v-model="e.end" type="text" maxlength="7" placeholder="present" :aria-invalid="!!e.end && badEnd(e)" /></label>
-                <label>Where <input v-model="e.location" type="text" maxlength="120" /></label>
-                <span class="cv-tools">
-                  <button type="button" class="quiet" :aria-label="`Move ${e.org || 'entry'} up`" :disabled="i === 0" @click="moveIn(s.entries, i, -1)">Up</button>
-                  <button type="button" class="quiet" :aria-label="`Move ${e.org || 'entry'} down`" :disabled="i === s.entries.length - 1" @click="moveIn(s.entries, i, 1)">Down</button>
-                  <button type="button" class="quiet danger" :aria-label="`Remove ${e.org || 'entry'}`" @click="drop(s.entries, i)">Remove</button>
-                </span>
-              </div>
-              <ul class="lines cv-items">
-                <li v-for="(b, j) in e.bullets" :key="key(b)" class="cv-item">
-                  <textarea v-model="b.text" rows="1" maxlength="500" :aria-label="`${e.org || 'Entry'}, line ${j + 1}`" placeholder="What you did and what came of it"></textarea>
-                  <span class="cv-tools">
-                    <button type="button" class="quiet" :aria-label="`Move ${e.org || 'entry'} line ${j + 1} up`" :disabled="j === 0" @click="moveIn(e.bullets, j, -1)">Up</button>
-                    <button type="button" class="quiet" :aria-label="`Move ${e.org || 'entry'} line ${j + 1} down`" :disabled="j === e.bullets.length - 1" @click="moveIn(e.bullets, j, 1)">Down</button>
-                    <button type="button" class="quiet danger" :aria-label="`Remove ${e.org || 'entry'} line ${j + 1}`" @click="drop(e.bullets, j)">Remove</button>
-                  </span>
-                </li>
-              </ul>
-              <button type="button" class="quiet" @click="add(e.bullets, { text: '' }, `#cv-${s.name} .cv-entry:nth-of-type(${i + 1}) .cv-items`)">Add line</button>
-            </article>
-            <p class="add-row"><button type="button" @click="add(s.entries, blankEntry(), `#cv-${s.name} .cv-entry:last-of-type .cv-entry-head label:first-child`)">{{ ADD_TEXT[s.name] }}</button></p>
-          </template>
-
-          <template v-else>
-            <ul class="lines">
-              <li v-for="(b, j) in s.bullets" :key="key(b)" class="cv-item">
-                <textarea v-model="b.text" rows="1" maxlength="500" :aria-label="`${s.name}, line ${j + 1}`" :placeholder="PLACEHOLDER[s.name]"></textarea>
-                <span class="cv-tools">
-                  <button type="button" class="quiet" :aria-label="`Move ${s.name} line ${j + 1} up`" :disabled="j === 0" @click="moveIn(s.bullets, j, -1)">Up</button>
-                  <button type="button" class="quiet" :aria-label="`Move ${s.name} line ${j + 1} down`" :disabled="j === s.bullets.length - 1" @click="moveIn(s.bullets, j, 1)">Down</button>
-                  <button type="button" class="quiet danger" :aria-label="`Remove ${s.name} line ${j + 1}`" @click="drop(s.bullets, j)">Remove</button>
-                </span>
-              </li>
-            </ul>
-            <p class="add-row"><button type="button" class="quiet" @click="add(s.bullets, { text: '' }, `#cv-${s.name} .lines`)">{{ ADD_TEXT[s.name] }}</button></p>
-          </template>
-        </section>
-
-        <div v-if="dirty" class="savebar" role="region" aria-label="Unsaved changes">
-          <span>Unsaved changes</span>
-          <span class="row">
-            <button type="button" :disabled="busy" @click="discard">Discard</button>
-            <button type="button" class="primary" :disabled="busy" @click="save">{{ busy ? 'Saving…' : 'Save' }} <kbd>Ctrl S</kbd></button>
-          </span>
-        </div>
-      </div>
-
-      <aside aria-label="Sections">
-        <nav class="hint" aria-label="Jump to a section">
-          <p class="label">Sections</p>
-          <p v-for="s in sorted" :key="s.name">
-            <a :href="`#cv-${s.name}`" @click.prevent="jump(s.name)">{{ s.name }}</a>
-            · {{ isEntries(s) ? `${s.entries.length} ${s.entries.length === 1 ? 'entry' : 'entries'}` : `${s.bullets.length} ${s.bullets.length === 1 ? 'line' : 'lines'}` }}
-          </p>
-        </nav>
-        <div v-if="missing.length" class="row">
-          <button v-for="n in missing" :key="n" type="button" class="quiet" @click="addSection(n)">Add {{ n }}</button>
-        </div>
-        <p class="hint">Saved as <code>career/master.md</code> in your vault. If you edit it in Obsidian too, the app notices and won't overwrite your change. Applications you already drafted keep their lines.</p>
-      </aside>
-    </div>
   </main>
 </template>

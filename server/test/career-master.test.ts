@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,8 +7,8 @@ import { expireStale } from '../src/approvals/expire.ts';
 import { loadContact } from '../src/career/contact.ts';
 import { documentText, scrubContactLike } from '../src/career/document.ts';
 import { buildImport, exportDate, readExport, splitBullets } from '../src/career/linkedin.ts';
-import { bulletIdBase, parseMaster, serialiseMaster, validateMaster } from '../src/career/master.ts';
-import type { Section } from '../src/career/master.ts';
+import { bulletIdBase, mergeMaster, parseMaster, serialiseMaster, validateMaster } from '../src/career/master.ts';
+import type { Entry, Section } from '../src/career/master.ts';
 import { approvalRoutes } from '../src/http/routes/approvals.ts';
 import { careerMasterRoutes } from '../src/http/routes/career-master.ts';
 import type { structured } from '../src/llm/client.ts';
@@ -568,4 +568,191 @@ test('PUT rejects a bad shape, a broken line and an unknown or repeated id with 
   }
   expect(readFileSync(t.file, 'utf8')).toBe(MASTER);
   expect([t.notes(), t.saves()]).toEqual([[], []]);
+});
+
+// --- Many Word CVs merged into the one master (career-v2 §2) ---
+
+const lines = (...texts: string[]) => texts.map((text) => ({ id: 'x', text }));
+const ent = (org: string, start: string, bullets: string[] = [], title = 'T'): Entry => ({ id: 'x', org, title, start, end: 'present', location: '', bullets: lines(...bullets) });
+
+test('mergeMaster: same entry by org + start or org + title, lines deduped ignoring case and punctuation, new entries by start', () => {
+  const current = parseMaster(MASTER).sections;
+  const before = structuredClone(current);
+  const a: Section[] = [
+    { name: 'Summary', bullets: lines('Backend engineer, focused on data pipelines') },
+    {
+      name: 'Experience',
+      entries: [
+        ent(' ACME  gmbh', '2021-03', ['cut the nightly build from 12 to 4 minutes!', 'Mentored two juniors.']),
+        ent('Newco', '2023'),
+        ent('Oldco', '2018'),
+        ent('Midco', '2020-05', ['Shipped it.', 'Shipped it!']),
+      ],
+    },
+    { name: 'Skills', bullets: lines('python', 'C#', 'C') },
+  ];
+  const b: Section[] = [
+    { name: 'Experience', entries: [ent('Beispiel AG', '', ['Built the API.'], ''), ent('newco', '2023', ['Hired the team.'])] }, // no start: org + title
+    { name: 'Skills', bullets: lines('C', 'Go') },
+    { name: 'Languages', bullets: lines('German (C1)') },
+  ];
+  const { sections, added } = mergeMaster(current, [
+    { from: 'a.docx', sections: a },
+    { from: 'b.docx', sections: b },
+  ]);
+  expect(current).toEqual(before); // pure
+  expect(added).toEqual({ entries: 3, bullets: 4, skills: 3, languages: 1 });
+  expect(sections.map((s) => s.name)).toEqual(['Summary', 'Experience', 'Skills', 'Languages']);
+  expect(sections[0]).toEqual(current[0]); // the same summary line
+  const exp = sections[1] as Extract<(typeof sections)[number], { entries: unknown }>;
+  expect(exp.entries.map((e) => [e.org, 'id' in e ? e.id : e.from])).toEqual([
+    ['Newco', 'a.docx'],
+    ['Acme GmbH', 'exp-acme-2021'], // the master's header wins
+    ['Midco', 'a.docx'],
+    ['Beispiel AG', 'exp-beispiel-2019'],
+    ['Oldco', 'a.docx'],
+  ]);
+  expect(exp.entries[0]).toEqual({ org: 'Newco', title: 'T', start: '2023', end: 'present', location: '', new: true, from: 'a.docx', bullets: [{ text: 'Hired the team.', new: true, from: 'b.docx' }] });
+  expect(exp.entries[1]!.bullets).toEqual([...(current[1] as Extract<Section, { entries: unknown }>).entries[0]!.bullets, { text: 'Mentored two juniors.', new: true, from: 'a.docx' }]);
+  expect(exp.entries[2]!.bullets).toEqual([{ text: 'Shipped it.', new: true, from: 'a.docx' }]);
+  expect(exp.entries[3]!.bullets).toEqual([{ text: 'Built the API.', new: true, from: 'b.docx' }]);
+  expect(sections[2]).toEqual({
+    name: 'Skills',
+    bullets: [{ id: 'skill-python', text: 'Python' }, { text: 'C#', new: true, from: 'a.docx' }, { text: 'C', new: true, from: 'a.docx' }, { text: 'Go', new: true, from: 'b.docx' }],
+  });
+  expect(sections[3]).toEqual({ name: 'Languages', bullets: [{ text: 'German (C1)', new: true, from: 'b.docx' }] });
+  expect(mergeMaster([], []).sections).toEqual([]);
+});
+
+const DOCX = readFileSync(join(CV, 'cv.docx')).toString('base64');
+/** The fake model's answers, one per call, in order; an Error is thrown. */
+async function parseSetup() {
+  const queue: unknown[] = [];
+  const llm = capturePrompts(() => {
+    const next = queue.shift();
+    if (next instanceof Error) throw next;
+    return next;
+  });
+  const t = await setup(llm.llm);
+  const parse = (files: unknown) => t.post('/api/career/master/parse', { files });
+  return { ...t, llm, queue, parse };
+}
+const strip = (v: unknown) => JSON.parse(JSON.stringify(v, (k, x: unknown) => (k === 'new' || k === 'from' ? undefined : x)));
+
+test('parse: two Word CVs merged into the master, nothing written, no contact or file name reaches the model, then PUT saves it', async () => {
+  const t = await parseSetup();
+  mkdirSync(join(t.vault, 'career'));
+  writeFileSync(join(t.vault, 'career/contact.md'), CONTACT);
+
+  // No master yet: hash null, everything new.
+  t.queue.push(answer());
+  const first = await t.parse([{ name: 'Erika_CV.docx', data: DOCX }]);
+  expect(first.statusCode).toBe(200);
+  expect(first.json()).toMatchObject({ hash: null, added: { entries: 1, bullets: 2, skills: 2, languages: 1 } });
+  expect(first.json().sections[1].entries[0]).toMatchObject({ org: 'Acme GmbH', new: true, from: 'Erika_CV.docx' });
+
+  writeFileSync(join(t.vault, 'career/master.md'), MASTER);
+  t.queue.push(answer(), {
+    summary: [],
+    experience: [{ org: 'ACME GmbH', title: 'Senior Engineer', start: '2021-03', end: 'present', location: 'Berlin', bullets: ['LED A TEAM OF 4 ENGINEERS.'] }],
+    education: [],
+    projects: [{ org: 'Data pipelines', title: '', start: '2021', end: 'present', location: '', bullets: ['Cut the nightly build from 12 to 4 minutes.'] }],
+    certifications: [],
+    skills: ['PostgreSQL'],
+    languages: [],
+  });
+  const res = await t.parse([
+    { name: 'Erika_CV.docx', data: DOCX },
+    { name: 'Erika_CV_2019.DOCX', data: DOCX },
+  ]);
+  expect(res.statusCode).toBe(200);
+  const body = res.json();
+  expect(body.hash).toBe(sha256(MASTER));
+  expect(body.added).toEqual({ entries: 1, bullets: 1, skills: 1, languages: 1 });
+  expect(body.warnings).toEqual(['Erika_CV.docx: 5 item(s) not found word for word in the CV were dropped; add them in Obsidian']);
+  const current = parseMaster(MASTER).sections;
+  expect(body.sections).toEqual([
+    current[0],
+    current[1], // Acme matched by org + start in both files: nothing new
+    { name: 'Skills', bullets: [{ id: 'skill-python', text: 'Python' }, { text: 'PostgreSQL', new: true, from: 'Erika_CV.docx' }] },
+    { name: 'Languages', bullets: [{ text: 'German (C1)', new: true, from: 'Erika_CV.docx' }] },
+    {
+      name: 'Projects',
+      entries: [
+        { org: 'Data pipelines', title: '', start: '2021', end: 'present', location: '', new: true, from: 'Erika_CV_2019.DOCX', bullets: [{ text: 'Cut the nightly build from 12 to 4 minutes.', new: true, from: 'Erika_CV_2019.DOCX' }] },
+      ],
+    },
+  ]);
+
+  expect(t.llm.calls).toHaveLength(3); // one per file
+  expect(t.llm.calls[2]!.input).toContain('--- file 1 (docx) ---\n');
+  expect(t.llm.text()).not.toMatch(CONTACT_LIKE); // contact values and the file names (Erika_…)
+
+  // Nothing written: the vault as it was, no approval, no note row; audit has counts only.
+  expect(readFileSync(join(t.vault, 'career/master.md'), 'utf8')).toBe(MASTER);
+  expect(readFileSync(join(t.vault, 'career/contact.md'), 'utf8')).toBe(CONTACT);
+  expect(readdirSync(join(t.vault, 'career')).sort()).toEqual(['contact.md', 'master.md']);
+  expect(t.pending()).toEqual([]);
+  expect(t.db.prepare('SELECT path FROM vault_notes').all()).toEqual([]);
+  const audit = t.db.prepare(`SELECT args_redacted FROM audit_log WHERE action = 'career.master.parse'`).pluck().all() as string[];
+  expect(audit.map((a) => JSON.parse(a))).toEqual([
+    { files: 1, read: 1, entries: 1, bullets: 2, skills: 2, languages: 1 },
+    { files: 2, read: 2, entries: 1, bullets: 1, skills: 1, languages: 1 },
+  ]);
+  expect(audit.join()).not.toMatch(/Erika|docx|Acme|Python/i);
+
+  // The client drops `new` / `from` and saves with the hash it got.
+  const put = await t.app.inject(t.authed({ method: 'PUT', url: '/api/career/master', payload: { hash: body.hash, sections: strip(body.sections) } }));
+  expect(put.statusCode).toBe(200);
+  const saved = readFileSync(join(t.vault, 'career/master.md'), 'utf8');
+  expect(saved).toContain('- PostgreSQL  ^skill-postgresql\n');
+  expect(saved).toContain('### Data pipelines |  | 2021 | present |   ^prj-data-pipelines-2021\n');
+  expect(saved).toContain('- Led a team of 4 engineers.  ^exp-acme-2021-b27e04\n');
+  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe('aos: edit career/master.md\n'), GIT_WAIT);
+});
+
+test('parse errors: bad_upload, non-.docx → import_unreadable, contact_missing creates nothing, bad_master, provider_error, nothing found', async () => {
+  const t = await parseSetup();
+  const contact = join(t.vault, 'career/contact.md');
+  const file = (name: string, data: string | Buffer = DOCX) => ({ name, data: typeof data === 'string' ? data : data.toString('base64') });
+
+  const bad = [
+    [],
+    Array.from({ length: 11 }, (_, i) => file(`cv${i}.docx`)),
+    [file('cv.docx', '%%%not base64')],
+    [{ name: 'cv.docx' }],
+    [file('cv\n.docx')],
+    [file('big.docx', Buffer.alloc(5 * 1024 * 1024 + 3))], // over 5 MB
+  ];
+  for (const files of bad) expect((await t.parse(files)).json()).toEqual({ error: 'bad_upload' });
+  expect((await t.post('/api/career/master/parse', {})).json()).toEqual({ error: 'bad_upload' });
+
+  const notDocx = await t.parse([file('cv.docx'), file('Erika.pdf', readFileSync(join(CV, 'cv.pdf'))), file('fake.docx', Buffer.from('not a zip'))]);
+  expect([notDocx.statusCode, notDocx.json()]).toEqual([400, { error: 'import_unreadable', warnings: ['Erika.pdf: skipped: not a .docx file', 'fake.docx: skipped: not a .docx file'] }]);
+
+  const noContact = await t.parse([file('cv.docx')]);
+  expect([noContact.statusCode, noContact.json().error]).toEqual([409, 'contact_missing']);
+  expect(existsSync(contact)).toBe(false); // unlike the import: nothing is created
+
+  mkdirSync(join(t.vault, 'career'));
+  writeFileSync(contact, CONTACT);
+  // Over Fastify's 1 MB default: the route's own limit lets it in; a zip that isn't a document can't be read.
+  const big = await t.parse([file('big.docx', Buffer.concat([Buffer.from('PK\x03\x04', 'latin1'), Buffer.alloc(4 * 1024 * 1024)]))]);
+  expect([big.statusCode, big.json()]).toEqual([400, { error: 'import_unreadable', warnings: ['big.docx: skipped: could not be read'] }]);
+
+  t.queue.push({ summary: [], experience: [], education: [], projects: [], certifications: [], skills: ['Haskell'], languages: [] });
+  const nothing = await t.parse([file('cv.docx')]);
+  expect([nothing.statusCode, nothing.json().error]).toEqual([400, 'import_unreadable']);
+  expect(nothing.json().warnings).toContain('cv.docx: skipped: nothing found to import');
+
+  t.queue.push(new LlmError('overloaded', 'upstream 529', 529));
+  const failed = await t.parse([file('cv.docx')]);
+  expect([failed.statusCode, failed.json()]).toEqual([502, { error: 'provider_error' }]);
+
+  writeFileSync(join(t.vault, 'career/master.md'), MASTER.replace('## Skills', '## Hobbies'));
+  expect((await t.parse([file('cv.docx')])).json()).toEqual({ error: 'bad_master' });
+
+  expect(t.llm.calls).toHaveLength(2);
+  expect(readdirSync(join(t.vault, 'career')).sort()).toEqual(['contact.md', 'master.md']);
+  expect(t.db.prepare(`SELECT COUNT(*) FROM audit_log WHERE action = 'career.master.parse'`).pluck().get()).toBe(0);
 });

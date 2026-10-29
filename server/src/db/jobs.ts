@@ -58,6 +58,17 @@ export function fail(db: Database, id: number, error: string): boolean {
   return row?.status === 'failed';
 }
 
+/**
+ * Server boot only: no worker is alive yet, so every `running` job was cut off by a restart (a `tsx watch` reload,
+ * a crash) and is requeued or failed like a stale one. Not for `openDb`: a CLI opens the same database while the
+ * server's worker may be mid-job. Returns how many.
+ */
+export function recoverRunningJobs(db: Database): number {
+  return db
+    .prepare(`UPDATE jobs SET locked_at = NULL, status = CASE WHEN attempts < ${MAX_ATTEMPTS_OF_KIND} THEN 'queued' ELSE 'failed' END WHERE status = 'running'`)
+    .run().changes;
+}
+
 /** Requeues jobs left running by a crash or laptop sleep. Run on boot. Returns how many. */
 export function recoverStaleLocks(db: Database): number {
   return db

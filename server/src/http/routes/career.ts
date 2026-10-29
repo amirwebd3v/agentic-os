@@ -2,18 +2,31 @@ import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
 import { editDistance } from '../../approvals/edit-distance.ts';
+import { draftLines, ORIGINS, SECTION_ORDER, toDraftV2 } from '../../career/draft.ts';
+import type { CvEntry, CvLine, CvSection, Draft, Origin } from '../../career/draft.ts';
 import type { Requirements } from '../../career/intake.ts';
-import { coverage, event, HEADER_FIELDS, readMaster, saveText } from '../../career/tailor.ts';
-import type { Draft, DraftLine, MasterIndex, Selection } from '../../career/tailor.ts';
+import { BULLET_SECTIONS } from '../../career/master.ts';
+import type { BulletSectionName, EntrySectionName } from '../../career/master.ts';
+import { coverage, enqueueStep, event, lastIds, readMaster, saveText, setApp, TailorError } from '../../career/tailor.ts';
+import type { DraftV1, MasterIndex, Selection } from '../../career/tailor.ts';
 import { audit } from '../../db/audit.ts';
 import type { Database } from '../../db/index.ts';
 import { enqueue } from '../../db/jobs.ts';
 import type { Job } from '../../db/jobs.ts';
 import { FILE_KINDS, inside, outRoot } from '../../jobs/career-render.ts';
 import { getLlm } from '../../llm/client.ts';
+import type { structured } from '../../llm/client.ts';
+import { LlmError } from '../../llm/errors.ts';
+import { atsCheck } from '../../career/ats.ts';
+import type { AtsReport } from '../../career/ats.ts';
+import { loadContact } from '../../career/contact.ts';
+import type { Gaps } from '../../career/gaps.ts';
+import type { Answers, AppContext, Questions } from '../../career/letter.ts';
+import { currentAnswers, latestRow, postingOf } from '../../jobs/career-steps.ts';
 import { sha256 } from '../../vault/writer.ts';
 
 export const MAX_POSTING_CHARS = 30_000;
+export const MAX_RESEARCH_CHARS = 20_000;
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 const SUMMARY = 'id, company, role_title, language, status, step, fail_code, follow_up_on, archived_at, created_at, updated_at';
 
@@ -88,73 +101,69 @@ export function retryRun(db: Database, id: number, masterHash: string): void {
 const ID_PARAMS = { type: 'object', properties: { id: { type: 'integer', minimum: 1 } }, required: ['id'] } as const;
 const DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-export type DraftEdit = { op?: 'set' | 'remove' | 'add' | 'restore'; ref: string; text?: string };
-const INDEX = /^(?:0|[1-9]\d{0,3})$/;
-const live = <T extends { removed?: true | undefined }>(x: T | null | undefined) => (x && !x.removed ? x : undefined);
-const at = (list: DraftLine[], i: string | undefined) => (i !== undefined && INDEX.test(i) ? list[Number(i)] : undefined);
-const lineAt = (list: DraftLine[], i: string | undefined) => live(at(list, i));
+type LineIn = { id?: string; text: string; origin?: Origin; suggestion_id?: string };
+type EntryIn = { id?: string; source?: string; org: string; title: string; start: string; end: string; location: string; bullets: LineIn[] };
+type SectionIn = { name: string; bullets?: LineIn[]; entries?: EntryIn[] };
+export type DraftPut = { versions: number; cv: { sections: SectionIn[] }; letter: { paragraphs: LineIn[] } };
 
 /**
- * Applies one edit to `d` in place (contract §8.2). Returns the ref it touched (for `add`, the new line's ref) and,
- * for a model line that was replaced or removed, its old text (for `edit_distance`); or a fixed error code.
- * Refs: `cv.summary`, `cv.entries[.<entry_id>[.<i> | .header.<field>]]`, `cv.skills`, `cv.languages`, `letter[.<i>]`.
- * A removed item stays in place with `removed: true`, so the refs after it keep their index, and `restore` brings it
- * back. `masterEntries` are the entry ids `add cv.entries` may take (text = the id).
+ * `PUT …/draft` (career-v2.md §1): the client's whole document over the stored one. The server owns ids, cites,
+ * origin and an existing entry's `source`: a known id keeps its stored values; an unknown id or none is new and gets
+ * the next server id, `cites: []` and `origin: 'owner'`; it is `'suggestion'` only when the client says so and names
+ * in `suggestion_id` a gap suggestion that exists and is not dismissed (`suggestions`). A new entry keeps
+ * the client's `source` only when it is a master entry id. `refs`: new lines and lines whose text changed.
+ * `distances`: normalised Levenshtein of each changed model line, 1 for each removed one. Null: `bad_draft`.
  */
-function applyEdit(d: Draft, { op = 'set', ref, text }: DraftEdit, masterEntries: readonly string[]): { ref: string; was?: string } | 'bad_ref' | 'bad_edit' {
-  if ((op === 'remove' || op === 'restore') !== (text === undefined)) return 'bad_edit';
-  const p = ref.split('.');
-  const any = p[0] === 'cv' && p[1] === 'entries' ? d.entries.find((e) => e.entry_id === p[2]) : undefined;
-  const entry = live(any);
-  if (op === 'restore') {
-    const item =
-      ref === 'cv.summary' ? d.summary
-      : any && p.length === 3 ? any
-      : entry && p.length === 4 ? at(entry.bullets, p[3])
-      : p[0] === 'letter' && p.length === 2 ? at(d.letter.paragraphs, p[1])
-      : undefined;
-    if (!item?.removed) return 'bad_ref';
-    delete item.removed;
-    return { ref };
+function putDraft(stored: Draft, body: DraftPut, masterEntryIds: ReadonlySet<string>, next: { l: number; e: number }, suggestions: ReadonlySet<string>) {
+  const oldLines = new Map([...draftLines(stored)].map(({ line }) => [line.id, line]));
+  const oldEntries = new Map(stored.cv.sections.flatMap((s) => ('entries' in s ? s.entries : [])).map((e) => [e.id, e]));
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  const distances: number[] = [];
+  let bad = false;
+  const once = (id: string | undefined) => {
+    if (id !== undefined && seen.has(id)) bad = true;
+    if (id !== undefined) seen.add(id);
+  };
+  const line = (l: LineIn): CvLine => {
+    once(l.id);
+    const text = l.text.trim();
+    if (!text) bad = true;
+    const old = l.id === undefined ? undefined : oldLines.get(l.id);
+    if (!old) {
+      const id = `l-${++next.l}`;
+      refs.push(id);
+      const s = l.origin === 'suggestion' && l.suggestion_id !== undefined && suggestions.has(l.suggestion_id) ? l.suggestion_id : undefined;
+      return s === undefined ? { id, text, cites: [], origin: 'owner' } : { id, text, cites: [], origin: 'suggestion', suggestion_id: s };
+    }
+    if (old.text !== text) {
+      refs.push(old.id);
+      // ponytail: Levenshtein is O(n·m); the stored line is capped at 2000 chars for the metric only.
+      if (old.origin === 'model') distances.push(editDistance(old.text.slice(0, 2000), text));
+    }
+    return { ...old, text };
+  };
+  const entry = (e: EntryIn): CvEntry => {
+    once(e.id);
+    const old = e.id === undefined ? undefined : oldEntries.get(e.id);
+    const source = old ? old.source : e.source !== undefined && masterEntryIds.has(e.source) ? e.source : undefined;
+    // A master entry keeps real dates; only the owner's own entry may leave them empty.
+    if (source !== undefined && (!e.start || !e.end)) bad = true;
+    const header = { org: e.org.trim(), title: e.title.trim(), start: e.start, end: e.end, location: e.location.trim() };
+    return { id: old?.id ?? `e-${++next.e}`, ...(source === undefined ? {} : { source }), ...header, bullets: e.bullets.map(line) };
+  };
+  const names = new Set<string>();
+  const sections: CvSection[] = [];
+  for (const s of body.cv.sections) {
+    const bulletSection = (BULLET_SECTIONS as readonly string[]).includes(s.name);
+    if (names.has(s.name) || (bulletSection ? !s.bullets || s.entries : !s.entries || s.bullets)) return null;
+    names.add(s.name);
+    sections.push(bulletSection ? { name: s.name as BulletSectionName, bullets: s.bullets!.map(line) } : { name: s.name as EntrySectionName, entries: s.entries!.map(entry) });
   }
-  if (ref === 'cv.summary' && op === 'add' && !live(d.summary)) {
-    d.summary = { text: text!, cites: [] }; // replaces a removed model summary: the new line is yours
-    return { ref };
-  }
-  if (ref === 'cv.entries' && op === 'add') {
-    // An entry the draft has, even removed, keeps its ref: restore it instead of adding it twice.
-    if (!masterEntries.includes(text!) || d.entries.some((e) => e.entry_id === text)) return 'bad_ref';
-    d.entries.push({ entry_id: text!, bullets: [] });
-    return { ref: `cv.entries.${text}` };
-  }
-  const line =
-    ref === 'cv.summary' ? live(d.summary)
-    : entry && p.length === 4 ? lineAt(entry.bullets, p[3])
-    : p[0] === 'letter' && p.length === 2 ? lineAt(d.letter.paragraphs, p[1])
-    : undefined;
-  if (line && op !== 'add') {
-    const was = line.text;
-    if (op === 'set') line.text = text!; // cites unchanged; the line is yours now and not re-verified
-    else line.removed = true;
-    return { ref, was };
-  }
-  const list = entry && p.length === 3 ? entry.bullets : ref === 'letter' ? d.letter.paragraphs : undefined;
-  if (list && op === 'add') return { ref: `${ref}.${list.push({ text: text!, cites: [] }) - 1}` };
-  if (entry && p.length === 3 && op === 'remove') {
-    entry.removed = true;
-    return { ref };
-  }
-  const field = HEADER_FIELDS.find((f) => f === p[4]);
-  if (entry && p.length === 5 && p[3] === 'header' && field && op !== 'add') {
-    if ((text ?? '').length > 120) return 'bad_edit';
-    entry.header = { ...entry.header, [field]: text ?? '' }; // remove = leave the field blank
-    return { ref };
-  }
-  if ((ref === 'cv.skills' || ref === 'cv.languages') && op === 'set') {
-    d[ref === 'cv.skills' ? 'skills_text' : 'languages_text'] = text!;
-    return { ref };
-  }
-  return 'bad_ref';
+  const draft: Draft = { v: 2, cv: { sections }, letter: { paragraphs: body.letter.paragraphs.map(line) }, versions: stored.versions + 1 };
+  if (bad) return null;
+  for (const old of oldLines.values()) if (old.origin === 'model' && !seen.has(old.id)) distances.push(1);
+  return { draft, refs, distances };
 }
 
 /** The master as it is now, or null when it is missing or invalid. */
@@ -179,8 +188,8 @@ function masterEntries(master: MasterIndex['master']): { id: string; header: str
 function draftSources(master: MasterIndex['master'], draft: Draft): Record<string, string> {
   const all = new Map(masterEntries(master).map((e) => [e.id, e.header]));
   for (const s of master.sections) for (const b of 'bullets' in s ? s.bullets : s.entries.flatMap((e) => e.bullets)) all.set(b.id, b.text);
-  const lines = [draft.summary, ...draft.entries.flatMap((e) => e.bullets), ...draft.letter.paragraphs];
-  const ids = [...draft.skill_ids, ...lines.flatMap((l) => l?.cites ?? []), ...draft.entries.map((e) => e.entry_id)];
+  const sourced = draft.cv.sections.flatMap((s) => ('entries' in s ? s.entries.flatMap((e) => (e.source === undefined ? [] : [e.source])) : []));
+  const ids = [...[...draftLines(draft)].flatMap(({ line }) => line.cites), ...sourced];
   return Object.fromEntries(ids.filter((i) => all.has(i)).map((i) => [i, all.get(i)!]));
 }
 
@@ -190,8 +199,9 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
   if (!summary) return null;
   const requirements = latest<Requirements>(db, id, 'requirements');
   const selection = latest<Selection>(db, id, 'selection');
-  const draft = latest<Draft>(db, id, 'draft');
-  const master = draft && masterOrNull(vaultDir);
+  const raw = latest<Draft | DraftV1>(db, id, 'draft');
+  const master = raw && masterOrNull(vaultDir);
+  const draft = raw && toDraftV2(raw, master); // always v2; a v1 draft is written back as v2 on its next save
   const languages = master?.sections.find((s) => s.name === 'Languages');
   const edited = db
     .prepare(`SELECT json_extract(detail, '$.refs') FROM application_events WHERE application_id = ? AND kind = 'edited'`)
@@ -204,12 +214,28 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
     draft,
     edited_refs: [...new Set(edited.flatMap((r) => (JSON.parse(r) as string[] | null) ?? []))],
     verify: latest(db, id, 'verify_report'),
-    sources: master ? draftSources(master, draft) : {},
-    master_entries: master ? masterEntries(master) : [], // what `add cv.entries` can take
+    sources: master && draft ? draftSources(master, draft) : {},
+    master_entries: master ? masterEntries(master) : [], // the entries a PUT may add with their `source`
     languages: languages && 'bullets' in languages ? languages.bullets.map((b) => b.text) : [],
     files: db.prepare('SELECT kind, bytes FROM application_files WHERE application_id = ? ORDER BY id').all(id),
     milestones: milestones(db, id),
+    // career-v2.md §3–§5: model and owner text, rendered as text only.
+    context: latest<AppContext>(db, id, 'context'),
+    gaps: latest<Gaps>(db, id, 'gaps'),
+    ats: atsDetail(db, id),
+    company_brief: latest(db, id, 'company'), // kind `company`; `company` is the application's name column
+    vacancy: latest(db, id, 'vacancy'),
+    questions: latest<Questions>(db, id, 'questions'),
+    answers: currentAnswers(db, id),
   };
+}
+
+/** The latest ATS report and the short history (newest first, at most 20), or null. */
+function atsDetail(db: Database, id: number) {
+  const rows = db.prepare("SELECT body FROM application_texts WHERE application_id = ? AND kind = 'ats' ORDER BY version DESC LIMIT 20").pluck().all(id) as string[];
+  if (!rows.length) return null;
+  const reports = rows.map((r) => JSON.parse(r) as AtsReport);
+  return { ...reports[0]!, history: reports.map(({ score, draft_version, created_at }) => ({ score, draft_version, created_at })) };
 }
 
 /**
@@ -217,7 +243,7 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
  * finalise, render, download. `vaultDir` and `dataDir` override the config (tests).
  */
 export const careerRoutes =
-  ({ vaultDir: vaultOverride, dataDir: dataOverride }: { vaultDir?: string; dataDir?: string } = {}): FastifyPluginAsync =>
+  ({ vaultDir: vaultOverride, dataDir: dataOverride, llm }: { vaultDir?: string; dataDir?: string; llm?: typeof structured } = {}): FastifyPluginAsync =>
   async (api) => {
     const { db } = api;
     const vaultDir = vaultOverride ?? api.config.vaultDir;
@@ -230,7 +256,7 @@ export const careerRoutes =
     const running = (a: App) => a.status === 'processing' || (a.status === 'final' && a.step === 'render');
     /** The master's hash for a new run, or the fixed code that refuses one. */
     const runHash = (): { hash: string } | { error: 'provider_not_configured' | 'master_missing' } => {
-      if (!getLlm(api.config)) return { error: 'provider_not_configured' };
+      if (!llm && !getLlm(api.config)) return { error: 'provider_not_configured' };
       try {
         return { hash: sha256(readFileSync(masterPath, 'utf8')) };
       } catch {
@@ -238,14 +264,22 @@ export const careerRoutes =
       }
     };
 
-    api.post<{ Body: { posting: string } }>(
+    type CreateBody = { posting: string; company_name?: string; company_website?: string; research?: string; target_country?: string };
+    const optional = (max: number) => ({ type: 'string', maxLength: max });
+    api.post<{ Body: CreateBody }>(
       '/career/applications',
       {
         schema: {
           body: {
             type: 'object',
-            // No maxLength: too long is the fixed code `posting_too_long`, not Fastify's validation text.
-            properties: { posting: { type: 'string', minLength: 1 } },
+            // No maxLength on the posting and the research: too long is a fixed code, not Fastify's validation text.
+            properties: {
+              posting: { type: 'string', minLength: 1 },
+              company_name: optional(200),
+              company_website: optional(500),
+              research: { type: 'string' },
+              target_country: optional(100),
+            },
             required: ['posting'],
             additionalProperties: false,
           },
@@ -254,16 +288,30 @@ export const careerRoutes =
       async (req, reply) => {
         const { posting } = req.body;
         if (posting.length > MAX_POSTING_CHARS) return reply.code(400).send({ error: 'posting_too_long' });
+        if ((req.body.research?.length ?? 0) > MAX_RESEARCH_CHARS) return reply.code(400).send({ error: 'research_too_long' });
         const run = runHash();
         if ('error' in run) return reply.code(409).send(run);
+        // career-v2.md §5: the form beyond the posting, one `context` row. The website is text only, never fetched.
+        const oneLine = (v: string | undefined) => v?.replace(/[\p{Cc}\s]+/gu, ' ').trim() || null;
+        const ctx: AppContext = {
+          company_name: oneLine(req.body.company_name),
+          company_website: oneLine(req.body.company_website),
+          target_country: oneLine(req.body.target_country),
+          research: req.body.research?.replace(/\r\n?/g, '\n').replace(/[^\P{Cc}\n\t]/gu, ' ').trim() || null,
+        };
         const summary = db.transaction(() => {
-          const row = db.prepare(`INSERT INTO applications (step, master_hash) VALUES ('intake', ?) RETURNING ${SUMMARY}`).get(run.hash) as { id: number };
+          // The typed company name shows until intake reads the posting's.
+          const row = db.prepare(`INSERT INTO applications (step, master_hash, company) VALUES ('intake', ?, ?) RETURNING ${SUMMARY}`).get(run.hash, ctx.company_name) as { id: number };
           db.prepare(`INSERT INTO application_texts (application_id, kind, body) VALUES (?, 'posting', ?)`).run(row.id, posting);
+          if (Object.values(ctx).some((v) => v !== null)) saveText(db, row.id, 'context', ctx);
           db.prepare(`INSERT INTO application_events (application_id, kind) VALUES (?, 'created')`).run(row.id);
           enqueue(db, 'career_intake', `career:intake:${row.id}:0`, { applicationId: row.id });
           return row;
         })();
-        audit(db, { actor: 'user', action: 'career.application.create', args: { id: summary.id, chars: posting.length } });
+        // Counts and which fields were given, never their values.
+        const given = (['company_name', 'company_website', 'target_country'] as const).filter((k) => ctx[k]);
+        const extra = ctx.research || given.length ? { research_chars: ctx.research?.length ?? 0, fields: given } : {};
+        audit(db, { actor: 'user', action: 'career.application.create', args: { id: summary.id, chars: posting.length, ...extra } });
         return reply.code(202).send(summary);
       },
     );
@@ -278,60 +326,96 @@ export const careerRoutes =
       async (req, reply) => applicationDetail(db, vaultDir, req.params.id) ?? reply.code(404).send({ error: 'not_found' }),
     );
 
-    // ---------- W2-08: edit the draft ----------
-    api.patch<{ Params: { id: number }; Body: { edits: DraftEdit[] } }>(
-      '/career/applications/:id/draft',
-      {
-        schema: {
-          params: ID_PARAMS,
-          body: {
-            type: 'object',
-            properties: {
-              edits: {
-                type: 'array',
-                minItems: 1,
-                maxItems: 50,
-                items: {
-                  type: 'object',
-                  properties: {
-                    op: { type: 'string', enum: ['set', 'remove', 'add', 'restore'] },
-                    ref: { type: 'string', maxLength: 200 },
-                    text: { type: 'string', minLength: 1, maxLength: 700 },
+    // ---------- career v2 §1: edit the draft (the whole document) ----------
+    // Single-line text: no control characters. Header fields as the master's (no `|`); dates its grammar or empty.
+    const text = (max: number, header = false) => ({ type: 'string', maxLength: max, pattern: header ? '^[^\\x00-\\x1f\\x7f|]*$' : '^[^\\x00-\\x1f\\x7f]*$' });
+    const START = '^(?:\\d{4}(?:-(?:0[1-9]|1[0-2]))?)?$';
+    const END ='^(?:\\d{4}(?:-(?:0[1-9]|1[0-2]))?|present)?$';
+    const LINE = {
+      type: 'object',
+      properties: {
+        id: { type: 'string', maxLength: 64 },
+        text: { ...text(2000), minLength: 1 },
+        cites: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 64 } },
+        origin: { enum: ORIGINS },
+        suggestion_id: { type: 'string', maxLength: 64 },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    };
+    const lines = (max: number) => ({ type: 'array', maxItems: max, items: LINE });
+    const putBody = {
+      type: 'object',
+      properties: {
+        versions: { type: 'integer', minimum: 1 },
+        cv: {
+          type: 'object',
+          properties: {
+            sections: {
+              type: 'array',
+              maxItems: 7,
+              items: {
+                type: 'object',
+                properties: {
+                  name: { enum: SECTION_ORDER },
+                  bullets: lines(100),
+                  entries: {
+                    type: 'array',
+                    maxItems: 30,
+                    items: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', maxLength: 64 },
+                        source: { type: 'string', maxLength: 64 },
+                        org: text(120, true),
+                        title: text(120, true),
+                        start: { type: 'string', pattern: START },
+                        end: { type: 'string', pattern: END },
+                        location: text(120, true),
+                        bullets: lines(40),
+                      },
+                      required: ['org', 'title', 'start', 'end', 'location', 'bullets'],
+                      additionalProperties: false,
+                    },
                   },
-                  required: ['ref'],
-                  additionalProperties: false,
                 },
+                required: ['name'],
+                additionalProperties: false,
               },
             },
-            required: ['edits'],
-            additionalProperties: false,
           },
+          required: ['sections'],
+          additionalProperties: false,
         },
+        letter: { type: 'object', properties: { paragraphs: lines(12) }, required: ['paragraphs'], additionalProperties: false },
       },
+      required: ['versions', 'cv', 'letter'],
+      additionalProperties: false,
+    };
+
+    api.put<{ Params: { id: number }; Body: DraftPut }>(
+      '/career/applications/:id/draft',
+      { schema: { params: ID_PARAMS, body: putBody }, attachValidation: true }, // a fixed code, not Fastify's validation text
       async (req, reply) => {
+        if (req.validationError) return reply.code(400).send({ error: 'bad_draft' });
         const { id } = req.params;
         const status = appRow(id)?.status;
         if (status === undefined) return reply.code(404).send({ error: 'not_found' });
-        const draft = latest<Draft>(db, id, 'draft');
-        if (!draft || (status !== 'draft_ready' && status !== 'flagged')) return reply.code(409).send({ error: 'wrong_status' });
-        const master = req.body.edits.some((e) => e.ref === 'cv.entries') ? masterOrNull(vaultDir) : null;
-        const entryIds = master ? masterEntries(master).map((e) => e.id) : [];
-        const touched: string[] = [];
-        const distances: number[] = [];
-        for (const edit of req.body.edits) {
-          const done = applyEdit(draft, edit, entryIds); // one bad edit rejects the batch: nothing is saved
-          if (typeof done === 'string') return reply.code(400).send({ error: done });
-          touched.push(done.ref);
-          // ponytail: Levenshtein is O(n·m); the model's line is capped at 2000 chars for the metric only.
-          if (done.was !== undefined) distances.push(edit.text === undefined ? 1 : editDistance(done.was.slice(0, 2000), edit.text));
-        }
-        draft.versions += 1;
-        const refs = [...new Set(touched)];
+        const raw = latest<Draft | DraftV1>(db, id, 'draft');
+        if (!raw || (status !== 'draft_ready' && status !== 'flagged')) return reply.code(409).send({ error: 'wrong_status' });
+        const master = masterOrNull(vaultDir);
+        const stored = toDraftV2(raw, master);
+        if (req.body.versions !== stored.versions) return reply.code(409).send({ error: 'draft_changed' });
+        const gaps = latest<Gaps>(db, id, 'gaps');
+        const open = new Set((gaps?.suggestions ?? []).map((g) => g.id).filter((g) => !gaps!.dismissed.includes(g)));
+        const done = putDraft(stored, req.body, new Set(master ? masterEntries(master).map((e) => e.id) : []), lastIds(db, id, stored), open);
+        if (!done) return reply.code(400).send({ error: 'bad_draft' });
+        const { draft, refs, distances } = done;
         const edit_distance = distances.length ? distances.reduce((a, b) => a + b, 0) / distances.length : null;
         const counts = { lines: refs.length, edit_distance, version: draft.versions };
         db.transaction(() => {
           saveText(db, id, 'draft', draft);
-          // Refs are ids and indexes (`cv.entries.<entry_id>.<i>`), never text: they make `edited_refs` real.
+          // Refs are line ids (`l-7`), never text: they make `edited_refs` real.
           db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'edited', ?)`).run(id, JSON.stringify({ ...counts, refs }));
           db.prepare(`UPDATE applications SET updated_at = ${NOW} WHERE id = ?`).run(id);
         })();
@@ -525,6 +609,121 @@ export const careerRoutes =
         if (dated) audit(db, { actor: 'user', action: 'career.application.follow_up', args: { id, follow_up_on: b.follow_up_on } });
         if (fields.length) audit(db, { actor: 'user', action: 'career.application.rename', args: { id, fields } }); // field names, never the values
         return applicationDetail(db, vaultDir, id);
+      },
+    );
+
+    // ---------- career v2 §3–§5: gaps, ATS, answers ----------
+    api.patch<{ Params: { id: number }; Body: { dismissed: string[] } }>(
+      '/career/applications/:id/gaps',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: {
+            type: 'object',
+            properties: { dismissed: { type: 'array', maxItems: 50, items: { type: 'string', maxLength: 16 } } },
+            required: ['dismissed'],
+            additionalProperties: false,
+          },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        if (!appRow(id)) return reply.code(404).send({ error: 'not_found' });
+        const gaps = latest<Gaps>(db, id, 'gaps');
+        if (!gaps) return reply.code(409).send({ error: 'wrong_status' });
+        const ids = new Set(gaps.suggestions.map((g) => g.id));
+        const dismissed = [...new Set(req.body.dismissed)];
+        if (!dismissed.every((d) => ids.has(d))) return reply.code(400).send({ error: 'unknown_suggestion' });
+        db.transaction(() => {
+          saveText(db, id, 'gaps', { ...gaps, dismissed }); // the whole set: an id left out is shown again
+          db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'edited', ?)`).run(id, JSON.stringify({ dismissed }));
+        })();
+        audit(db, { actor: 'user', action: 'career.application.gaps', args: { id, dismissed: dismissed.length } });
+        return applicationDetail(db, vaultDir, id);
+      },
+    );
+
+    // Runs in the request (one model call) on the current draft version; the pipeline runs it once after verify.
+    const ATS_STATUSES = ['draft_ready', 'flagged', 'needs_answers', 'final'];
+    api.post<{ Params: { id: number } }>('/career/applications/:id/ats', { schema: { params: ID_PARAMS } }, async (req, reply) => {
+      const { id } = req.params;
+      const app = appRow(id);
+      if (!app) return reply.code(404).send({ error: 'not_found' });
+      const raw = latest<Draft | DraftV1>(db, id, 'draft');
+      const requirements = latest<Requirements>(db, id, 'requirements');
+      if (!raw || !requirements || !ATS_STATUSES.includes(app.status) || app.step === 'render') return reply.code(409).send({ error: 'wrong_status' });
+      if (!llm && !getLlm(api.config)) return reply.code(409).send({ error: 'provider_not_configured' });
+      const draft = toDraftV2(raw, masterOrNull(vaultDir));
+      let report: AtsReport;
+      try {
+        const deps = { db, config: api.config, contact: loadContact(vaultDir), ...(llm ? { llm } : {}) };
+        report = await atsCheck(deps, draft, requirements, postingOf(db, id));
+      } catch (err) {
+        if (!(err instanceof LlmError || err instanceof TailorError)) throw err;
+        audit(db, { actor: 'user', action: 'career.application.ats', args: { id, error: 'provider_error' } });
+        return reply.code(502).send({ error: 'provider_error' });
+      }
+      saveText(db, id, 'ats', report);
+      audit(db, { actor: 'user', action: 'career.application.ats', args: { id, score: report.score, draft_version: report.draft_version } });
+      return applicationDetail(db, vaultDir, id);
+    });
+
+    type AnswersBody = { answers: { id: string; text: string | null }[] };
+    api.post<{ Params: { id: number }; Body: AnswersBody }>(
+      '/career/applications/:id/answers',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: {
+            type: 'object',
+            properties: {
+              answers: {
+                type: 'array',
+                maxItems: 5,
+                items: {
+                  type: 'object',
+                  properties: { id: { type: 'string', maxLength: 16 }, text: { type: ['string', 'null'], maxLength: 2000 } },
+                  required: ['id', 'text'],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ['answers'],
+            additionalProperties: false,
+          },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        const app = appRow(id);
+        if (!app) return reply.code(404).send({ error: 'not_found' });
+        const q = latestRow(db, id, 'questions');
+        if (app.status !== 'needs_answers' || !q) return reply.code(409).send({ error: 'wrong_status' });
+        const questions = (JSON.parse(q.body) as Questions).questions;
+        const given = new Map(req.body.answers.map((a) => [a.id, a.text]));
+        if (given.size !== req.body.answers.length || ![...given.keys()].every((k) => questions.some((x) => x.id === k))) {
+          return reply.code(400).send({ error: 'bad_answers' });
+        }
+        // A question left out is skipped, as `null` is. `a-<n>` answers `q-<n>`; control characters but line breaks go.
+        const answers: Answers['answers'] = questions.map((x) => ({
+          id: x.id.replace(/^q-/, 'a-'),
+          question_id: x.id,
+          text:
+            given
+              .get(x.id)
+              ?.replace(/\r\n?/g, '\n')
+              .replace(/[^\P{Cc}\n]/gu, ' ')
+              .trim() || null,
+        }));
+        const answered = answers.filter((a) => a.text).length;
+        db.transaction(() => {
+          saveText(db, id, 'answers', { answers, questions_version: q.version });
+          setApp(db, id, { status: 'processing', step: 'letter' });
+          event(db, id, 'step', { from: 'questions', to: 'letter', answered, skipped: answers.length - answered });
+          enqueueStep(db, id, 'letter', 1);
+        })();
+        audit(db, { actor: 'user', action: 'career.application.answers', args: { id, answered, skipped: answers.length - answered } });
+        return reply.code(202).send(applicationDetail(db, vaultDir, id));
       },
     );
 
