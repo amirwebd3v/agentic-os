@@ -5,9 +5,9 @@ import { fileHash, stage } from '../../approvals/apply.ts';
 import { contactNote, loadContact } from '../../career/contact.ts';
 import type { Contact } from '../../career/contact.ts';
 import { DocumentError, importDocument, importText } from '../../career/document.ts';
-import { buildImport, readExport } from '../../career/linkedin.ts';
-import { BULLET_SECTIONS, ENTRY_SECTIONS, MasterError, editSections, masterFm, parseMaster, serialiseMaster } from '../../career/master.ts';
-import type { Section, SectionEdit } from '../../career/master.ts';
+import { MAX_FILE_BYTES, buildImport, readExport } from '../../career/linkedin.ts';
+import { BULLET_SECTIONS, ENTRY_SECTIONS, MasterError, editSections, masterFm, mergeMaster, parseMaster, serialiseMaster } from '../../career/master.ts';
+import type { Bullet, Section, SectionEdit } from '../../career/master.ts';
 import { audit } from '../../db/audit.ts';
 import { getLlm } from '../../llm/client.ts';
 import type { structured } from '../../llm/client.ts';
@@ -70,6 +70,44 @@ const putSchema = {
   required: ['hash', 'sections'],
   additionalProperties: false,
 };
+
+const MAX_PARSE_FILES = 10;
+const B64_MAX = Math.ceil(MAX_FILE_BYTES / 3) * 4; // 5 MB as base64
+const ZIP = Buffer.from('PK\x03\x04', 'latin1'); // a .docx is a zip
+const parseSchema = {
+  type: 'object',
+  properties: {
+    files: {
+      type: 'array',
+      minItems: 1,
+      maxItems: MAX_PARSE_FILES,
+      items: {
+        type: 'object',
+        properties: { name: line(1, 255), data: { type: 'string', minLength: 1, maxLength: B64_MAX, pattern: '^[A-Za-z0-9+/]*={0,2}$' } },
+        required: ['name', 'data'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['files'],
+  additionalProperties: false,
+};
+
+/**
+ * Drops what `PUT /career/master` would refuse (putSchema's text lengths, control characters) and counts it.
+ * ponytail: the item counts (50 bullets per entry, 100 entries) aren't cut here; past them the PUT says bad_master.
+ */
+function fitForPut(sections: Section[]): { sections: Section[]; dropped: number } {
+  let dropped = 0;
+  const ok = (t: string, max: number) => (t.length <= max && !/\p{Cc}/u.test(t)) || (dropped++, false);
+  const lines = (bs: Bullet[]) => bs.filter((b) => ok(b.text, 2000));
+  const fitted = sections.map((s): Section =>
+    'bullets' in s
+      ? { ...s, bullets: lines(s.bullets) }
+      : { ...s, entries: s.entries.filter((e) => [e.org, e.title, e.location].every((f) => ok(f, 120))).map((e) => ({ ...e, bullets: lines(e.bullets) })) },
+  );
+  return { sections: fitted, dropped };
+}
 
 /**
  * `POST /api/career/master/import` (contract §8.1): reads only `dataDir/career/import/`, proposes `master.md` (and,
@@ -173,6 +211,64 @@ export const careerMasterRoutes =
       const { text, hash } = read();
       return text === null ? { exists: false } : view(text, hash!);
     });
+
+    // Word CVs → the current master merged with each (career-v2 §2). Writes nothing: the client PUTs what the owner keeps.
+    // File names go back in `warnings` and `from` only: never logged or audited (they can hold the owner's name).
+    api.post<{ Body: { files: { name: string; data: string }[] } }>(
+      '/career/master/parse',
+      { bodyLimit: MAX_PARSE_FILES * (B64_MAX + 1024), schema: { body: parseSchema }, attachValidation: true },
+      async (req, reply) => {
+        if (req.validationError) return reply.code(400).send({ error: 'bad_upload' });
+        const files = req.body.files.map((f) => ({ name: f.name, data: Buffer.from(f.data, 'base64') }));
+        const wrong = files.filter((f) => extname(f.name).toLowerCase() !== '.docx' || !f.data.subarray(0, 4).equals(ZIP));
+        if (wrong.length) return reply.code(400).send({ error: 'import_unreadable', warnings: wrong.map((f) => `${f.name}: skipped: not a .docx file`) });
+        if (!dirs.llm && !getLlm(api.config)) return reply.code(409).send({ error: 'provider_not_configured' });
+        const warnings: string[] = [];
+        let contact: Contact = {};
+        try {
+          contact = loadContact(vaultDir);
+        } catch {
+          warnings.push('career/contact.md has invalid frontmatter; fix it in Obsidian');
+        }
+        if (!contact.name) {
+          warnings.push('fill in at least your name in career/contact.md, then try again'); // unlike the import, creates nothing
+          return reply.code(409).send({ error: 'contact_missing', warnings });
+        }
+        const { text, hash } = read();
+        let current: Section[] = [];
+        try {
+          if (text !== null) current = parseMaster(text).sections;
+        } catch (err) {
+          if (err instanceof MasterError) return reply.code(409).send({ error: 'bad_master' }); // fix it in Obsidian first
+          throw err;
+        }
+
+        const incoming: { from: string; sections: Section[] }[] = [];
+        for (const f of files) {
+          const { text: cv, used } = await importText([f], warnings); // one call per file, so every new item knows its file
+          if (!used.length) continue;
+          let result;
+          try {
+            result = await importDocument({ db, config: api.config, contact, ...(dirs.llm ? { llm: dirs.llm } : {}) }, cv);
+          } catch (err) {
+            if (err instanceof LlmError || err instanceof DocumentError) return reply.code(502).send({ error: 'provider_error' });
+            throw err;
+          }
+          if (!result) {
+            warnings.push(`${f.name}: skipped: nothing found to import`);
+            continue;
+          }
+          const { sections, dropped } = fitForPut(parseMaster(result.master).sections);
+          warnings.push(...result.warnings.map((w) => `${f.name}: ${w}`));
+          if (dropped) warnings.push(`${f.name}: ${dropped} item(s) too long for the editor were dropped`);
+          incoming.push({ from: f.name, sections });
+        }
+        if (!incoming.length) return reply.code(400).send({ error: 'import_unreadable', warnings });
+        const { sections, added } = mergeMaster(current, incoming);
+        audit(db, { actor: 'user', action: 'career.master.parse', args: { files: files.length, read: incoming.length, ...added } });
+        return { hash, sections, added, warnings };
+      },
+    );
 
     // One git process at a time. ponytail: the writer and approvals have their own chains; a failed commit is caught by the next `add -A`
     let committing: Promise<unknown> = Promise.resolve();
