@@ -126,7 +126,7 @@ test('GET /api/dashboard: aggregates only, local days, unpriced buckets are null
   });
   expect(body.areas).toEqual({
     career: {
-      by_status: { processing: 1, draft_ready: 1, flagged: 1, failed: 1, final: 5, applied: 1, withdrawn: 1 },
+      by_status: { processing: 1, draft_ready: 1, flagged: 1, needs_answers: 0, failed: 1, final: 5, applied: 1, withdrawn: 1 },
       archived: 1,
       new_this_week: 2,
       needs_you: 6,

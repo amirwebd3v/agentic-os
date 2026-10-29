@@ -6,7 +6,7 @@ import { costOf } from '../../llm/prices.ts';
 import { resolveNotePath, vaultGit } from '../../vault/writer.ts';
 
 const DAYS = 30;
-const STATUSES = ['processing', 'draft_ready', 'flagged', 'failed', 'final', 'applied', 'withdrawn'] as const;
+const STATUSES = ['processing', 'draft_ready', 'flagged', 'needs_answers', 'failed', 'final', 'applied', 'withdrawn'] as const;
 
 /** YYYY-MM-DD of the user's local calendar day. */
 const localDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -52,7 +52,7 @@ export const dashboardRoutes =
     // Mirrors the web's nextStep() 'needs' group: a final run still rendering is in progress, and a due follow-up wins over "send it".
     const needsYou = count(
       `SELECT COUNT(*) FROM applications WHERE deleted_at IS NULL AND archived_at IS NULL AND (
-         status IN ('failed', 'draft_ready', 'flagged')
+         status IN ('failed', 'draft_ready', 'flagged', 'needs_answers')
          OR (status = 'final' AND step IS NOT 'render'
              AND (fail_code IS 'render_failed' OR follow_up_on IS NULL OR follow_up_on > ?)))`,
     );
