@@ -35,9 +35,6 @@ export interface MasterIndex {
   language: 'en' | 'de';
 }
 
-// ponytail: stop-word count; a `language:` key in the master's frontmatter if a mixed CV ever guesses wrong.
-const EN = new Set(['the', 'and', 'with', 'for', 'of', 'to', 'on', 'at', 'a', 'from', 'by']);
-const DE = new Set(['und', 'der', 'die', 'das', 'mit', 'für', 'von', 'zur', 'zum', 'bei', 'auf', 'ein', 'eine', 'den', 'dem']);
 
 /** Reads and indexes `career/master.md`. Throws `TailorError` when it is missing or outside the grammar. */
 export function readMaster(vaultDir: string): MasterIndex {
@@ -75,9 +72,8 @@ export function indexMaster(master: Master, body: string): MasterIndex {
       }
     }
   }
-  const words = [...sources.values()].join(' ').toLowerCase().match(/\p{L}+/gu) ?? [];
-  const count = (set: Set<string>) => words.filter((w) => set.has(w)).length;
-  return { master, body, entries, sources, owner, skills, language: count(DE) > count(EN) ? 'de' : 'en' };
+  // Every application is written in English (career-v2.md), whatever the master's or the posting's language.
+  return { master, body, entries, sources, owner, skills, language: 'en' };
 }
 
 // ---------- shapes (contract §4.2, §4.3) ----------

@@ -106,7 +106,7 @@ export const useCareerStore = defineStore('career', () => {
   };
   /** Starts a run and opens it. Rejects with the API's ApiError (e.g. `master_missing`). */
   const create = async (posting: string) => {
-    const created = await createApplication(posting);
+    const created = await createApplication({ posting });
     await open(created.id);
     return created.id;
   };

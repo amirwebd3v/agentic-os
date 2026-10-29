@@ -214,6 +214,12 @@ a.area:hover { border-color: var(--fg); }
 .seg button[aria-pressed="true"], .seg button[aria-selected="true"] { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px #0000001f; }
 @media (max-width: 960px) { .composer { grid-template-columns: 1fr; gap: var(--s5); } }
 
+fieldset.about { border: 0; padding: 0; margin: var(--s2) 0 0; display: grid; gap: var(--s3); }
+fieldset.about label { display: grid; gap: var(--s1); font-size: 13px; font-weight: 600; color: var(--muted); }
+fieldset.about input, fieldset.about textarea { font-weight: 400; color: var(--fg); font-size: 15px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+@media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
+
 /* ---------- applications list ---------- */
 .toolbar { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; margin-bottom: var(--s4); }
 .toolbar .search { flex: 1 1 18rem; max-width: 28rem; position: relative; }
@@ -379,6 +385,33 @@ details.removed li s { overflow-wrap: anywhere; }
   .cv aside { position: static; }
   .cv-entry-head { grid-template-columns: 1fr 1fr; grid-template-areas: "org org" "title title" "from to" "where where" "tools tools"; }
 }
+
+/* ---------- fit and ATS, the letter agent ---------- */
+.fit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: var(--s3); margin-top: var(--s5); align-items: start; }
+.fit h3 { margin-top: var(--s5); }
+.score-row { display: flex; gap: var(--s5); align-items: center; margin: var(--s3) 0 var(--s4); }
+.score { font-family: var(--serif); font-size: 64px; line-height: 64px; margin: 0; font-variant-numeric: tabular-nums; }
+.score span { font-size: 20px; color: var(--muted); }
+.findings { list-style: none; padding: 0; margin: var(--s4) 0 var(--s2); display: grid; gap: var(--s2); }
+.keywords { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s1); }
+.keywords li { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.keywords li.have { color: var(--muted); }
+.suggestions { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s3); }
+.suggestions > li { padding: var(--s3) 0; border-bottom: 1px solid var(--border); }
+.suggestions .line-text { margin: 0 0 var(--s1); font-family: var(--serif); font-size: 17px; line-height: 25px; }
+.accept { display: grid; gap: var(--s2); margin-top: var(--s2); }
+.check { display: flex; gap: var(--s2); align-items: center; font-size: 14px; }
+.brief { margin-bottom: var(--s5); }
+.questions { display: grid; gap: var(--s4); margin-top: var(--s3); justify-items: start; }
+.question { display: grid; gap: var(--s1); width: 100%; }
+.question .hint { margin: 0; }
+.built { margin: var(--s4) 0; }
+.built summary { cursor: pointer; color: var(--muted); }
+.built h3 { margin-top: var(--s4); }
+.points { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s2); }
+.points q { display: block; margin-top: 2px; font-style: italic; }
+.answers { list-style: none; padding: 0; display: grid; gap: var(--s3); }
+@media (max-width: 960px) { .fit { grid-template-columns: 1fr; } .score-row { flex-direction: column; align-items: flex-start; } }
 
 /* ---------- review queue and cards ---------- */
 .review-queue { max-width: 64rem; }

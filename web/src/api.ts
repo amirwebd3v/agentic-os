@@ -79,7 +79,7 @@ export type Requirements = {
   must_have: Requirement[]; nice_to_have: Requirement[]; injection_suspected: boolean;
 };
 /** A draft line (career-v2.md §1): stable id, the master lines it cites, and who wrote it. */
-export type Line = { id?: string; text: string; cites?: string[]; origin?: 'model' | 'owner' | 'suggestion' };
+export type Line = { id?: string; text: string; cites?: string[]; origin?: 'model' | 'owner' | 'suggestion'; suggestion_id?: string };
 /** Draft v2: the same CV shape as the master, plus the letter. `versions` guards against a stale save. */
 export type Draft = { v: 2; cv: { sections: CvSection[] }; letter: { paragraphs: Line[] }; versions: number };
 export type VerifyReport = { ok: boolean; violations: { code: string; ref: string; token?: string }[] };
@@ -104,9 +104,32 @@ export type ApplicationDetail = ApplicationSummary & {
   milestones: Milestone[];
   /** Every entry of the master (id and `org | title | start | end | location`), to add one the draft lacks. */
   master_entries?: { id: string; header: string }[];
+  // career-v2 §3–§5: all model or owner text, rendered as text only.
+  context?: { company_name: string | null; company_website: string | null; target_country: string | null; research: string | null } | null;
+  gaps?: Gaps | null;
+  ats?: (AtsReport & { history: { score: number; draft_version: number; created_at: string }[] }) | null;
+  company_brief?: { has_research: boolean; points: Point[] } | null;
+  vacancy?: { why_open: Point; business_problem: Point; outcomes: Point[]; priorities: Point[] } | null;
+  questions?: { evidence: { need: string; master_ids: string[] }[]; questions: { id: string; text: string; why: string }[] } | null;
+  answers?: { answers: { id: string; question_id: string; text: string | null }[]; questions_version: number } | null;
+};
+export type Point = { id: string; text: string; status: 'verified' | 'assumption'; quotes: string[] };
+export type Suggestion = { id: string; section: string; entry_id?: string; text: string; why: string; keyword?: string };
+export type Gaps = {
+  missing_keywords: { keyword: string; importance: 'must' | 'nice'; in_master: boolean }[];
+  weak_sections: { section: string; problem: string }[]; formatting: { problem: string }[]; suggestions: Suggestion[]; dismissed: string[];
+};
+export type AtsReport = {
+  score: number; parts: { name: string; score: number; max: number; notes: string[] }[];
+  findings: { severity: 'high' | 'medium' | 'low'; text: string }[]; draft_version: number; created_at: string;
 };
 
-export const createApplication = (posting: string) => json<ApplicationSummary>('POST', '/api/career/applications', { posting });
+export type NewApplication = { posting: string; company_name?: string; company_website?: string; research?: string; target_country?: string };
+export const createApplication = (a: NewApplication) => json<ApplicationSummary>('POST', '/api/career/applications', a);
+export const dismissSuggestions = (id: number, dismissed: string[]) => json<ApplicationDetail>('PATCH', `/api/career/applications/${id}/gaps`, { dismissed });
+export const checkAts = (id: number) => json<ApplicationDetail>('POST', `/api/career/applications/${id}/ats`);
+export const sendAnswers = (id: number, answers: { id: string; text: string | null }[]) =>
+  json<ApplicationDetail>('POST', `/api/career/applications/${id}/answers`, { answers });
 export const listApplications = () => json<ApplicationListItem[]>('GET', '/api/career/applications');
 export const getApplication = (id: number) => json<ApplicationDetail>('GET', `/api/career/applications/${id}`);
 /** Saves the whole draft (`409 draft_changed` when `versions` is stale). */

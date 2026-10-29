@@ -152,8 +152,9 @@ test.each([
 
 test('letters may name the company, role and the cited entry; German skips capitalised nouns but not acronyms', () => {
   const de = `${readFileSync(join(FIXTURES, 'master.md'), 'utf8').replace(/## Summary[\s\S]*/, '')}## Experience\n### Nordwind GmbH | Entwicklerin | 2020 | present | Hamburg  ^exp-nordwind-2020\n- Betrieb der Server mit Terraform und der Datenbank für das Team.  ^exp-nordwind-2020-aaaaaa\n`;
-  const m = indexMaster(parseMaster(de), parseNote(de).body);
-  expect(m.language).toBe('de');
+  const en = indexMaster(parseMaster(de), parseNote(de).body);
+  expect(en.language).toBe('en'); // English only: the master is never read as German
+  const m = { ...en, language: 'de' as const }; // the verifier's German noun rule, kept for a German master
   const d = good();
   d.summary = { text: 'Betrieb der Plattform mit Terraform.', cites: ['exp-nordwind-2020-aaaaaa'] }; // Plattform: a noun, not an entity in German
   d.entries = [{ entry_id: 'exp-nordwind-2020', bullets: [{ text: 'Betrieb der Server mit SAP.', cites: ['exp-nordwind-2020-aaaaaa'] }] }];

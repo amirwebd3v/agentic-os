@@ -92,7 +92,8 @@ test('render model: employer, title and dates from the master; placeholders rest
   ]);
   expect(model.education[0]).toMatchObject({ first: true, org: 'Hochschule Bremen', title: 'BSc Computer Science', start: '2015', end: '2018' });
   expect(model).toMatchObject({ projects: [], certifications: [], skills_text: 'Terraform, AWS', languages_text: 'English (C1), German (native)', date: '28 October 2026', address: '', salutation: 'Dear Hiring Manager,', closing: 'Kind regards,' });
-  expect(renderModel(v2, { language: 'de' }, contact, REQ, new Date())).toMatchObject({ salutation: 'Sehr geehrte Damen und Herren,', closing: 'Mit freundlichen Grüßen' });
+  // English only (career-v2.md): a master the old heuristic would have called German still renders English.
+  expect(renderModel(v2, { language: 'de' }, contact, REQ, new Date())).toMatchObject({ salutation: 'Dear Hiring Manager,', closing: 'Kind regards,' });
   expect(model.paragraphs[2]).toBe('Reach me at jane.doe@example.com or +49 30 1234567;  is empty. Regards, Jane Mary Doe');
 
   const cv = docxText(fillDocx(readFileSync(join(STARTERS, 'cv-template.docx')), model));

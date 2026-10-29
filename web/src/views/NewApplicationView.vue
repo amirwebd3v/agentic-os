@@ -8,6 +8,8 @@ const MAX = 30_000; // contract §8.2
 const router = useRouter();
 const mode = ref<'tailor' | 'manual'>('tailor');
 const posting = ref('');
+const about = ref({ company_name: '', company_website: '', research: '', target_country: '' });
+const RESEARCH_MAX = 20_000;
 const box = ref<HTMLTextAreaElement>();
 const busy = ref(false);
 const error = ref<string | null>(null);
@@ -17,13 +19,15 @@ const ERRORS: Record<string, string> = {
   master_missing: 'There is no master CV yet. Add it on the Master CV page, then paste the posting again.',
   provider_not_configured: 'Connect a provider first (see the banner at the top).',
   posting_too_long: `The posting is longer than ${MAX.toLocaleString('en')} characters. Paste only the job description.`,
+  research_too_long: `Your company notes are longer than ${RESEARCH_MAX.toLocaleString('en')} characters. Keep the parts that matter.`,
 };
 
 async function start() {
   busy.value = true;
   error.value = null;
   try {
-    const { id } = await createApplication(posting.value);
+    const extra = Object.fromEntries(Object.entries(about.value).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+    const { id } = await createApplication({ posting: posting.value, ...extra });
     await router.push(`/applications/${id}`);
   } catch (err) {
     const code = err instanceof ApiError ? err.detail : undefined;
@@ -74,6 +78,18 @@ onMounted(() => box.value?.focus());
           id="posting" ref="box" v-model="posting" :maxlength="MAX" aria-describedby="posting-hint"
           placeholder="Paste the whole posting: title, company, what they ask for…"
         ></textarea>
+        <fieldset class="about">
+          <legend class="label">The company, for the cover letter (optional)</legend>
+          <div class="pair">
+            <label>Company name <input v-model="about.company_name" type="text" maxlength="200" /></label>
+            <label>Website <input v-model="about.company_website" type="text" maxlength="500" placeholder="Not visited, kept as a note" /></label>
+          </div>
+          <label>Target country <input v-model="about.target_country" type="text" maxlength="100" placeholder="e.g. Germany" /></label>
+          <label>Your research on the company
+            <textarea v-model="about.research" rows="6" :maxlength="RESEARCH_MAX" aria-describedby="research-hint" placeholder="Paste what you know: products, customers, competitors, recent news, challenges…"></textarea>
+          </label>
+          <span id="research-hint" class="hint">The letter agent uses only this and the posting, marks every point as verified (quoted) or an assumption, and never searches the web.</span>
+        </fieldset>
         <div class="spread">
           <button type="submit" class="primary" :disabled="busy || !posting.trim()">{{ busy ? 'Starting…' : 'Tailor CV and letter' }}</button>
           <span id="posting-hint" class="hint">{{ posting.length.toLocaleString('en') }} / {{ MAX.toLocaleString('en') }} · <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts</span>
@@ -84,9 +100,11 @@ onMounted(() => box.value?.focus());
         <ol>
           <li>The app reads the posting and lists what it asks for.</li>
           <li>It picks the matching lines of your master CV.</li>
-          <li>It writes the draft and checks every line against its source.</li>
+          <li>It finds gaps against the posting, writes the CV, checks every line against its source and scores it like an ATS.</li>
+          <li>It studies the company from your notes and works out what the role is for.</li>
+          <li>If evidence is missing, it stops and asks you. Then it writes the cover letter.</li>
         </ol>
-        <p>It takes about a minute; you can leave the page. The posting is treated as data, never as instructions to the model.</p>
+        <p>It takes a few minutes; you can leave the page. The posting is treated as data, never as instructions to the model.</p>
       </aside>
     </div>
 

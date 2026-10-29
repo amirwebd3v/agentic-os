@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
-import { ApiError, archiveApplication, deleteApplication, fileUrl, renameApplication, retryApplication, type FileKind, type Line } from '../api';
+import {
+  ApiError, archiveApplication, checkAts, deleteApplication, dismissSuggestions, fileUrl, renameApplication, retryApplication, sendAnswers,
+  type FileKind, type Line, type Suggestion,
+} from '../api';
 import CvEditor from '../components/CvEditor.vue';
+import FitPanel from '../components/FitPanel.vue';
+import LetterBrief from '../components/LetterBrief.vue';
+import { addToMaster, type MasterTarget } from '../masterAdd';
 import LineSource from '../components/LineSource.vue';
 import TrackingPanel from '../components/TrackingPanel.vue';
-import { allLines, cleaned, problems, type CvSection } from '../cv';
+import { allLines, blankSection, cleaned, isEntries, problems, type CvSection, type SectionName } from '../cv';
 import { STEP_TEXT, statusLabel, useCareerStore, violationText } from '../stores/career';
 
 // Everything in the application (company, role, requirements, draft, sources, tokens) is model, file or owner text:
@@ -21,7 +27,7 @@ const busy = ref(false);
 const ack = ref(false);
 const focused = ref<string | null>(null);
 
-type Tab = 'cv' | 'letter' | 'posting' | 'tracking';
+type Tab = 'cv' | 'letter' | 'fit' | 'posting' | 'tracking';
 const tab = ref<Tab>('cv');
 const FILES: Record<FileKind, string> = { cv_docx: 'CV, Word', letter_docx: 'Cover letter, Word' };
 const PIPELINE = ['intake', 'match', 'gaps', 'draft', 'verify', 'ats', 'company', 'vacancy', 'questions', 'letter'] as const;
@@ -58,6 +64,10 @@ const ACTION_ERRORS: Record<string, string> = {
   bad_draft: 'Something is not in the expected form: every line needs text, dates are 2021 or 2021-03 (or “present”), and no field may hold “|”.',
   flagged_not_acknowledged: 'Tick the box first: some lines still need your check.',
   master_missing: 'There is no master CV any more. Add it on the Master CV page, then retry.',
+  master_changed: 'Your master CV changed in Obsidian meanwhile, so the line was not added there. Add it on the Master CV page.',
+  provider_error: 'The model provider returned an error. Try again in a moment.',
+  bad_answers: 'Those answers no longer match the questions. Reload the page.',
+  unknown_suggestion: 'That suggestion no longer exists. Reload the page.',
   provider_not_configured: 'Connect a provider first (see the banner at the top).',
 };
 async function act(fn: () => Promise<void>) {
@@ -101,6 +111,32 @@ async function addParagraph() {
   await nextTick();
   [...document.querySelectorAll<HTMLTextAreaElement>('.letter-edit textarea')].at(-1)?.focus();
 }
+// ---------- gaps, ATS and the letter agent ----------
+const recheck = () => act(() => career.change(() => checkAts(id)));
+const dismiss = (ids: string[]) => act(() => career.change(() => dismissSuggestions(id, ids)));
+const answer = (answers: { id: string; text: string | null }[]) => act(() => career.change(() => sendAnswers(id, answers)));
+const toMaster = (t: MasterTarget, text: string) =>
+  act(async () => {
+    if (!(await addToMaster(t, text))) actionError.value = 'That part of your master CV no longer exists. Add the line on the Master CV page.';
+  });
+/** A confirmed suggestion goes into the draft as a new line (saved with the next Save) and, if asked, into the master. */
+async function accept(sg: Suggestion, text: string, alsoMaster: boolean) {
+  const line: Line = { text, origin: 'suggestion', suggestion_id: sg.id };
+  const entry = sections.value.flatMap((x) => (isEntries(x) ? x.entries : [])).find((e) => sg.entry_id && (e.source === sg.entry_id || e.id === sg.entry_id));
+  if (entry) entry.bullets.push(line);
+  else {
+    const name = (SECTION_NAMES.includes(sg.section as SectionName) ? sg.section : 'Summary') as SectionName;
+    let sec = sections.value.find((x) => x.name === name);
+    if (!sec) sections.value.push((sec = blankSection(name)));
+    if (isEntries(sec)) (sec.entries[0] ?? sec.entries[sec.entries.push({ org: '', title: '', start: '', end: '', location: '', bullets: [] }) - 1]!).bullets.push(line);
+    else sec.bullets = [...sec.bullets.filter((b) => b.text.trim()), line];
+  }
+  tab.value = 'cv';
+  if (alsoMaster) await toMaster(sg.entry_id ? { entry: sg.entry_id } : { section: name4master(sg.section) }, text);
+}
+const SECTION_NAMES: readonly string[] = ['Summary', 'Experience', 'Education', 'Projects', 'Certifications', 'Skills', 'Languages'];
+const name4master = (section: string) => (section === 'Skills' || section === 'Languages' ? section : 'Summary') as 'Summary' | 'Skills' | 'Languages';
+
 const words = computed(() => paragraphs.value.map((p) => p.text).join(' ').split(/\s+/).filter(Boolean).length);
 
 // ---------- status and actions ----------
@@ -146,7 +182,8 @@ const tracked = computed(() => !!app.value && ['final', 'applied', 'withdrawn'].
 const TABS = computed(() =>
   [
     { key: 'cv', label: 'CV', show: !!app.value?.draft },
-    { key: 'letter', label: 'Cover letter', show: !!app.value?.draft },
+    { key: 'letter', label: 'Cover letter', show: !!app.value?.draft || !!app.value?.questions },
+    { key: 'fit', label: 'Fit and ATS', show: !!app.value?.gaps || !!app.value?.ats },
     { key: 'posting', label: 'The posting', show: !!app.value?.requirements },
     { key: 'tracking', label: 'Tracking', show: tracked.value },
   ].filter((t) => t.show) as { key: Tab; label: string }[],
@@ -222,6 +259,11 @@ onUnmounted(() => {
           </ol>
         </div>
 
+        <div v-else-if="app.status === 'needs_answers'" class="notice attention">
+          <p><strong>Waiting for your answers.</strong> The CV is drafted. Before writing the cover letter, the agent needs a few facts your CVs don't show.</p>
+          <button type="button" class="primary" @click="tab = 'letter'">Answer the questions</button>
+        </div>
+
         <div v-else-if="app.status === 'failed'" class="notice danger" role="alert">
           <p><strong>This run stopped.</strong> {{ career.failure }}</p>
           <button type="button" :disabled="busy" @click="retry">Retry with the same posting</button>
@@ -284,7 +326,10 @@ onUnmounted(() => {
         </aside>
       </div>
 
-      <section v-else-if="tab === 'letter' && app.draft" class="letter-tab" aria-label="Cover letter">
+      <FitPanel v-else-if="tab === 'fit'" :app="app" :editable="editable" :busy="busy" :dirty="dirty" @recheck="recheck" @dismiss="dismiss" @accept="accept" />
+
+      <section v-else-if="tab === 'letter'" class="letter-tab" aria-label="Cover letter">
+        <LetterBrief :app="app" :busy="busy" @answer="answer" @to-master="toMaster" />
         <p class="hint">{{ words }} words · aim for 250 to 350.</p>
         <ol class="lines letter-edit">
           <li v-for="(p, i) in paragraphs" :key="p.id ?? `new-${i}`" class="cv-item" :class="{ focused: p.id && p.id === focused }" @focusin="focused = p.id ?? null">

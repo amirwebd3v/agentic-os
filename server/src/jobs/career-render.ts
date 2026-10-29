@@ -67,7 +67,7 @@ export function renderModel(draft: Draft, m: Pick<MasterIndex, 'language'>, cont
       list.push({
         first: !list.length,
         org: restore(e.org), title: restore(e.title), start: restore(e.start),
-        end: e.end === 'present' && m.language === 'de' ? 'heute' : restore(e.end),
+        end: restore(e.end),
         location: restore(e.location),
         bullets: lines(e.bullets),
       });
@@ -85,12 +85,11 @@ export function renderModel(draft: Draft, m: Pick<MasterIndex, 'language'>, cont
     languages_text: languages.join(', '),
     company: req.company,
     role_title: req.role_title,
-    date: new Intl.DateTimeFormat(m.language === 'de' ? 'de-DE' : 'en-GB', { dateStyle: 'long' }).format(now),
+    date: new Intl.DateTimeFormat('en-GB', { dateStyle: 'long' }).format(now),
     paragraphs: lines(draft.letter.paragraphs),
     // The letter's paragraphs carry no salutation or sign-off (tailor prompt), so a template takes them from here.
-    ...(m.language === 'de'
-      ? { salutation: 'Sehr geehrte Damen und Herren,', closing: 'Mit freundlichen Grüßen' }
-      : { salutation: 'Dear Hiring Manager,', closing: 'Kind regards,' }),
+    salutation: 'Dear Hiring Manager,',
+    closing: 'Kind regards,',
   };
 }
 

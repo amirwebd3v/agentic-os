@@ -221,3 +221,61 @@ test('rename, retry and delete', async () => {
   expect(button(el, 'Delete').disabled).toBe(true); // not while a step runs
   useCareerStore().stop();
 });
+
+test('a suggestion enters the CV only after "true for me", and is saved with its suggestion id', async () => {
+  const gaps = {
+    missing_keywords: [{ keyword: 'Kubernetes', importance: 'must' as const, in_master: false }], weak_sections: [], formatting: [],
+    suggestions: [{ id: 's-1', section: 'Experience', entry_id: 'exp-acme-2021', text: `Ran services on Kubernetes ${EVIL}`, why: 'The posting asks for it.', keyword: 'Kubernetes' }],
+    dismissed: [],
+  };
+  const ats = { score: 72, parts: [{ name: 'Keywords', score: 20, max: 30, notes: [] }], findings: [{ severity: 'high' as const, text: 'No Kubernetes.' }], draft_version: 1, created_at: '2026-10-29T10:00:00Z', history: [] };
+  const calls = api({
+    'GET /api/career/applications/1': () => app({ gaps, ats }),
+    'PUT /api/career/applications/1/draft': () => app({ gaps, ats, draft: { ...draft(), versions: 2 } }),
+    'POST /api/career/applications/1/ats': () => app({ gaps, ats: { ...ats, score: 84, findings: [], draft_version: 2 }, draft: { ...draft(), versions: 2 } }),
+  });
+  const el = await mount();
+  button(el, 'Fit and ATS').click();
+  await vi.waitFor(() => expect(el.querySelector('.score')?.textContent).toContain('72'));
+  expect(el.textContent).toContain('Not there yet');
+  expect(el.querySelector('img')).toBeNull();
+  button(el, 'Use this').click();
+  await vi.waitFor(() => expect(el.querySelector('.accept')).not.toBeNull());
+  const add = button(el, 'Add to the CV');
+  expect(add.disabled).toBe(true); // not until you say it is true
+  (el.querySelector<HTMLInputElement>('.accept .check input')!).click();
+  (el.querySelectorAll<HTMLInputElement>('.accept .check input')[1]!).click(); // not into the master this time
+  await vi.waitFor(() => expect(add.disabled).toBe(false));
+  add.click();
+  await vi.waitFor(() => expect(el.querySelector('.savebar')).not.toBeNull());
+  button(el, 'Save').click();
+  await vi.waitFor(() => expect(calls.some((c) => c.key.startsWith('PUT'))).toBe(true));
+  const body = calls.find((c) => c.key.startsWith('PUT'))!.body as Draft;
+  const exp = body.cv.sections.find((s) => s.name === 'Experience') as Extract<Draft['cv']['sections'][number], { entries: unknown }>;
+  expect(exp.entries[0]!.bullets.at(-1)).toEqual({ text: `Ran services on Kubernetes ${EVIL}`, origin: 'suggestion', suggestion_id: 's-1' });
+  expect(calls.some((c) => c.key.includes('/master'))).toBe(false);
+  await vi.waitFor(() => expect(el.querySelector('.savebar')).toBeNull());
+  button(el, 'Fit and ATS').click();
+  await vi.waitFor(() => expect(button(el, 'Re-check ATS').disabled).toBe(false));
+  button(el, 'Re-check ATS').click();
+  await vi.waitFor(() => expect(el.textContent).toContain('Ready to download'));
+});
+
+test('waiting for answers: the questions are asked on the page and a skip is sent as null', async () => {
+  const questions = { evidence: [], questions: [{ id: 'q-1', text: `Have you led hiring? ${EVIL}`, why: 'The role builds a team.' }, { id: 'q-2', text: 'Any on-call?', why: 'Ops role.' }] };
+  const calls = api({
+    'GET /api/career/applications/1': () => app({ status: 'needs_answers', step: 'questions', questions }),
+    'POST /api/career/applications/1/answers': () => app({ status: 'processing', step: 'letter', questions }),
+  });
+  const el = await mount();
+  expect(el.textContent).toContain('Waiting for your answers');
+  button(el, 'Answer the questions').click();
+  await vi.waitFor(() => expect(el.querySelector('#ans-q-1')).not.toBeNull());
+  expect(el.querySelector('img')).toBeNull();
+  type(el.querySelector('#ans-q-1')!, '  Yes, four engineers in 2023.  ');
+  button(el, 'Write the letter').click();
+  await vi.waitFor(() => expect(calls.some((c) => c.key.startsWith('POST'))).toBe(true));
+  expect(calls.find((c) => c.key.startsWith('POST'))!.body).toEqual({ answers: [{ id: 'q-1', text: 'Yes, four engineers in 2023.' }, { id: 'q-2', text: null }] });
+  await vi.waitFor(() => expect(el.textContent).toContain('Writing the cover letter'));
+  useCareerStore().stop();
+});
