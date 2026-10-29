@@ -41,9 +41,6 @@ const inApps = () => route.path.startsWith('/applications');
         </RouterLink>
       </nav>
       <button type="button" class="quiet" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" @click="help?.showModal()"><kbd>?</kbd></button>
-      <RouterLink v-slot="{ navigate }" to="/new" custom>
-        <button type="button" @click="navigate">New application</button>
-      </RouterLink>
     </div>
   </header>
   <dialog ref="help" class="keys" aria-labelledby="keys-title" @click.self="help?.close()">

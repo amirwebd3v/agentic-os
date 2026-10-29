@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import type { CvSection } from './cv';
 
 export type Provider = {
   status: 'ok' | 'not_configured' | 'error'; baseURL: string;
@@ -53,6 +54,12 @@ async function call(method: string, path: string, body?: unknown, signal?: Abort
 const json = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
   (await call(method, path, body)).json() as Promise<T>;
 
+/** True when logged in; otherwise sets `needsLogin`. Never a failed request: `/session` always answers 200. */
+export async function checkSession(): Promise<boolean> {
+  const ok = await fetch('/session', { credentials: 'same-origin' }).then((r) => r.json() as Promise<{ ok: boolean }>).then((r) => r.ok, () => true);
+  if (!ok) needsLogin.value = true;
+  return ok;
+}
 export const getProvider = () => json<Provider>('GET', '/api/provider');
 export const reloadProvider = () => json<Provider>('POST', '/api/provider/reload');
 export const listApprovals = (all = false) => json<ApprovalPage>('GET', `/api/approvals?status=pending${all ? '&all=true' : ''}`);
@@ -61,7 +68,7 @@ export const decideApproval = (id: number, decision: Decision) =>
 export const batchApprovals = (ids: number[], decision: Decision) => json<BatchResult>('POST', '/api/approvals/batch', { ids, decision });
 
 // Career (docs/week2/career-contract.md §4, §6, §8.2). Company, role and draft text are model output: render as text only.
-export type ApplicationStatus = 'processing' | 'draft_ready' | 'flagged' | 'failed' | 'final' | 'applied' | 'withdrawn';
+export type ApplicationStatus = 'processing' | 'draft_ready' | 'flagged' | 'needs_answers' | 'failed' | 'final' | 'applied' | 'withdrawn';
 export type ApplicationStep = 'intake' | 'match' | 'draft' | 'verify' | 'render';
 export type FailCode = 'provider_error' | 'selection_invalid' | 'no_match' | 'verify_failed' | 'render_failed' | 'internal';
 export type Requirement = { id: string; text: string; kind: 'skill' | 'experience' | 'education' | 'language' | 'other' };
@@ -119,7 +126,6 @@ export const finaliseApplication = (id: number, acknowledge_flagged: boolean) =>
 export const rerenderApplication = (id: number) => json<ApplicationDetail>('POST', `/api/career/applications/${id}/render`);
 /** A plain link: the browser downloads it with the session cookie (contract §8.2). */
 export const fileUrl = (id: number, kind: FileKind) => `/api/career/applications/${id}/files/${kind}`;
-export const importMaster = () => json<{ approval_id: number; warnings: string[] }>('POST', '/api/career/master/import');
 
 // Tracking (contract §5, §8.2). `note` is the owner's own text: render as text only.
 export type MilestoneKind = 'applied' | 'feedback' | 'interview' | 'offer' | 'rejected' | 'withdrawn' | 'note';
@@ -154,3 +160,26 @@ export type MasterState =
   | { exists: true; hash: string; error: string };
 export const getMaster = () => json<MasterState>('GET', '/api/career/master');
 export const saveMaster = (hash: string | null, sections: MasterSection[]) => json<MasterState>('PUT', '/api/career/master', { hash, sections });
+/** Reads Word CVs and returns the master merged with them; nothing is written (career-v2.md §2). */
+export const parseCvFiles = (files: { name: string; data: string }[]) =>
+  json<{ hash: string | null; sections: CvSection[]; added: { entries: number; bullets: number; skills: number; languages: number }; warnings: string[] }>(
+    'POST', '/api/career/master/parse', { files },
+  );
+
+// Dashboard (career-v2.md §6): counts and aggregates only.
+export type Usage = { calls: number; input_tokens: number; output_tokens: number; failures?: number; cost: number | null };
+export type Dashboard = {
+  ai: { days: (Usage & { day: string })[]; by_pipeline: (Usage & { pipeline: string })[]; totals: Usage; priced: boolean };
+  system: {
+    provider: Provider['status']; approvals_pending: number; jobs: { queued: number; running: number; failed_7d: number };
+    vault_notes: number; last_vault_commit: string | null;
+  };
+  areas: {
+    career: {
+      by_status: Partial<Record<ApplicationStatus, number>>; archived: number; new_this_week: number; needs_you: number;
+      master: { exists: boolean; entries: number | null; lines: number | null };
+    };
+    email: { connected: boolean }; social: { connected: boolean };
+  };
+};
+export const getDashboard = () => json<Dashboard>('GET', '/api/dashboard');

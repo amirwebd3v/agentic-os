@@ -51,6 +51,13 @@ describe('guards and session, edge cases', () => {
     const { app } = await buildTestApp();
     expect((await app.inject({ url: '/login', headers: { host: 'localhost:5173' } })).statusCode).toBe(403);
   });
+  test('/session answers 200 with ok false or true, never 401', async () => {
+    const out = await buildTestApp();
+    const r = await out.app.inject({ url: '/session', headers: { host: HOST } });
+    expect([r.statusCode, r.json()]).toEqual([200, { ok: false }]);
+    const inn = await buildTestApp({ loggedIn: true });
+    expect((await inn.app.inject(inn.authed({ url: '/session' }))).json()).toEqual({ ok: true });
+  });
   test('login redirects to the Vite page in dev, to / otherwise', async () => {
     const prod = await buildTestApp();
     expect((await prod.app.inject({ url: `/login?t=${prod.loginToken}`, headers: { host: HOST } })).headers.location).toBe('/');

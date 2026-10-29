@@ -5,7 +5,6 @@ import { afterEach, expect, test, vi } from 'vitest';
 import type { ApplicationDetail, ApplicationStatus } from '../src/api';
 import { wordDiff } from '../src/diff';
 import { POLL_MS, statusLabel, useCareerStore } from '../src/stores/career';
-import MasterImport from '../src/components/MasterImport.vue';
 import ApplicationView from '../src/views/ApplicationView.vue';
 
 afterEach(() => {
@@ -164,17 +163,6 @@ test('wordDiff merges runs and keeps spacing', () => {
     { op: '-', text: 'from 12 ' },
     { op: ' ', text: 'to 4 minutes.' },
   ]);
-});
-
-test('the master import shows its outcome and file warnings as text', async () => {
-  api({ 'POST /api/career/master/import': () => Response.json({ error: 'import_empty', warnings: [`${EVIL}: skipped: unsupported format`] }, { status: 400 }) });
-  const el = document.createElement('div');
-  createApp(MasterImport).mount(el);
-  el.querySelector('button')!.click();
-  await vi.waitFor(() => expect(el.querySelector('[role="alert"]')).not.toBeNull());
-  expect(el.textContent).toContain('No usable file in career/import/');
-  expect(el.textContent).toContain(`${EVIL}: skipped`);
-  expect(el.querySelector('img')).toBeNull();
 });
 
 const press = (el: Element, key: string, init: KeyboardEventInit = {}) => el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));

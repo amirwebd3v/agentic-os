@@ -36,6 +36,7 @@ export function statusLabel(a: ApplicationSummary): { text: string; tone: 'worki
   return {
     draft_ready: { text: 'Ready for review', tone: 'ready' },
     flagged: { text: 'Needs your check', tone: 'attention' },
+    needs_answers: { text: 'Waiting for your answers', tone: 'attention' },
     failed: { text: 'Failed', tone: 'danger' },
     final: { text: 'Final', tone: 'done' },
     applied: { text: 'Applied', tone: 'done' },
@@ -138,6 +139,7 @@ export function nextStep(a: ApplicationListItem, day = today()): { group: Group;
   if (a.status === 'final' && a.fail_code === 'render_failed') return { group: 'needs', text: 'Create the files again' };
   if (a.status === 'draft_ready') return { group: 'needs', text: 'Read the draft and finalise it' };
   if (a.status === 'flagged') return { group: 'needs', text: 'Check the marked lines' };
+  if (a.status === 'needs_answers') return { group: 'needs', text: 'Answer the questions for the cover letter' };
   if (a.follow_up_on && a.follow_up_on <= day && a.status !== 'withdrawn')
     return { group: 'follow', text: a.follow_up_on < day ? `Follow up, due ${dayText(a.follow_up_on)}` : 'Follow up today' };
   if (a.status === 'final') return { group: 'needs', text: 'Send the files yourself, then mark it applied' };

@@ -6,7 +6,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyServerOptions } from '
 import { repoRoot } from './config.ts';
 import type { Config } from './config.ts';
 import type { Database } from './db/index.ts';
-import { loginRoute, requireSession } from './http/auth.ts';
+import { loginRoute, requireSession, sessionRoute } from './http/auth.ts';
 import { allowedHosts, guards } from './http/guards.ts';
 import { securityHeaders } from './http/headers.ts';
 
@@ -76,6 +76,7 @@ export async function buildApp({
       : reply.code(404).send({ error: 'not found' }),
   );
   loginRoute(app, db, dev);
+  sessionRoute(app, db);
 
   await app.register(
     async (api) => {

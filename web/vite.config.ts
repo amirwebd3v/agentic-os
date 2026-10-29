@@ -21,7 +21,7 @@ export default defineConfig({
         "worker-src 'self' blob:; " +
         "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
     },
-    proxy: { '/api': { target, changeOrigin: false }, '/login': { target, changeOrigin: false } },
+    proxy: { '/api': { target, changeOrigin: false }, '/login': { target, changeOrigin: false }, '/session': { target, changeOrigin: false } },
   },
   test: { environment: 'jsdom' },
 });

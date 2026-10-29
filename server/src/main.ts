@@ -8,6 +8,7 @@ import { approvalRoutes } from './http/routes/approvals.ts';
 import { areaRoutes } from './http/routes/areas.ts';
 import { careerMasterRoutes } from './http/routes/career-master.ts';
 import { careerRoutes, failCareerJob } from './http/routes/career.ts';
+import { dashboardRoutes } from './http/routes/dashboard.ts';
 import { providerRoutes } from './http/routes/provider.ts';
 import { careerDraft } from './jobs/career-draft.ts';
 import { careerIntake } from './jobs/career-intake.ts';
@@ -19,7 +20,7 @@ import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
 
 // Feature plugins, mounted under /api behind the session check. One line per ticket.
-const plugins: FastifyPluginAsync[] = [providerRoutes, areaRoutes, approvalRoutes(), careerRoutes(), careerMasterRoutes()];
+const plugins: FastifyPluginAsync[] = [providerRoutes, areaRoutes, approvalRoutes(), careerRoutes(), careerMasterRoutes(), dashboardRoutes()];
 
 const config = loadConfig();
 const db = openDb(join(config.dataDir, 'brain.db'));
