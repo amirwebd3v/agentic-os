@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { ApiError, fileUrl, type FileKind, type Line } from '../api';
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { ApiError, fileUrl, type Draft, type DraftEdit, type FileKind, type HeaderField, type Line } from '../api';
+import AddLine from '../components/AddLine.vue';
 import DraftLine from '../components/DraftLine.vue';
+import EntryHeader from '../components/EntryHeader.vue';
 import LineSource from '../components/LineSource.vue';
 import { STEP_TEXT, statusLabel, useCareerStore, violationText } from '../stores/career';
 
@@ -16,27 +18,40 @@ const actionError = ref<string | null>(null);
 const busy = ref(false);
 const focused = ref<string | null>(null);
 const ack = ref(false);
+const reading = ref<HTMLElement>();
 
 type Row = { ref: string; label: string; line: Line; max: number };
 const PIPELINE = ['intake', 'match', 'draft', 'verify'] as const;
 const FILES: Record<FileKind, string> = { cv_docx: 'CV, Word', letter_docx: 'Cover letter, Word' };
 
-const header = (entryId: string) => {
-  const [org, title, dates] = (app.value?.sources[entryId] ?? '').split(' | ');
-  return { org: org || entryId, title: title ?? '', dates: dates ?? '' };
+const HEADER: HeaderField[] = ['org', 'title', 'start', 'end', 'location'];
+/** The master's `org | title | start | end | location`, with the user's overrides on top. */
+const header = (e: Draft['entries'][number]) => {
+  const master = (app.value?.sources[e.entry_id] ?? '').split(' | ');
+  return Object.fromEntries(HEADER.map((f, i) => [f, e.header?.[f] ?? master[i] ?? ''])) as Record<HeaderField, string>;
 };
+/** Removed lines are left out after numbering, so every ref keeps its index (contract §8.2). */
+const kept = (rows: Row[]) => rows.filter((r) => !r.line.removed);
 const doc = computed(() => {
   const d = app.value?.draft;
   if (!d) return null;
+  const typed = (ref: string, label: string, text: string): Row => ({ ref, label, line: { text, cites: [] }, max: 700 });
   return {
-    summary: d.summary ? [{ ref: 'cv.summary', label: 'the summary', line: d.summary, max: 300 }] : [],
-    entries: d.entries.map((e) => {
-      const h = header(e.entry_id);
-      const rows = e.bullets.map((line, i): Row => ({ ref: `cv.entries.${e.entry_id}.${i}`, label: `bullet ${i + 1} under ${h.org}`, line, max: 300 }));
-      return { id: e.entry_id, ...h, rows };
+    summary: kept(d.summary ? [{ ref: 'cv.summary', label: 'the summary', line: d.summary, max: 300 }] : []),
+    entries: d.entries.flatMap((e) => {
+      if (e.removed) return [];
+      const h = header(e);
+      const name = h.org || e.entry_id;
+      const rows = e.bullets.map((line, i): Row => ({ ref: `cv.entries.${e.entry_id}.${i}`, label: `bullet ${i + 1} under ${name}`, line, max: 300 }));
+      const headerEdited = app.value!.edited_refs.some((r) => r.startsWith(`cv.entries.${e.entry_id}.header.`));
+      return [{ id: e.entry_id, name, header: h, headerEdited, rows: kept(rows) }];
     }),
-    skills: d.skill_ids.map((s) => app.value?.sources[s] ?? s),
-    letter: d.letter.paragraphs.map((line, i): Row => ({ ref: `letter.${i}`, label: `letter paragraph ${i + 1}`, line, max: 700 })),
+    // Shown while empty only when editable, so a skills or languages line can be written from nothing.
+    lists: [
+      { title: 'Skills', row: typed('cv.skills', 'the skills', d.skills_text ?? d.skill_ids.map((s) => app.value?.sources[s] ?? s).join(', ')) },
+      { title: 'Languages', row: typed('cv.languages', 'the languages', d.languages_text ?? app.value!.languages.join(', ')) },
+    ].filter((l) => l.row.line.text || editable.value),
+    letter: kept(d.letter.paragraphs.map((line, i): Row => ({ ref: `letter.${i}`, label: `letter paragraph ${i + 1}`, line, max: 700 }))),
   };
 });
 const rows = computed(() => (doc.value ? [...doc.value.summary, ...doc.value.entries.flatMap((e) => e.rows), ...doc.value.letter] : []));
@@ -57,6 +72,7 @@ const kb = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} kB`;
 const ACTION_ERRORS: Record<string, string> = {
   wrong_status: 'This application changed in the meantime. Reload the page.',
   bad_ref: 'That line no longer exists. Reload the page.',
+  bad_edit: 'That change was not saved: a header field takes at most 120 characters.',
   flagged_not_acknowledged: 'Tick the box first: some lines still need your check.',
 };
 async function act(fn: () => Promise<void>) {
@@ -71,7 +87,16 @@ async function act(fn: () => Promise<void>) {
     busy.value = false;
   }
 }
-const save = (ref: string, text: string, done: () => void) => act(() => career.edit(id, ref, text).then(done));
+const send = (edits: DraftEdit[], done: () => void) => act(() => career.edit(id, edits).then(done));
+const save = (ref: string, text: string, done: () => void) => send([{ ref, text }], done);
+const add = (ref: string, text: string, done: () => void) => send([{ op: 'add', ref, text }], done);
+/** Removing can't be undone (add a line instead), so it asks first; focus then goes to the draft, not the page top. */
+async function remove(ref: string, what: string) {
+  if (!window.confirm(`Remove ${what}? You can't undo this.`)) return;
+  await send([{ op: 'remove', ref }], () => {});
+  await nextTick();
+  reading.value?.focus();
+}
 const finalise = () => act(() => career.finalise(id, ack.value));
 const rerender = () => act(() => career.rerender(id));
 
@@ -171,35 +196,42 @@ onUnmounted(career.stop);
       </details>
 
       <div v-if="doc" class="doc">
-        <article class="reading" aria-label="Draft">
+        <article ref="reading" class="reading" aria-label="Draft" tabindex="-1">
           <h2>CV</h2>
           <p v-for="(v, i) in violations('cv')" :key="i" class="tag attention">Check: the CV {{ violationText(v) }}</p>
           <ul v-if="doc.summary.length" class="lines">
             <DraftLine
               v-for="r in doc.summary" :key="r.ref" :line-ref="r.ref" :label="r.label" :line="r.line" :max="r.max"
-              :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)"
-              @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)"
+              :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)" removable
+              @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)" @remove="remove(r.ref, r.label)"
             >
               <LineSource v-if="current?.ref === r.ref" class="inline-source" :line="r.line" :sources="app.sources" />
             </DraftLine>
           </ul>
-          <section v-for="e in doc.entries" :key="e.id" class="entry" :aria-label="e.org">
-            <h3>{{ e.org }}<span v-if="e.title" class="entry-title"> · {{ e.title }}</span></h3>
-            <p v-if="e.dates" class="hint">{{ e.dates }}</p>
+          <section v-for="e in doc.entries" :key="e.id" class="entry" :aria-label="e.name">
+            <EntryHeader
+              :entry-id="e.id" :header="e.header" :editable="editable" :edited="e.headerEdited" :busy="busy"
+              @save="send" @remove="remove(`cv.entries.${e.id}`, `${e.name} and all its lines`)"
+            />
             <ul class="lines">
               <DraftLine
                 v-for="r in e.rows" :key="r.ref" :line-ref="r.ref" :label="r.label" :line="r.line" :max="r.max"
-                :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)"
-                @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)"
+                :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)" removable
+                @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)" @remove="remove(r.ref, r.label)"
               >
                 <LineSource v-if="current?.ref === r.ref" class="inline-source" :line="r.line" :sources="app.sources" />
               </DraftLine>
             </ul>
+            <AddLine v-if="editable" :id="`cv-${e.id}`" :label="`Add line under ${e.name}`" :max="300" :busy="busy" @save="(t, done) => add(`cv.entries.${e.id}`, t, done)" />
           </section>
-          <section v-if="doc.skills.length" class="entry" aria-label="Skills">
-            <h3>Skills</h3>
-            <p v-for="(v, i) in violations('cv.skills')" :key="i" class="tag attention">Check: the skills {{ violationText(v) }}</p>
-            <p>{{ doc.skills.join(' · ') }}</p>
+          <section v-for="{ title, row: r } in doc.lists" :key="r.ref" class="entry" :aria-label="title">
+            <h3>{{ title }}</h3>
+            <ul class="lines letter">
+              <DraftLine
+                :line-ref="r.ref" :label="r.label" :line="r.line" :max="r.max" :focused="false" :editable="editable" :edited="edited.has(r.ref)"
+                :busy="busy" :violations="violations(r.ref)" @save="(t, done) => save(r.ref, t, done)"
+              />
+            </ul>
           </section>
 
           <h2>Cover letter</h2>
@@ -207,12 +239,13 @@ onUnmounted(career.stop);
           <ul class="lines letter">
             <DraftLine
               v-for="r in doc.letter" :key="r.ref" :line-ref="r.ref" :label="r.label" :line="r.line" :max="r.max"
-              :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)"
-              @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)"
+              :focused="current?.ref === r.ref" :editable="editable" :edited="edited.has(r.ref)" :busy="busy" :violations="violations(r.ref)" removable
+              @focus="focused = r.ref" @save="(t, done) => save(r.ref, t, done)" @remove="remove(r.ref, r.label)"
             >
               <LineSource v-if="current?.ref === r.ref" class="inline-source" :line="r.line" :sources="app.sources" />
             </DraftLine>
           </ul>
+          <AddLine v-if="editable" id="letter" label="Add line to the letter" :max="700" :busy="busy" @save="(t, done) => add('letter', t, done)" />
         </article>
 
         <aside v-if="current" class="source-panel" aria-label="Source of the selected line">

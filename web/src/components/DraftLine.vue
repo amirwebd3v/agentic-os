@@ -6,9 +6,9 @@ import { violationText } from '../stores/career';
 // `line.text` and violation tokens are model output: rendered with {{ }} only.
 const props = defineProps<{
   lineRef: string; label: string; line: Line; focused: boolean; editable: boolean; edited: boolean; busy: boolean;
-  violations: VerifyReport['violations']; max: number;
+  violations: VerifyReport['violations']; max: number; removable?: boolean;
 }>();
-const emit = defineEmits<{ focus: []; save: [text: string, done: () => void] }>();
+const emit = defineEmits<{ focus: []; save: [text: string, done: () => void]; remove: [] }>();
 
 const editing = ref(false);
 const text = ref('');
@@ -60,8 +60,11 @@ function save() {
     </form>
     <template v-else>
       <p class="line-text">{{ line.text }}</p>
-      <button v-if="editable" ref="editButton" type="button" class="quiet" :aria-label="`Edit ${label}`" @click="start">Edit</button>
-      <button v-else type="button" class="quiet" :aria-label="`Show the source of ${label}`">Source</button>
+      <span v-if="editable" class="line-actions">
+        <button ref="editButton" type="button" class="quiet" :aria-label="`Edit ${label}`" @click="start">Edit</button>
+        <button v-if="removable" type="button" class="quiet" :disabled="busy" :aria-label="`Remove ${label}`" @click="emit('remove')">Remove</button>
+      </span>
+      <button v-else-if="line.cites.length" type="button" class="quiet" :aria-label="`Show the source of ${label}`">Source</button>
       <p v-if="edited" class="line-meta"><span class="tag">Edited by you, not re-checked</span></p>
       <p v-else-if="violations.length" class="line-meta">
         <span v-for="(v, i) in violations" :key="i" class="tag attention">Check: this line {{ violationText(v) }}</span>

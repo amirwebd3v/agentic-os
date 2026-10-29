@@ -107,16 +107,21 @@ Deterministic checks after the call: every id exists in the master; every bullet
 
 ### 4.3 `Draft` (output of draft)
 ```ts
-type Line = { text: string; cites: string[] };  // cites: 1–5 bullet or skill ids
+type Line = { text: string; cites: string[]; removed?: true };  // cites: 1–5 bullet or skill ids
+type HeaderField = 'org' | 'title' | 'start' | 'end' | 'location';
 type Draft = {
   summary: Line | null;                          // text ≤ 300
-  entries: { entry_id: string; bullets: Line[] }[];  // each text ≤ 300
+  entries: { entry_id: string; bullets: Line[];  // each text ≤ 300
+             header?: Partial<Record<HeaderField, string>>; removed?: true }[];
   skill_ids: string[];
+  skills_text?: string; languages_text?: string; // the user's own lines (§8.2)
   letter: { paragraphs: Line[] };                // 3–5 paragraphs, each text ≤ 700
   versions: number;                              // increases on each user edit (§8)
 };
 ```
 **Employer, title, dates and location are never model output.** The render step copies them from the master by `entry_id`. Contact values appear only as placeholders (§3.3).
+
+`header`, `skills_text`, `languages_text`, `removed` and lines with `cites: []` exist only after a user edit (§8.2); the model never writes them. `removed: true` keeps the item in place, so the refs after it keep their index.
 
 ## 5. Database: migration `0006_career.sql`
 Committed by the coordinator before Wave 2 starts, so sessions don't collide. Conventions follow `0001_init.sql`.
@@ -197,13 +202,13 @@ type ViolationCode = 'unknown_cite' | 'wrong_entry' | 'missing_cite' | 'unsuppor
 ## 7. Render (`career_render`)
 - Data passed to **both** templates (`docxtemplater`, default `{tag}` delimiters, `paragraphLoop` and `linebreaks` on; flat, because its default parser has no `a.b` paths):
 ```ts
-type RenderEntry = { first: boolean; org: string; title: string; start: string; end: string; location: string; bullets: string[] };  // org/title/dates/location copied from the master by entry_id
+type RenderEntry = { first: boolean; org: string; title: string; start: string; end: string; location: string; bullets: string[] };  // org/title/dates/location copied from the master by entry_id, the draft's `header` fields on top
 type RenderModel = {
   name: string; email: string; phone: string; address: string; url: string; dob: string;  // from contact.md, only here; '' when empty
   summary: string;                                                                         // '' when the draft has none
   experience: RenderEntry[]; education: RenderEntry[]; projects: RenderEntry[]; certifications: RenderEntry[];  // draft order
-  skills: string[]; skills_text: string;          // the draft's skill_ids as master text; _text joined with ", "
-  languages: string[]; languages_text: string;    // every Languages line of the master
+  skills: string[]; skills_text: string;          // the draft's skill_ids as master text, or its skills_text split on ","; _text joined with ", "
+  languages: string[]; languages_text: string;    // every Languages line of the master, or the draft's languages_text split on ","
   company: string; role_title: string; date: string;  // from Requirements; date = render day, "28 October 2026" / "28. Oktober 2026"
   paragraphs: string[];                           // the letter
   salutation: string; closing: string;            // by master language: "Dear Hiring Manager," / "Kind regards,"; German "Sehr geehrte Damen und Herren," / "Mit freundlichen Grüßen"
@@ -218,7 +223,8 @@ type RenderModel = {
   - A headline under the name: `{role_title}` (the posting's), or type your own fixed text in the template.
   - Any condition: `{#x}` … `{/x}` shows its content when `x` is non-empty, `{^x}` … `{/x}` when it is empty.
 - Templates: `dataDir/career/template.docx` (CV) and `dataDir/career/letter-template.docx` win over the synthetic starters in `server/templates/career/` (`cv-template.docx`, `letter-template.docx`).
-- Placeholders in the final text are replaced by the contact values at this step only. Data values are never parsed as tags, so a line containing `{` or `{{x}}` stays literal.
+- Removed items (`removed: true`: a line, a paragraph, the summary or a whole entry) are left out; lines the user added render like any other.
+- Placeholders in the final text (user header, skills and languages text included) are replaced by the contact values at this step only. Data values are never parsed as tags, so a line containing `{` or `{{x}}` stays literal.
 - **No PDF** (the owner dropped it on 2026-10-29): the output is the two `.docx` files.
 - **Failure rule:** success is both `.docx` files written and recorded → `step: null`, `fail_code: null`, a `rendered` event `{ files: 2 }`. Any throw in the job (a missing or broken template, through the runner's `failCareerJob`; also a render that was running at a crash, swept on boot) → `fail_code: 'render_failed'`, `step: null`, status stays `final`, the draft is untouched. `POST …/render` retries. Either way `step` leaves `render`, so polling stops.
 - Each render first clears `out/<id>/` and the application's `application_files` rows; its job key is `career:render:<id>:<n>`, `n` = renders queued before (0 for the first).
@@ -250,7 +256,7 @@ Web: add the case to the `Approval` union in `web/src/api.ts` and to `ApprovalCa
 | `POST /api/career/applications` | `{ posting: string }` (1–30 000 chars) | `202 ApplicationSummary` with `status:'processing', step:'intake'`. `409 provider_not_configured`, `409 master_missing`, `400 posting_too_long`. |
 | `GET /api/career/applications` | — | `ApplicationSummary[]`, newest first, max 100 |
 | `GET /api/career/applications/:id` | — | `ApplicationDetail` (`404 not_found`) |
-| `PATCH /api/career/applications/:id/draft` | `{ edits: { ref: string; text: string }[] }` (1–50 edits, each text ≤ 700) | `ApplicationDetail`. `409 wrong_status` unless `draft_ready` or `flagged`. `400 bad_ref`. |
+| `PATCH /api/career/applications/:id/draft` | `{ edits: { op?: 'set' \| 'remove' \| 'add'; ref: string; text?: string }[] }` (1–50 edits, `op` defaults to `set`, each text 1–700, see **Edits**) | `ApplicationDetail`. `409 wrong_status` unless `draft_ready` or `flagged`. `400 bad_ref`, `400 bad_edit`; one bad edit rejects the whole batch. |
 | `POST /api/career/applications/:id/final` | `{ acknowledge_flagged?: boolean }` (body optional) | `202 ApplicationDetail` with `status:'final', step:'render'`, enqueues `career_render`. `409 flagged_not_acknowledged` when `flagged` and not acknowledged (`true` only). `409 wrong_status` unless `draft_ready` or `flagged`. |
 | `POST /api/career/applications/:id/render` | — | `202 ApplicationDetail` with `step:'render'`. Retries a failed render (or renders again). `409 wrong_status` unless `final` and not already rendering (`step` ≠ `render`). |
 | `PATCH /api/career/applications/:id` | `{ status?: 'applied' \| 'withdrawn' \| 'final'; follow_up_on?: string \| null }` (W2-11) | `ApplicationDetail`. Allowed moves: `final → applied`, `final \| applied → withdrawn`, `applied → final` (undo). `follow_up_on` is `YYYY-MM-DD` or `null`. `409 wrong_status` for any other move, `400 bad_date`. |
@@ -260,7 +266,17 @@ Web: add the case to the `Approval` union in `web/src/api.ts` and to `ApprovalCa
 
 **Download headers:** `Content-Disposition: attachment; filename="application-<id>-<cv|letter>.docx"`, a fixed content type (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`), `Cache-Control: no-store`. The file is looked up **by database id**, never by a client path. The global CSP is **not** loosened, so there is no in-browser PDF preview.
 
-**Edits:** each edit replaces one line's `text` (cites unchanged), bumps `draft.versions`, writes a new `application_texts` row (`version + 1`), and adds an `edited` event with `{ lines, edit_distance, version, refs }` (mean normalised Levenshtein per edited line; `refs` are line refs, ids only, and feed `edited_refs`). Audited as `career.application.edit { id, lines, edit_distance, version }`. User-edited lines are not re-verified; they are yours.
+**Edits:** per application only; the master file is never changed. `set` and `add` need `text`, `remove` takes none (else `bad_edit`).
+
+| Ref | `set` | `remove` | `add` |
+|---|---|---|---|
+| `cv.summary`, `cv.entries.<entry_id>.<i>`, `letter.<i>` | replaces the line's `text` (cites unchanged) | marks it `removed` | — |
+| `cv.entries.<entry_id>` | — | marks the entry `removed` | appends a bullet with `cites: []`; its ref is `cv.entries.<entry_id>.<n>` |
+| `letter` | — | — | appends a paragraph with `cites: []`; ref `letter.<n>` |
+| `cv.entries.<entry_id>.header.<org\|title\|start\|end\|location>` | sets that field (≤ 120 chars, else `bad_edit`) | sets it to `''` (renders blank) | — |
+| `cv.skills`, `cv.languages` | sets `skills_text` / `languages_text` (items separated by `,`) | — | — |
+
+Anything else, including a removed line or entry, an index out of range and an unknown field, is `bad_ref`. A batch bumps `draft.versions` once, writes a new `application_texts` row (`version + 1`), and adds an `edited` event with `{ lines, edit_distance, version, refs }`: `refs` are the refs touched (for `add`, the new line's ref), ids and indexes only, and feed `edited_refs`; `edit_distance` is the mean normalised Levenshtein over the model lines set or removed (a remove counts 1), `null` when the batch touched none. Audited as `career.application.edit { id, lines, edit_distance, version }`. Edited, added and header/skills/languages text is not re-verified; it is yours, and the page labels it so.
 
 ```ts
 type ApplicationStatus = 'processing' | 'draft_ready' | 'flagged' | 'failed' | 'final' | 'applied' | 'withdrawn';
@@ -278,13 +294,14 @@ type ApplicationDetail = ApplicationSummary & {
   edited_refs: string[];                 // lines the user changed
   verify: VerifyReport | null;
   sources: Record<string, string>;       // cite id -> master text (bullets and skills, as master.md is now), so the page can show each line's source;
-                                         // each draft entry_id -> "org | title | start – end" for the section heading
+                                         // each draft entry_id -> "org | title | start | end | location" for the section heading
+  languages: string[];                   // the master's Languages lines ([] when the master is missing)
   files: { kind: 'cv_docx' | 'letter_docx'; bytes: number }[];
 };
 ```
 
 ### 8.3 Errors
-Fixed codes only: `provider_not_configured`, `provider_error`, `master_missing`, `master_exists`, `import_empty`, `import_unreadable`, `contact_missing`, `posting_too_long`, `not_found`, `wrong_status`, `bad_ref`, `bad_date`, `flagged_not_acknowledged`, `files_not_ready`.
+Fixed codes only: `provider_not_configured`, `provider_error`, `master_missing`, `master_exists`, `import_empty`, `import_unreadable`, `contact_missing`, `posting_too_long`, `not_found`, `wrong_status`, `bad_ref`, `bad_edit`, `bad_date`, `flagged_not_acknowledged`, `files_not_ready`.
 
 `FailCode` (stored in `applications.fail_code`): `provider_error`, `selection_invalid`, `no_match` (nothing selected), `verify_failed`, `render_failed`, `internal`.
 

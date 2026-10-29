@@ -45,27 +45,43 @@ export type RenderModel = Record<
 > &
   Record<SectionKey, RenderEntry[]> & { skills: string[]; languages: string[]; paragraphs: string[] };
 
+// ponytail: an edited skills or languages line is split on commas, so an item can't contain one.
+const items = (line: string) => line.split(',').map((s) => s.trim()).filter(Boolean);
+
 /**
  * The data both templates get. Employer, title, dates and place come from the master by `entry_id`, never from the
- * draft; contact placeholders are restored here and nowhere else (contract §3.3).
+ * model; the user's header, skills and languages edits (contract §8.2) go on top, and removed items are left out.
+ * Contact placeholders are restored here and nowhere else (contract §3.3).
  */
 export function renderModel(draft: Draft, m: MasterIndex, contact: Contact, req: Pick<Requirements, 'company' | 'role_title'>, now: Date): RenderModel {
-  const text = (l: { text: string }) => restoreContact(l.text, contact);
+  const restore = (s: string) => restoreContact(s, contact);
+  const text = (l: { text: string }) => restore(l.text);
+  const lines = (list: Draft['letter']['paragraphs']) => list.filter((l) => !l.removed).map(text);
   const sections: Record<SectionKey, RenderEntry[]> = { experience: [], education: [], projects: [], certifications: [] };
   for (const d of draft.entries) {
+    if (d.removed) continue;
     const s = m.master.sections.find((x) => 'entries' in x && x.entries.some((e) => e.id === d.entry_id));
     const e = m.entries.get(d.entry_id);
     if (!s || !e) throw new RenderError('draft entry missing in master');
     const list = sections[SECTION_KEY[s.name as keyof typeof SECTION_KEY]];
     const end = e.end === 'present' && m.language === 'de' ? 'heute' : e.end;
-    list.push({ first: !list.length, org: e.org, title: e.title, start: e.start, end, location: e.location, bullets: d.bullets.map(text) });
+    const h = (field: keyof NonNullable<typeof d.header>, master: string) => {
+      const mine = d.header?.[field];
+      return mine === undefined ? master : restore(mine);
+    };
+    list.push({
+      first: !list.length,
+      org: h('org', e.org), title: h('title', e.title), start: h('start', e.start), end: h('end', end), location: h('location', e.location),
+      bullets: lines(d.bullets),
+    });
   }
-  const skills = draft.skill_ids.flatMap((id) => (m.skills.has(id) ? [m.sources.get(id)!] : []));
   const langSection = m.master.sections.find((s) => s.name === 'Languages');
-  const languages = langSection && 'bullets' in langSection ? langSection.bullets.map((b) => b.text) : [];
+  const skills = draft.skills_text !== undefined ? items(restore(draft.skills_text)) : draft.skill_ids.flatMap((id) => (m.skills.has(id) ? [m.sources.get(id)!] : []));
+  const languages =
+    draft.languages_text !== undefined ? items(restore(draft.languages_text)) : langSection && 'bullets' in langSection ? langSection.bullets.map((b) => b.text) : [];
   return {
     ...(Object.fromEntries(CONTACT_FIELDS.map((f) => [f, contact[f] ?? ''])) as Record<ContactField, string>),
-    summary: draft.summary ? text(draft.summary) : '',
+    summary: draft.summary && !draft.summary.removed ? text(draft.summary) : '',
     ...sections,
     skills,
     skills_text: skills.join(', '),
@@ -74,7 +90,7 @@ export function renderModel(draft: Draft, m: MasterIndex, contact: Contact, req:
     company: req.company,
     role_title: req.role_title,
     date: new Intl.DateTimeFormat(m.language === 'de' ? 'de-DE' : 'en-GB', { dateStyle: 'long' }).format(now),
-    paragraphs: draft.letter.paragraphs.map(text),
+    paragraphs: lines(draft.letter.paragraphs),
     // The letter's paragraphs carry no salutation or sign-off (tailor prompt), so a template takes them from here.
     ...(m.language === 'de'
       ? { salutation: 'Sehr geehrte Damen und Herren,', closing: 'Mit freundlichen Grüßen' }
