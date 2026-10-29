@@ -18,7 +18,7 @@ const EVIL = '<img src=x onerror="alert(1)">';
 const N = 'exp-acme-2021';
 const app = (over: Partial<ApplicationDetail> = {}): ApplicationDetail => ({
   id: 1, company: 'Acme', role_title: 'Engineer', language: 'en', status: 'draft_ready', step: 'verify', fail_code: null,
-  follow_up_on: null, created_at: '2026-10-28T00:00:00Z', updated_at: '2026-10-28T00:00:00Z',
+  follow_up_on: null, created_at: '2026-10-28T00:00:00Z', updated_at: '2026-10-28T00:00:00Z', archived_at: null,
   requirements: null, coverage: { matched: 1, total: 2 },
   draft: {
     summary: { text: 'Summary line.', cites: ['sum-1'] },
@@ -255,7 +255,8 @@ test('remove asks first and sends a remove op; a removed line keeps the refs aft
   expect(calls.some((c) => c.key.startsWith('PATCH'))).toBe(false);
   confirm.mockReturnValue(true);
   byLabel(el, 'Remove bullet 1 under Acme GmbH').click();
-  await vi.waitFor(() => expect(el.textContent).not.toContain('Cut build time'));
+  await vi.waitFor(() => expect(el.querySelector(`[data-ref="cv.entries.${N}.0"]`)).toBeNull());
+  expect(el.querySelector('details.removed')!.textContent).toContain('Cut build time'); // and it can be put back
   expect(calls.find((c) => c.key.startsWith('PATCH'))!.body).toEqual({ edits: [{ op: 'remove', ref: `cv.entries.${N}.0` }] });
   expect(byLabel(el, 'Edit bullet 2 under Acme GmbH')).not.toBeNull(); // still `.1`, not renumbered
   expect(document.activeElement).toBe(el.querySelector('.reading'));
@@ -275,11 +276,62 @@ test('add a line under an entry and a letter paragraph', async () => {
   expect(calls.find((c) => c.key.startsWith('PATCH'))!.body).toEqual({ edits: [{ op: 'add', ref: `cv.entries.${N}`, text: EVIL }] });
   expect(document.activeElement).toBe(byLabel(el, 'Add line under Acme GmbH'));
 
-  byLabel(el, 'Add line to the letter').click();
+  byLabel(el, 'Add a paragraph to the letter').click();
   await vi.waitFor(() => expect(el.querySelector('textarea')).not.toBeNull());
   type(el.querySelector('textarea')!, 'A closing paragraph.');
   el.querySelector('form')!.dispatchEvent(new Event('submit'));
   await vi.waitFor(() => expect(calls.filter((c) => c.key.startsWith('PATCH'))).toHaveLength(2));
   expect(calls.at(-1)!.body).toEqual({ edits: [{ op: 'add', ref: 'letter', text: 'A closing paragraph.' }] });
   expect(el.querySelector('img')).toBeNull();
+});
+
+test('removed lines can be put back, a master entry added, and the application renamed, retried or deleted', async () => {
+  const draft = app().draft!;
+  const gone = { ...draft, summary: { ...draft.summary!, removed: true as const } };
+  const confirm = vi.fn(() => true);
+  vi.stubGlobal('confirm', confirm);
+  const calls = api({
+    'GET /api/career/applications/1': () =>
+      app({ draft: gone, master_entries: [{ id: N, header: 'x' }, { id: 'exp-globex-2019', header: 'Globex | Developer | 2019 | 2021 | Remote' }] }),
+    'PATCH /api/career/applications/1/draft': () => app(),
+    'PATCH /api/career/applications/1': () => app({ role_title: 'Staff Engineer' }),
+  });
+  const el = await mount();
+  expect(el.querySelector('details.removed')!.textContent).toContain('Summary line.');
+  button(el, 'Put back').click();
+  await vi.waitFor(() => expect(calls.some((c) => c.key.startsWith('PATCH'))).toBe(true));
+  expect(calls.find((c) => c.key.startsWith('PATCH'))!.body).toEqual({ edits: [{ op: 'restore', ref: 'cv.summary' }] });
+
+  // Only entries the draft lacks are offered.
+  calls.length = 0;
+  const pick = el.querySelector<HTMLSelectElement>('#add-entry')!;
+  expect([...pick.options].map((o) => o.textContent)).toEqual(['Choose an entry…', 'Globex, Developer (2019–2021)']);
+  pick.value = 'exp-globex-2019';
+  pick.dispatchEvent(new Event('change'));
+  el.querySelector('form.add-row')!.dispatchEvent(new Event('submit'));
+  await vi.waitFor(() => expect(calls).toHaveLength(1));
+  expect(calls[0]!.body).toEqual({ edits: [{ op: 'add', ref: 'cv.entries', text: 'exp-globex-2019' }] });
+
+  await vi.waitFor(() => expect(button(el, 'Rename').disabled).toBe(false)); // the add has finished
+  button(el, 'Rename').click();
+  await vi.waitFor(() => expect(el.querySelector('.title-edit')).not.toBeNull());
+  type(el.querySelector('.title-edit input')!, ' Staff Engineer ');
+  el.querySelector('.title-edit')!.dispatchEvent(new Event('submit'));
+  await vi.waitFor(() => expect(el.querySelector('h1')!.textContent).toContain('Staff Engineer'));
+  expect(calls.at(-1)).toEqual({ key: 'PATCH /api/career/applications/1', body: { role_title: 'Staff Engineer' } }); // company unchanged: not sent
+
+  document.body.innerHTML = '';
+  const more = api({
+    'GET /api/career/applications/1': () => app({ status: 'failed', fail_code: 'provider_error', draft: null }),
+    'POST /api/career/applications/1/retry': () => app({ status: 'processing', step: 'intake', draft: null }),
+    'DELETE /api/career/applications/1': () => new Response(null, { status: 204 }),
+  });
+  const again = await mount();
+  button(again, 'Delete').click();
+  expect(confirm).toHaveBeenCalled();
+  await vi.waitFor(() => expect(more.some((c) => c.key === 'DELETE /api/career/applications/1')).toBe(true));
+  await vi.waitFor(() => expect(button(again, 'Retry with the same posting').disabled).toBe(false));
+  button(again, 'Retry with the same posting').click();
+  await vi.waitFor(() => expect(again.textContent).toContain('Working on it'));
+  expect(button(again, 'Delete').disabled).toBe(true); // not while a step runs
 });

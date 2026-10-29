@@ -1,74 +1,71 @@
 ---
 name: Agentic OS
-description: A quiet, text-first ledger for reviewing drafts and decisions on your own laptop.
+description: An editorial workspace for reading, correcting and tracking what the app drafts for you.
 ---
 
 # Design System: Agentic OS
 
-Shipped in W2-08 (2026-10-28). The tokens live in `web/src/style.css`; this file says what they are for. The foundation was chosen from research on 2026-10-27 (`docs/week2/implementation-plan.md`, "Design system decision").
+Redesigned 2026-10-29 (replaces "The Quiet Ledger" of W2-08). Tokens live in `web/src/style.css`; this file says what they are for.
 
 ## Overview
 
-**Creative North Star: "The Quiet Ledger"**
+**Creative North Star: "The Editorial Workspace"**
 
-Mode: **Operate**. One person opens this to read drafts line by line, check where each line came from, and decide. Light and dark are equal themes that follow the OS (no switch, plan R15). Text first, status and facts before decoration, dense without crowding, calm enough to read a long draft in.
-
-Structure follows GitHub's Primer: a persistent left navigation, dense ledger rows, flat bordered surfaces, a fixed status vocabulary, and a reading column for documents. Primer supplies the colour values; the app owns its components (no UI library; Reka UI only if a dialog, menu or tabs is ever truly needed, R14).
+Mode: **Operate**. One person opens this in short sessions to answer one question, "what do I do next?", then reads drafts line by line. The drafts are documents, so they are set like documents: a text serif at reading size, with the interface around them in the platform sans. Calm, flat, warm-neutral paper; one accent; light and dark follow the OS (no switch).
 
 ## Colors
 
-**Strategy: Restrained.** Values are copied from `@primer/primitives` 11.10.0 (MIT), not imported: its light + dark theme files are ~39 kB gzipped, over R13's 30 kB gate. Light = Primer `light`; dark = Primer `dark-dimmed` (a soft grey ground, not near-black).
+**Strategy: Restrained.** One ground, one ink, one accent; status colours only reinforce a word.
 
 | Token | Light | Dark | Role |
 |---|---|---|---|
-| `--bg` | `#f6f8fa` | `#212830` | The page ground. Never pure white or black. |
-| `--field` | `#ffffff` | `#151b23` | Inputs only. |
-| `--inset` | `#818b981f` | `#656c7633` | Source quotes, code, diffs, hover. |
-| `--fg` | `#1f2328` | `#d1d7e0` | Text (14.8:1 / 10.3:1). |
-| `--muted` | `#59636e` | `#9198a1` | Labels, hints, metadata (5.7:1 / 5.1:1). |
-| `--border` | `#d1d9e0` | `#3d444d` | Separators and panels. |
-| `--border-strong` | `#818b98` | `#656c76` | Form-control edges (3:1 non-text). |
-| `--accent` | `#0969da` | `#539bf5` | Links, the current nav item, focus, the line in focus. Dark uses a dimmed scale step because `fgColor-accent` (#478be6) is 4.3:1 there. |
-| `--accent-bg` / `--on-accent` | `#0969da` / `#fff` | `#316dca` / `#f0f6fc` | The one primary button per screen. |
-| `--accent-tint` | `#ddf4ff` | `#4184e41a` | Background of the line in focus. |
-| `--success`, `--attention`, `--danger` (+ `-tint`) | Primer `fgColor-*` / `bgColor-*-muted` | same; dark danger `#f47067` (4.0:1 for `#e5534b`) | Status outlines and notice grounds. Text on tints is always `--fg`. |
-| `--add-word` / `--del-word` | `#aceebb` / `#ffcecb` | `#46954a66` / `#e5534b66` | Word diff (Primer `diffBlob-*Word-bgColor`). |
-
-**The One Accent Rule.** One primary button per screen (Applications: "Tailor CV and letter"; application page: "Finalise and create files"). Approve/Reject, Save line, Retry export and the import are neutral buttons.
+| `--bg` | `#f6f5f1` | `#141514` | Paper ground. Never pure white or black. |
+| `--surface` | `#fdfcf9` | `#1b1c1b` | Panels, notices, the source panel, row hover: one tone step up. |
+| `--field` | `#ffffff` | `#0f100f` | Inputs only. |
+| `--inset` | ink at 4–5% | white at 5% | Hover, quotes, chips. |
+| `--fg` / `--muted` | `#1c1d1f` / `#5d6064` | `#e8e6e1` / `#a2a19c` | Text (15.9:1 / 6.1:1 light). |
+| `--border` / `--border-strong` | `#e3e1db` / `#8d9095` | `#2d2e2c` / `#6c6d69` | Row rules / control edges and section rules (3:1). |
+| `--accent` | `#1f5f4a` | `#74c9a5` | Links, current nav item, focus ring, the line in focus. |
+| `--accent-bg` | `#1f5f4a` | `#2b7a5f` | The one primary button per screen. |
+| `--success` `--attention` `--danger` (+ `-tint`) | green / amber / red | lifted for dark | Status dots and notice grounds; text on tints stays `--fg`. |
 
 ## Typography
 
-- **Sans:** Primer's `fontStack-sansSerif` without Mona Sans (not loaded; no web fonts under the CSP). **Mono:** Primer's `fontStack-monospace`, for ids, cite markers, diffs and paths.
-- **Scale:** page title 20/28 semibold; section 16/24 semibold; entry 15 semibold; UI body 14/20; labels and hints 12 muted.
-- **Reading column:** drafts and letters at 16/26 with a 68ch measure (`--measure`). Tables use tabular figures.
+- **Newsreader** (variable, optical size; self-hosted from `@fontsource-variable/newsreader`, served from `'self'` so the CSP stays strict): page titles, section titles, application and entry names, every draft and master CV line, source quotes.
+- **Platform sans** (`Segoe UI Variable` first): navigation, buttons, labels, hints, tables, forms.
+- **Scale:** Home greeting 44/50; page title 34/40; section 22/28 (26/32 inside a draft); draft text 18/29 at a 68ch measure; UI body 15/22; hints 13/19. Tabular figures in tables and dates.
 
 ## Layout
 
-- Shell: a 12rem left nav (Applications, Review with a count badge) and a scrolling main area with 24/32 px padding. Spacing is Primer's 4 px scale (`--s1` 4 … `--s7` 48).
-- **Queue / list:** a single dense table (`.ledger`) or stacked cards with a toolbar above.
-- **Document:** the reading column; at ≥ 1180 px a sticky source panel (16–24rem) beside it shows the master text behind the line in focus and a word diff. Below that the same source block opens under the focused line. Works from 800 to 1600 px with no horizontal page scroll (checked at 800 and 1280).
+- A sticky top bar: wordmark, Home · Applications · Master CV · Review (with a count), a `?` for shortcuts, and "New application". Content sits in one centred column (max 76rem) with equal 32 px margins (16 px on a phone).
+- **Home** answers "what do I do next?" in groups, in this order: Needs you (including a final draft you still have to send, and pending reviews), Follow-ups due, In progress, Sent, then Email and Social as "not connected". Rows, not tiles; each row has its next step in words and at most one inline action.
+- **Applications**: search (`/`), filter chips with counts (All, Needs you, Follow up, In progress, Sent, Archived), select rows to archive, restore or delete in bulk.
+- **Application page**: names and actions (Retry, Rename, Archive, Delete) at the top, then the state notice, then the draft as a document with its sources beside it at ≥ 1180 px (below the focused line otherwise). Removed lines stay one click from "Put back".
+- **Master CV**: the whole master as an editable document (entries with their header fields, lines, skills, languages), reorder with Up/Down, a sticky save bar while there are unsaved changes, `Ctrl S` saves. A save refuses to overwrite a change made meanwhile in Obsidian.
 
 ## Elevation & Shapes
 
-Flat. 1 px borders and tonal steps, no shadows. Radius 6 px (`--radius`) on controls, notices, panels and status labels; a full pill only for the nav count badge.
+Flat. Surfaces differ by tone and 1 px rules, never by shadow. Only things that float get a shadow: the save bar and the shortcuts dialog. Buttons and status labels are fully round (pill); inputs, panels and notices use `--radius` 8 px.
 
 ## Components
 
-- **Status label** (`.status.working|ready|attention|danger|done`): a word, a tint and a 1 px outline in the status colour (no side-tab edge). Words come from `statusLabel()` in `stores/career.ts` for every state: the running step ("Writing the draft"), Ready for review, Needs your check, Failed, Creating files, Final, Files failed, Applied, Withdrawn.
-- **Notice** (`.notice[.ok|.attention|.danger]`): a block with a 1 px border in the status colour; it opens with a bold sentence that names the state.
-- **Draft line** (`DraftLine.vue`): text, an Edit button (or Source once final), "Check: this line …" tags from the verifier in words, "Edited by you, not re-checked". Focus or click selects it; the focused line gets the accent tint and edge. Edit in place: a textarea, Save line / Cancel, Ctrl+Enter saves, Esc cancels and returns focus to Edit.
-- **Source** (`LineSource.vue`): each cited master line as a quote with its id, then "Changes from that text" with `<del>`/`<ins>` (strike-through and underline plus screen-reader "removed:"/"added:", never colour alone).
-- **Master import** (`MasterImport.vue`): a neutral button with the outcome as a notice and file warnings as a list.
+- **Status** (`.status.working|ready|attention|danger|done|archived`): a word with a coloured dot on a tint. The working dot pulses (off under reduced motion). Words come from `statusLabel()`.
+- **Next step** (`nextStep()` in `stores/career.ts`): the Home group and the owner's next action in words, shared by Home and the list filters.
+- **Notice** (`.notice[.ok|.attention|.danger]`): opens with a bold sentence naming the state.
+- **Draft line** (`DraftLine.vue`): its Edit and Remove actions appear on hover or focus (always on touch); the focused line gets the accent tint. `j`/`k` move between lines, `e` edits.
+- **Save bar** (`.savebar`): inverted pill, only while something is unsaved.
 
 ## Rules
 
-- All model- and file-supplied text renders with `{{ }}`; Markdown, if ever needed, only through `renderMarkdown`. ESLint forbids `v-html`.
-- Focus is a 2 px accent outline with 2 px offset on every interactive element.
-- Motion: none. `prefers-reduced-motion` also switches off any transition.
+- All model, file and owner text renders with `{{ }}` or `v-model`; Markdown only through `renderMarkdown`. ESLint forbids `v-html`.
+- Focus is a 2 px accent outline, 2 px offset, on every control.
+- Motion: 120 ms colour and opacity changes on controls and the pulsing working dot; `prefers-reduced-motion` turns all of it off.
 - Status is always a word; colour only reinforces it.
+- Single-key shortcuts never fire inside a field, a dialog or with a modifier (`keys.ts`).
 
 ## Don'ts
 
-- No gradients, glows, shadows at rest, decorative icons or chat-assistant styling.
-- No big-number stat tiles that don't lead to an action.
-- No UI dependency for something native HTML and a few lines of CSS do.
+- No gradients, glows, glass, decorative icons or emoji, no unicode arrows as icons.
+- No coloured side stripes on lines, cards or notices.
+- No big-number stat tiles; Home is rows that lead to an action.
+- No web font from a third-party host; no UI dependency for what native HTML and a few lines of CSS do.

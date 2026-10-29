@@ -4,9 +4,13 @@ import { createRouter, createWebHashHistory } from 'vue-router';
 export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
+    { path: '/', component: () => import('./views/HomeView.vue') },
+    { path: '/new', component: () => import('./views/NewApplicationView.vue') },
     { path: '/applications', component: () => import('./views/ApplicationsView.vue') },
     { path: '/applications/:id(\\d+)', component: () => import('./views/ApplicationView.vue'), props: true },
+    { path: '/cv', component: () => import('./views/MasterView.vue') },
     { path: '/review', component: () => import('./views/ReviewView.vue') },
-    { path: '/:pathMatch(.*)*', redirect: '/applications' },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
+  scrollBehavior: () => ({ top: 0 }),
 });

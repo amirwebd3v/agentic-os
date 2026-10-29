@@ -7,7 +7,7 @@ const busy = ref(false);
 const result = ref<{ ok: boolean; text: string; warnings: string[] } | null>(null);
 
 const ERRORS: Record<string, string> = {
-  master_exists: 'You already have a master CV. Edit career/master.md in Obsidian instead.',
+  master_exists: 'You already have a master CV. Edit it on the Master CV page.',
   import_empty: 'No usable file in career/import/ in your data folder. Put your CV or LinkedIn export there.',
   import_unreadable: 'The files in career/import/ gave no text.',
   contact_missing: 'Fill in at least your name in career/contact.md first, so it can be kept away from the model.',

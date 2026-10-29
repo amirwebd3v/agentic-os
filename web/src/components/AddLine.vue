@@ -2,7 +2,7 @@
 import { nextTick, ref } from 'vue';
 
 // A line the user writes (contract §8.2): it cites nothing and is not re-checked. Same keys as DraftLine.
-const props = defineProps<{ id: string; label: string; max: number; busy: boolean }>();
+const props = defineProps<{ id: string; label: string; max: number; busy: boolean; button?: string }>();
 const emit = defineEmits<{ save: [text: string, done: () => void] }>();
 
 const open = ref(false);
@@ -46,5 +46,5 @@ function save() {
       <span class="hint">{{ text.length }} / {{ max }} · Ctrl+Enter adds, Esc cancels</span>
     </div>
   </form>
-  <button v-else ref="opener" type="button" class="quiet" :aria-label="label" @click="start">Add line</button>
+  <button v-else ref="opener" type="button" class="quiet" :aria-label="label" @click="start">{{ props.button ?? 'Add line' }}</button>
 </template>

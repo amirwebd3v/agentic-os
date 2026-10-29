@@ -15,13 +15,12 @@ onMounted(() => Promise.allSettled([provider.load(), review.load()]));
 
 <template>
   <div v-if="needsLogin" class="login" role="alert">
-    You're not logged in. Open the login link printed by the server, or run <code>pnpm login-url</code>.
+    <p><strong>You're not logged in.</strong></p>
+    <p>Open the login link the server printed when it started, or run <code>pnpm login-url</code> for a new one.</p>
   </div>
   <template v-else>
     <ProviderBanner />
-    <div class="layout">
-      <AppNav />
-      <RouterView :key="$route.fullPath" />
-    </div>
+    <AppNav />
+    <RouterView :key="$route.path" />
   </template>
 </template>

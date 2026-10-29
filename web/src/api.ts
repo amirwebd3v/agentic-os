@@ -83,13 +83,15 @@ export type Draft = {
   skills_text?: string; languages_text?: string;
   letter: { paragraphs: Line[] }; versions: number;
 };
-/** One change to the draft (contract §8.2); `text` for `set` and `add`, none for `remove`. */
-export type DraftEdit = { op?: 'set' | 'remove' | 'add'; ref: string; text?: string };
+/** One change to the draft (contract §8.2); `text` for `set` and `add`, none for `remove` and `restore`. */
+export type DraftEdit = { op?: 'set' | 'remove' | 'add' | 'restore'; ref: string; text?: string };
 export type VerifyReport = { ok: boolean; violations: { code: string; ref: string; token?: string }[] };
 export type ApplicationSummary = {
   id: number; company: string | null; role_title: string | null; language: 'en' | 'de' | null;
   status: ApplicationStatus; step: ApplicationStep | null; fail_code: FailCode | null;
   follow_up_on: string | null; created_at: string; updated_at: string;
+  /** Set while archived: hidden from Home and the default list, restorable. */
+  archived_at: string | null;
 };
 export type FileKind = 'cv_docx' | 'letter_docx';
 export type ApplicationDetail = ApplicationSummary & {
@@ -103,6 +105,8 @@ export type ApplicationDetail = ApplicationSummary & {
   files: { kind: FileKind; bytes: number }[];
   /** Tracking, oldest date first. */
   milestones: Milestone[];
+  /** Every entry of the master (id and `org | title | start | end | location`), to add one the draft lacks. */
+  master_entries?: { id: string; header: string }[];
 };
 
 export const createApplication = (posting: string) => json<ApplicationSummary>('POST', '/api/career/applications', { posting });
@@ -131,3 +135,22 @@ export const deleteMilestone = (id: number, mid: number) => json<ApplicationDeta
 export const setFollowUp = (id: number, follow_up_on: string | null) => json<ApplicationDetail>('PATCH', appPath(id), { follow_up_on });
 export const createManualApplication = (a: { company: string; role_title: string; applied_on: string }) =>
   json<ApplicationSummary>('POST', '/api/career/applications/manual', a);
+export const renameApplication = (id: number, names: { company?: string; role_title?: string }) =>
+  json<ApplicationDetail>('PATCH', appPath(id), names);
+export const retryApplication = (id: number) => json<ApplicationDetail>('POST', `${appPath(id)}/retry`);
+export const archiveApplication = (id: number, archived: boolean) => json<ApplicationDetail>('POST', `${appPath(id)}/archive`, { archived });
+/** Permanent: the posting, draft, files and notes are deleted (204). */
+export const deleteApplication = async (id: number): Promise<void> => void (await call('DELETE', appPath(id)));
+
+// Master CV (contract §8.1). Every text in it is the owner's CV: render as text only.
+export type MasterBullet = { id?: string; text: string };
+export type MasterEntry = { id?: string; org: string; title: string; start: string; end: string; location: string; bullets: MasterBullet[] };
+export type MasterBulletSection = { name: 'Summary' | 'Skills' | 'Languages'; bullets: MasterBullet[] };
+export type MasterEntrySection = { name: 'Experience' | 'Education' | 'Projects' | 'Certifications'; entries: MasterEntry[] };
+export type MasterSection = MasterBulletSection | MasterEntrySection;
+export type MasterState =
+  | { exists: false }
+  | { exists: true; hash: string; sections: MasterSection[] }
+  | { exists: true; hash: string; error: string };
+export const getMaster = () => json<MasterState>('GET', '/api/career/master');
+export const saveMaster = (hash: string | null, sections: MasterSection[]) => json<MasterState>('PUT', '/api/career/master', { hash, sections });
