@@ -38,15 +38,17 @@ export async function buildTestApp({
   plugins = [],
   logger = false,
   webDist = join(tmpdir(), 'aos-no-web-dist'),
+  dev = false,
 }: {
   loggedIn?: boolean;
   plugins?: FastifyPluginAsync[];
   logger?: FastifyServerOptions['logger'];
   webDist?: string;
+  dev?: boolean;
 } = {}): Promise<TestApp> {
   const db = makeTestDb();
   const config = parseConfig({ vaultDir: join(tmpdir(), 'aos-test-vault'), dataDir: join(tmpdir(), 'aos-test-data') });
-  const app = await buildApp({ db, config, plugins, logger, webDist });
+  const app = await buildApp({ db, config, plugins, logger, webDist, dev });
   let cookie = '';
   if (loggedIn) {
     const r = await app.inject({ url: `/login?t=${createLoginToken(db)}`, headers: { host: HOST } });

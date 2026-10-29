@@ -1,4 +1,5 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
@@ -16,15 +17,16 @@ import { buildTestApp, capturePrompts } from './helpers.ts';
 
 const FIXTURE = join(import.meta.dirname, 'fixtures/career/linkedin');
 const NOW = new Date('2026-10-28T10:00:00.000Z');
+// The approval's commit spawns three gits; on Windows under a parallel run that takes over waitFor's 1 s default.
+const GIT_WAIT = { timeout: 15_000, interval: 200 };
 const dirs: string[] = [];
 const tmp = (prefix: string) => {
   const d = mkdtempSync(join(tmpdir(), prefix));
   dirs.push(d);
   return d;
 };
-afterEach(() => {
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
-});
+// Async rm: a handle released by the event loop (just after the approval's git commit) makes a sync rm EBUSY on Windows.
+afterEach(() => Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true, maxRetries: 10 }))));
 
 const fixtureImport = () => buildImport(readExport(FIXTURE).files, NOW)!;
 
@@ -185,7 +187,7 @@ test('import → one pending approval → approve writes both files as the user�
     { path: 'career/contact.md', content_hash: sha256(payload.contact), last_written_by: 'user' },
     { path: 'career/master.md', content_hash: sha256(master), last_written_by: 'user' },
   ]);
-  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe(`aos: approval ${approval_id}\n`));
+  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe(`aos: approval ${approval_id}\n`), GIT_WAIT);
   expect((await vaultGit(t.vault, 'show', '--name-only', '--format=')).trim().split('\n').sort()).toEqual(['career/contact.md', 'career/master.md']);
 
   const again = await t.imp();
@@ -332,7 +334,7 @@ test('CV document import: nothing contact-like reaches the model, invented text 
   expect(readFileSync(join(t.vault, 'career/master.md'), 'utf8')).toBe(payload.master);
   expect(readFileSync(join(t.vault, 'career/contact.md'), 'utf8')).toBe(CONTACT); // the owner's, untouched
   expect(t.db.prepare('SELECT path FROM vault_notes').pluck().all()).toEqual(['career/master.md']);
-  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe(`aos: approval ${approval_id}\n`));
+  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe(`aos: approval ${approval_id}\n`), GIT_WAIT);
 });
 
 test('CV document import: an unreadable file → import_unreadable, a failing model → provider_error, nothing proposed', async () => {

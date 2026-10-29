@@ -51,6 +51,13 @@ describe('guards and session, edge cases', () => {
     const { app } = await buildTestApp();
     expect((await app.inject({ url: '/login', headers: { host: 'localhost:5173' } })).statusCode).toBe(403);
   });
+  test('login redirects to the Vite page in dev, to / otherwise', async () => {
+    const prod = await buildTestApp();
+    expect((await prod.app.inject({ url: `/login?t=${prod.loginToken}`, headers: { host: HOST } })).headers.location).toBe('/');
+    const dev = await buildTestApp({ dev: true });
+    const r = await dev.app.inject({ url: `/login?t=${dev.loginToken}`, headers: { host: HOST } });
+    expect(r.headers.location).toBe('http://127.0.0.1:5173/');
+  });
   test('a logged-in, same-origin request reaches the route', async () => {
     const { app, authed } = await buildTestApp({ loggedIn: true });
     const r = await app.inject(authed({ url: '/api/health' }));
