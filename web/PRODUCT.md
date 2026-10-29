@@ -24,7 +24,7 @@ Runs on `127.0.0.1` on the owner's Windows laptop, served by the app's own serve
 
 ## Capabilities and Constraints
 
-Built: a review queue (today it carries vault-conflict items) and a provider-status banner. Planned in `docs/week2/implementation-plan.md`: master-CV import, job-posting intake, a tailoring pipeline with a verifier, an application page (per-line sources, diff against the master CV, edit in place, status), `.docx`/`.pdf` downloads, job-status polling, and a Home page that shows what is done, what waits on the owner and what comes next.
+Built: a review queue (today it carries vault-conflict items) and a provider-status banner. Planned in `docs/week2/implementation-plan.md`: master-CV import, job-posting intake, a tailoring pipeline with a verifier, an application page (per-line sources, diff against the master CV, edit in place, status), `.docx` downloads, job-status polling, and a Home page that shows what is done, what waits on the owner and what comes next.
 
 Constraints: drafts only; all text from a model or a file renders as text or through the sanitized Markdown path, never as raw HTML; a strict CSP (no inline script, no in-browser PDF preview); local only; Vue 3 + Vite + Pinia with hash routing; no new UI dependency without a ticket that needs it.
 

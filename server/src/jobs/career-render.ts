@@ -1,10 +1,8 @@
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Docxtemplater from 'docxtemplater';
 import PizZip from 'pizzip';
-import { getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
 import { CONTACT_FIELDS, loadContact } from '../career/contact.ts';
 import type { Contact, ContactField } from '../career/contact.ts';
@@ -12,7 +10,6 @@ import type { Requirements } from '../career/intake.ts';
 import { restoreContact } from '../career/redact.ts';
 import { event, latest, readMaster } from '../career/tailor.ts';
 import type { Draft, MasterIndex } from '../career/tailor.ts';
-import { repoRoot } from '../config.ts';
 import type { Config } from '../config.ts';
 import type { Database } from '../db/index.ts';
 import { isInside, sha256 } from '../vault/writer.ts';
@@ -21,14 +18,11 @@ import type { JobHandler } from './runner.ts';
 /** Fixed messages only (contract §1). */
 export class RenderError extends Error {}
 
-export const FILE_KINDS = ['cv_docx', 'cv_pdf', 'letter_docx', 'letter_pdf'] as const;
+export const FILE_KINDS = ['cv_docx', 'letter_docx'] as const;
 export type FileKind = (typeof FILE_KINDS)[number];
 
 const STARTERS = fileURLToPath(new URL('../../templates/career/', import.meta.url));
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
-const MAX_CV_PAGES = 2;
-export const WORD_TIMEOUT_MS = 60_000;
-const POWERSHELL = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(repoRoot, 'scripts', 'word-export.ps1')];
 
 /** `dataDir/career/out`, where every generated file lives (contract §2). */
 export const outRoot = (dataDir: string): string => resolve(dataDir, 'career', 'out');
@@ -88,51 +82,6 @@ export function fillDocx(template: Buffer, data: RenderModel): Buffer {
   return doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-// ---------- PDF ----------
-
-export type PdfExporter = (docx: string, pdf: string) => Promise<void>;
-
-/**
- * Runs `command` (a fixed argument array, no shell) and resolves on exit code 0. After `timeoutMs` it kills the
- * process and the Word process the script announced as `pid:<n>`, which a hung COM call would otherwise leave behind.
- */
-export function runExporter([file, ...args]: string[], timeoutMs: number): Promise<void> {
-  return new Promise((ok, no) => {
-    const child = spawn(file!, args, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, shell: false });
-    let out = '';
-    child.stdout.setEncoding('utf8').on('data', (s: string) => {
-      if (out.length < 200) out += s;
-    });
-    const timer = setTimeout(() => {
-      no(new RenderError('pdf export timed out'));
-      child.kill();
-      const pid = /^pid:(\d+)\s*$/m.exec(out)?.[1];
-      try {
-        if (pid) process.kill(Number(pid));
-      } catch {
-        // already gone
-      }
-    }, timeoutMs);
-    child.on('error', () => {
-      clearTimeout(timer);
-      no(new RenderError('pdf exporter could not start'));
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) ok();
-      else no(new RenderError('pdf export failed'));
-    });
-  });
-}
-
-/** The real exporter: Word through `scripts/word-export.ps1`, both paths checked to be inside `root`. Windows only. */
-export const wordExport =
-  (root: string): PdfExporter =>
-  async (docx, pdf) => {
-    const args = ['-In', inside(root, docx), '-Out', inside(root, pdf)];
-    await runExporter([...POWERSHELL, ...args], WORD_TIMEOUT_MS);
-  };
-
 // ---------- job ----------
 
 const Payload = z.object({ applicationId: z.number().int().positive() });
@@ -143,13 +92,12 @@ const record = (db: Database, id: number, kind: FileKind, buf: Buffer) =>
     .run(id, kind, `${id}/${kind.replace('_', '.')}`, sha256(buf), buf.length);
 
 /**
- * Job `career_render` (contract §7): fills the CV and letter templates into `dataDir/career/out/<id>/`, then PDFs
- * through `exportPdf`. The docx files are recorded first, so a failed or hung Word still delivers them. A PDF that
- * fails sets `fail_code: 'render_failed'` (status stays `final`; `POST …/render` retries). Either way `step` leaves
- * `render`. An unexpected throw ends the same way through `failCareerJob`.
+ * Job `career_render` (contract §7): fills the CV and letter templates into `dataDir/career/out/<id>/`. A throw (a
+ * missing or broken template) ends through `failCareerJob` as `render_failed` (status stays `final`; `POST …/render`
+ * retries).
  */
 export const careerRender =
-  ({ db, config, exportPdf }: { db: Database; config: Pick<Config, 'vaultDir' | 'dataDir'>; exportPdf?: PdfExporter }): JobHandler =>
+  ({ db, config }: { db: Database; config: Pick<Config, 'vaultDir' | 'dataDir'> }): JobHandler =>
   async (job) => {
     const p = Payload.safeParse(job.payload);
     if (!p.success) throw new RenderError('career_render: invalid payload');
@@ -175,28 +123,9 @@ export const careerRender =
       writeFileSync(join(dir, `${d.name}.docx`), buf);
       return buf;
     });
-    db.transaction(() => docs.forEach((d, i) => record(db, id, `${d.name}_docx`, filled[i]!)))();
-
-    let pdfs = 0;
-    let cvPages: number | null = null;
-    for (const d of docs) {
-      const pdf = join(dir, `${d.name}.pdf`);
-      try {
-        await (exportPdf ?? wordExport(root))(join(dir, `${d.name}.docx`), pdf);
-        const buf = readFileSync(pdf);
-        if (d.name === 'cv') cvPages = (await getDocumentProxy(new Uint8Array(buf))).numPages;
-        record(db, id, `${d.name}_pdf`, buf);
-        pdfs++;
-      } catch {
-        // ponytail: any PDF error counts as render_failed (the docx is already delivered); the type is not kept
-      }
-    }
-
-    const ok = pdfs === docs.length;
-    const warnings = cvPages !== null && cvPages > MAX_CV_PAGES ? ['cv_over_2_pages'] : [];
     db.transaction(() => {
-      db.prepare(`UPDATE applications SET step = NULL, fail_code = ?, updated_at = ${NOW} WHERE id = ?`).run(ok ? null : 'render_failed', id);
-      if (ok) event(db, id, 'rendered', { files: docs.length + pdfs, cv_pages: cvPages, warnings });
-      else event(db, id, 'failed', { step: 'render', fail_code: 'render_failed', files: docs.length + pdfs });
+      docs.forEach((d, i) => record(db, id, `${d.name}_docx`, filled[i]!));
+      db.prepare(`UPDATE applications SET step = NULL, fail_code = NULL, updated_at = ${NOW} WHERE id = ?`).run(id);
+      event(db, id, 'rendered', { files: docs.length });
     })();
   };
