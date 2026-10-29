@@ -29,7 +29,7 @@ const app = (over: Partial<ApplicationDetail> = {}): ApplicationDetail => ({
   },
   edited_refs: [], verify: { ok: true, violations: [] },
   sources: { 'sum-1': 'Master summary.', [N]: 'Acme GmbH | Senior Engineer | 2021-03 – 2024-06', [`${N}-1`]: 'Cut the build from 12 to 4 minutes.', 'skill-x': 'Python' },
-  files: [], render_warnings: [],
+  files: [],
   ...over,
 });
 
@@ -115,7 +115,7 @@ test('a flagged draft finalises only after the acknowledgement, then polls while
   ack.click();
   await vi.waitFor(() => expect(finalise.disabled).toBe(false));
   finalise.click();
-  await vi.waitFor(() => expect(el.textContent).toContain('Creating the Word and PDF files'));
+  await vi.waitFor(() => expect(el.textContent).toContain('Creating the Word files'));
   expect(calls.find((c) => c.key.startsWith('POST'))!.body).toEqual({ acknowledge_flagged: true });
   await vi.advanceTimersByTimeAsync(POLL_MS);
   await vi.advanceTimersByTimeAsync(POLL_MS);
@@ -126,15 +126,15 @@ test('a flagged draft finalises only after the acknowledgement, then polls while
   expect(el.querySelector('[aria-label^="Edit"]')).toBeNull(); // no edits after finalising
 });
 
-test('a failed export offers a retry and keeps the docx links', async () => {
+test('a failed render offers a retry', async () => {
   const calls = api({
-    'GET /api/career/applications/1': () => app({ status: 'final', step: null, fail_code: 'render_failed', files: [{ kind: 'cv_docx', bytes: 10 }] }),
+    'GET /api/career/applications/1': () => app({ status: 'final', step: null, fail_code: 'render_failed' }),
     'POST /api/career/applications/1/render': () => app({ status: 'final', step: 'render' }),
   });
   const el = await mount();
   expect(el.textContent).toContain('Files failed');
-  expect(el.querySelectorAll('.downloads a')).toHaveLength(1);
-  button(el, 'Retry export').click();
+  expect(el.textContent).not.toContain('export');
+  button(el, 'Create the files again').click();
   await vi.waitFor(() => expect(el.textContent).toContain('Creating files'));
   expect(calls.some((c) => c.key === 'POST /api/career/applications/1/render')).toBe(true);
   useCareerStore().stop();

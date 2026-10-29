@@ -19,7 +19,7 @@ The shapes every Wave 2–5 ticket builds against, so the sessions can run in pa
 | `dataDir/career/import/` | you | Your CV in any supported format and with any file or column names (a LinkedIn export folder, a `.pdf`/`.docx`/`.md`/`.txt` CV, `.csv`/`.tsv`/`.json` data), dropped here |
 | `dataDir/career/template.docx` | you | Your Word CV template |
 | `dataDir/career/letter-template.docx` | you, optional | Cover-letter template. If absent, a plain built-in layout is used. |
-| `dataDir/career/out/<applicationId>/` | the app | Generated `cv.docx`, `cv.pdf`, `letter.docx`, `letter.pdf`. Never in the vault, never in git. |
+| `dataDir/career/out/<applicationId>/` | the app | Generated `cv.docx`, `letter.docx`. Never in the vault, never in git. |
 
 ## 3. File formats
 
@@ -217,9 +217,8 @@ type RenderModel = {
   - Any condition: `{#x}` … `{/x}` shows its content when `x` is non-empty, `{^x}` … `{/x}` when it is empty.
 - Templates: `dataDir/career/template.docx` (CV) and `dataDir/career/letter-template.docx` win over the synthetic starters in `server/templates/career/` (`cv-template.docx`, `letter-template.docx`).
 - Placeholders in the final text are replaced by the contact values at this step only. Data values are never parsed as tags, so a line containing `{` or `{{x}}` stays literal.
-- **PDF through Word:** `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/word-export.ps1 -In <docx> -Out <pdf>`. Both paths must resolve inside `dataDir/career/out/`, arguments are passed as an array (no shell string), Word runs hidden with alerts off, a 60 s timeout kills the process and the Word process the script announced (`pid:<n>` on stdout), and a hung Word never blocks the docx. The exporter is injected; tests use a fake.
-- After rendering: a page-count check (CV ≤ 2 pages, from the PDF): the `rendered` event and `ApplicationDetail.render_warnings` carry `cv_over_2_pages`. A warning, not a failure.
-- **Failure rule:** the docx files are recorded first. A PDF that fails (Word error, timeout, not Windows) **or** any unexpected throw in the job (through the runner's `failCareerJob`, also for a render that was running at a crash, swept on boot) → `fail_code: 'render_failed'`, `step: null`, status stays `final`, the draft is untouched; the docx files that were written stay downloadable. `POST …/render` retries. Success → `step: null`, `fail_code: null`, a `rendered` event. Either way `step` leaves `render`, so polling stops.
+- **No PDF** (the owner dropped it on 2026-10-29): the output is the two `.docx` files.
+- **Failure rule:** success is both `.docx` files written and recorded → `step: null`, `fail_code: null`, a `rendered` event `{ files: 2 }`. Any throw in the job (a missing or broken template, through the runner's `failCareerJob`; also a render that was running at a crash, swept on boot) → `fail_code: 'render_failed'`, `step: null`, status stays `final`, the draft is untouched. `POST …/render` retries. Either way `step` leaves `render`, so polling stops.
 - Each render first clears `out/<id>/` and the application's `application_files` rows; its job key is `career:render:<id>:<n>`, `n` = renders queued before (0 for the first).
 
 ## 8. HTTP API
@@ -253,11 +252,11 @@ Web: add the case to the `Approval` union in `web/src/api.ts` and to `ApprovalCa
 | `POST /api/career/applications/:id/final` | `{ acknowledge_flagged?: boolean }` (body optional) | `202 ApplicationDetail` with `status:'final', step:'render'`, enqueues `career_render`. `409 flagged_not_acknowledged` when `flagged` and not acknowledged (`true` only). `409 wrong_status` unless `draft_ready` or `flagged`. |
 | `POST /api/career/applications/:id/render` | — | `202 ApplicationDetail` with `step:'render'`. Retries a failed render (or renders again). `409 wrong_status` unless `final` and not already rendering (`step` ≠ `render`). |
 | `PATCH /api/career/applications/:id` | `{ status?: 'applied' \| 'withdrawn' \| 'final'; follow_up_on?: string \| null }` (W2-11) | `ApplicationDetail`. Allowed moves: `final → applied`, `final \| applied → withdrawn`, `applied → final` (undo). `follow_up_on` is `YYYY-MM-DD` or `null`. `409 wrong_status` for any other move, `400 bad_date`. |
-| `GET /api/career/applications/:id/files/:kind` | — | The file (`kind` ∈ `cv_docx`, `cv_pdf`, `letter_docx`, `letter_pdf`). `404 not_found` for an unknown id or kind / `409 files_not_ready` when that file isn't recorded (yet, or its PDF failed). Audited as `career.file.download { id, kind }`. |
+| `GET /api/career/applications/:id/files/:kind` | — | The file (`kind` ∈ `cv_docx`, `letter_docx`). `404 not_found` for an unknown id or kind (`cv_pdf`/`letter_pdf` too) / `409 files_not_ready` when that file isn't recorded (yet, or the render failed). Audited as `career.file.download { id, kind }`. |
 
 **Polling:** the UI polls `GET …/:id` every 1.5 s while `status` is `processing` or `step` is `render`, and stops on any other state. There is no SSE and no generic jobs API.
 
-**Download headers:** `Content-Disposition: attachment; filename="application-<id>-<cv|letter>.<docx|pdf>"`, a fixed content type (`application/vnd.openxmlformats-officedocument.wordprocessingml.document` or `application/pdf`), `Cache-Control: no-store`. The file is looked up **by database id**, never by a client path. The global CSP is **not** loosened, so there is no in-browser PDF preview.
+**Download headers:** `Content-Disposition: attachment; filename="application-<id>-<cv|letter>.docx"`, a fixed content type (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`), `Cache-Control: no-store`. The file is looked up **by database id**, never by a client path. The global CSP is **not** loosened, so there is no in-browser PDF preview.
 
 **Edits:** each edit replaces one line's `text` (cites unchanged), bumps `draft.versions`, writes a new `application_texts` row (`version + 1`), and adds an `edited` event with `{ lines, edit_distance, version, refs }` (mean normalised Levenshtein per edited line; `refs` are line refs, ids only, and feed `edited_refs`). Audited as `career.application.edit { id, lines, edit_distance, version }`. User-edited lines are not re-verified; they are yours.
 
@@ -278,8 +277,7 @@ type ApplicationDetail = ApplicationSummary & {
   verify: VerifyReport | null;
   sources: Record<string, string>;       // cite id -> master text (bullets and skills, as master.md is now), so the page can show each line's source;
                                          // each draft entry_id -> "org | title | start – end" for the section heading
-  files: { kind: 'cv_docx' | 'cv_pdf' | 'letter_docx' | 'letter_pdf'; bytes: number }[];
-  render_warnings: 'cv_over_2_pages'[];  // from the latest successful render (§7)
+  files: { kind: 'cv_docx' | 'letter_docx'; bytes: number }[];
 };
 ```
 
@@ -302,7 +300,7 @@ Through `audit()`, with ids, counts and codes only (the redaction there works by
 | W2-06 | `career_*` jobs run once; an unexpected throw sets `failed/internal`; `jobs.error` contains no posting text; a due job of another kind starts before the run's next step. |
 | W2-07 | Each verifier rule, one fixture each; attempt 2 then `flagged`; no third attempt; the audit and event rows contain no text. |
 | W2-08 | Edits, `flagged` acknowledgement, polling states; all text rendered as text (no `v-html` on raw text). |
-| W2-09 | Placeholders replaced only at render; the download route serves by id, wrong kind → 404, headers as in §8.2; the Word step times out cleanly. |
+| W2-09 | Placeholders replaced only at render; the download route serves by id, wrong kind → 404, headers as in §8.2. |
 | W2-10 | The golden set (synthetic fixtures committed; your real postings run from `dataDir`) reports 0 unsupported claims; the `career-tailor` suite reuses `eval_cases` / `eval_runs`. |
 | W2-11 | Allowed and refused status moves; a follow-up date round-trips; Home lists what needs the owner (draft_ready, flagged, failed, follow-ups due) and nothing else; Email/Social cards say "not connected". |
 
@@ -316,7 +314,7 @@ Through `audit()`, with ids, counts and codes only (the redaction there works by
 | W2-06 | `db/jobs.ts` (per-kind attempts), `routes/career.ts` (endpoints in §8.2 except files), `web/src/stores/career.ts`, the career section of `web/src/api.ts` |
 | W2-07 | `jobs/career-{match,draft,verify}.ts`, `server/src/career/verify.ts`, prompts |
 | W2-08 | `web/src/views/ApplicationView.vue`, `web/src/components/*` for it, router entry, `web/src/style.css` and the shell nav (the new look), `web/DESIGN.md` at finish |
-| W2-09 | `jobs/career-render.ts`, `scripts/word-export.ps1`, the files route, `server/templates/career/` (starter templates) |
+| W2-09 | `jobs/career-render.ts`, the files route, `server/templates/career/` (starter templates) |
 | W2-10 | `scripts/eval-career.ts`, `server/test/fixtures/career/` golden set (with W2-05's canaries kept separate) |
 | W2-11 | `web/src/views/HomeView.vue`, the `PATCH` handler in `routes/career.ts`, router entry for `/` |
 | Shared, mechanical | `main.ts` plugin and handler lines, `pnpm-lock.yaml`, `CLAUDE.md` Lessons: resolve on merge, as in Week 1 |

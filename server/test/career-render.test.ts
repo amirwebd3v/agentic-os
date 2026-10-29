@@ -8,8 +8,7 @@ import { readMaster, saveText } from '../src/career/tailor.ts';
 import type { Draft } from '../src/career/tailor.ts';
 import { enqueue } from '../src/db/jobs.ts';
 import { careerRoutes, failCareerJob, failStuckApplications } from '../src/http/routes/career.ts';
-import { careerRender, fillDocx, inside, outRoot, renderModel, runExporter, wordExport } from '../src/jobs/career-render.ts';
-import type { PdfExporter } from '../src/jobs/career-render.ts';
+import { careerRender, fillDocx, inside, outRoot, renderModel } from '../src/jobs/career-render.ts';
 import { runNext } from '../src/jobs/runner.ts';
 import { buildTestApp } from './helpers.ts';
 
@@ -55,21 +54,6 @@ const docxText = (buf: Buffer) =>
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>');
 
-/** A minimal PDF with `pages` empty pages (pdf.js rebuilds the missing xref). */
-const fakePdf = (pages: number) => {
-  const kids = Array.from({ length: pages }, (_, i) => `${i + 3} 0 R`).join(' ');
-  const objs = [
-    '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
-    `2 0 obj << /Type /Pages /Kids [${kids}] /Count ${pages} >> endobj`,
-    ...Array.from({ length: pages }, (_, i) => `${i + 3} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >> endobj`),
-  ];
-  return Buffer.from(`%PDF-1.4\n${objs.join('\n')}\ntrailer << /Root 1 0 R /Size ${pages + 3} >>\n%%EOF\n`);
-};
-const fakeWord =
-  (pages = 1): PdfExporter =>
-  async (_docx, pdf) =>
-    writeFileSync(pdf, fakePdf(pages));
-
 /** A vault with the synthetic master and contact, a data dir, the app, and an application at `status`. */
 async function setup(status = 'final', step: string | null = 'render') {
   const vaultDir = tmp('aos-render-vault-');
@@ -81,7 +65,7 @@ async function setup(status = 'final', step: string | null = 'render') {
   saveText(t.db, id, 'requirements', REQ);
   saveText(t.db, id, 'draft', DRAFT);
   const config = { vaultDir, dataDir };
-  const render = (exportPdf: PdfExporter = fakeWord()) => careerRender({ db: t.db, config, exportPdf })({ payload: { applicationId: id } } as never);
+  const render = () => careerRender({ db: t.db, config })({ payload: { applicationId: id } } as never);
   const req = (method: 'GET' | 'POST', path: string, payload?: object) =>
     t.app.inject(t.authed({ method, url: `/api/career/applications/${id}${path}`, ...(payload ? { payload } : {}) }));
   const state = () => t.db.prepare('SELECT status, step, fail_code FROM applications WHERE id = ?').get(id);
@@ -121,26 +105,23 @@ test('render model: employer, title and dates from the master; placeholders rest
 
 // ---------- job ----------
 
-test('render: four files in out/<id>/, step leaves render, a long CV warns; no contact value or draft text outside the files', async () => {
+test('render: both docx files in out/<id>/, step leaves render, a rendered event; no contact value or draft text outside the files', async () => {
   const t = await setup();
   expect(t.dump()).not.toMatch(new RegExp(CONTACT_VALUES.map((v) => v.replace(/[.+]/g, '\\$&')).join('|'))); // before: nowhere
-  await t.render(fakeWord(3));
+  await t.render();
   expect(t.state()).toEqual({ status: 'final', step: null, fail_code: null });
   const files = t.db.prepare('SELECT kind, relpath, sha256, bytes FROM application_files ORDER BY kind').all() as { kind: string; relpath: string; sha256: string; bytes: number }[];
   expect(files.map((f) => [f.kind, f.relpath])).toEqual([
     ['cv_docx', `${t.id}/cv.docx`],
-    ['cv_pdf', `${t.id}/cv.pdf`],
     ['letter_docx', `${t.id}/letter.docx`],
-    ['letter_pdf', `${t.id}/letter.pdf`],
   ]);
   const cv = readFileSync(join(outRoot(t.dataDir), files[0]!.relpath));
   expect(files[0]!.bytes).toBe(cv.length);
   expect(docxText(cv)).toContain('jane.doe@example.com');
   for (const v of CONTACT_VALUES) expect(t.dump()).not.toContain(v);
   expect(t.dump()).not.toContain('deploy time');
-  const detail = (await t.req('GET', '')).json() as { render_warnings: string[]; files: unknown[] };
-  expect(detail.render_warnings).toEqual(['cv_over_2_pages']);
-  expect(detail.files).toHaveLength(4);
+  expect(t.db.prepare("SELECT detail FROM application_events WHERE kind = 'rendered'").pluck().get()).toBe('{"files":2}');
+  expect(((await t.req('GET', '')).json() as { files: unknown[] }).files).toHaveLength(2);
 });
 
 test('a template in dataDir/career wins over the starter', async () => {
@@ -154,39 +135,20 @@ test('a template in dataDir/career wins over the starter', async () => {
   expect(docxText(readFileSync(join(outRoot(t.dataDir), String(t.id), 'cv.docx')))).not.toContain('OWN-TEMPLATE');
 });
 
-test('Word failing or timing out: the docx files are still delivered, render_failed keeps final, retry renders', async () => {
-  const t = await setup();
-  enqueue(t.db, 'career_render', `career:render:${t.id}:0`, { applicationId: t.id });
-  await t.render(async () => {
-    throw new Error('pdf export timed out');
-  });
-  expect(t.state()).toEqual({ status: 'final', step: null, fail_code: 'render_failed' });
-  expect(t.db.prepare('SELECT kind FROM application_files ORDER BY kind').pluck().all()).toEqual(['cv_docx', 'letter_docx']);
-  expect((await t.req('GET', '/files/cv_docx')).statusCode).toBe(200);
-  expect((await t.req('GET', '/files/cv_pdf')).json()).toEqual({ error: 'files_not_ready' });
-
-  const retry = await t.req('POST', '/render');
-  expect(retry.statusCode).toBe(202);
-  expect(retry.json()).toMatchObject({ status: 'final', step: 'render', fail_code: null });
-  expect((await t.req('POST', '/render')).json()).toEqual({ error: 'wrong_status' }); // already rendering
-  expect(t.db.prepare(`SELECT idempotency_key FROM jobs ORDER BY id`).pluck().all()).toEqual([`career:render:${t.id}:0`, `career:render:${t.id}:1`]);
-  await t.render();
-  expect(t.state()).toEqual({ status: 'final', step: null, fail_code: null });
-  expect(t.db.prepare('SELECT count(*) FROM application_files').pluck().get()).toBe(4);
-});
-
 test('an unexpected throw in career_render is render_failed (not failed/internal) and retryable; a crash mid-render is swept on boot', async () => {
   const t = await setup();
   mkdirSync(join(t.dataDir, 'career'), { recursive: true });
   writeFileSync(join(t.dataDir, 'career', 'template.docx'), 'not a zip');
   enqueue(t.db, 'career_render', `career:render:${t.id}:0`, { applicationId: t.id });
-  const handlers = { career_render: careerRender({ db: t.db, config: t.config, exportPdf: fakeWord() }) };
+  const handlers = { career_render: careerRender({ db: t.db, config: t.config }) };
   await expect(runNext(t.db, handlers, (job) => failCareerJob(t.db, job))).rejects.toThrow(/career_render/);
   expect(t.state()).toEqual({ status: 'final', step: null, fail_code: 'render_failed' });
   expect(t.db.prepare("SELECT detail FROM application_events WHERE kind = 'failed'").pluck().get()).toBe('{"code":"render_failed"}');
 
   rmSync(join(t.dataDir, 'career', 'template.docx'));
   expect((await t.req('POST', '/render')).statusCode).toBe(202);
+  expect((await t.req('POST', '/render')).json()).toEqual({ error: 'wrong_status' }); // already rendering
+  expect(t.db.prepare(`SELECT idempotency_key FROM jobs ORDER BY id`).pluck().all()).toEqual([`career:render:${t.id}:0`, `career:render:${t.id}:1`]);
   expect(await runNext(t.db, handlers, (job) => failCareerJob(t.db, job))).toBe(true);
   expect(t.state()).toEqual({ status: 'final', step: null, fail_code: null });
 
@@ -240,57 +202,21 @@ test('GET files: fixed headers, served by id; wrong kind or id → 404; not rend
   });
   expect(docx.headers['content-security-policy']).toContain("default-src 'self'");
   expect(docx.rawPayload.equals(readFileSync(join(outRoot(t.dataDir), String(t.id), 'cv.docx')))).toBe(true);
-  const pdf = await t.req('GET', '/files/letter_pdf');
-  expect([pdf.headers['content-type'], pdf.headers['content-disposition']]).toEqual(['application/pdf', `attachment; filename="application-${t.id}-letter.pdf"`]);
+  const letter = await t.req('GET', '/files/letter_docx');
+  expect(letter.headers['content-disposition']).toBe(`attachment; filename="application-${t.id}-letter.docx"`);
 
-  for (const path of ['/files/cv', '/files/..%2F..%2Fbrain.db', '/files/CV_DOCX']) expect((await t.req('GET', path)).json()).toEqual({ error: 'not_found' });
+  for (const path of ['/files/cv_pdf', '/files/letter_pdf', '/files/cv', '/files/..%2F..%2Fbrain.db', '/files/CV_DOCX']) expect((await t.req('GET', path)).json()).toEqual({ error: 'not_found' });
   expect((await t.app.inject(t.authed({ url: '/api/career/applications/999/files/cv_docx' }))).json()).toEqual({ error: 'not_found' });
   const audit = t.db.prepare("SELECT args_redacted FROM audit_log WHERE action = 'career.file.download'").pluck().all() as string[];
-  expect(audit.map((a) => JSON.parse(a))).toEqual([{ id: t.id, kind: 'cv_docx' }, { id: t.id, kind: 'letter_pdf' }]);
+  expect(audit.map((a) => JSON.parse(a))).toEqual([{ id: t.id, kind: 'cv_docx' }, { id: t.id, kind: 'letter_docx' }]);
 
   writeFileSync(join(t.dataDir, 'secret.txt'), 'outside');
-  t.db.prepare(`UPDATE application_files SET relpath = '../secret.txt' WHERE kind = 'cv_pdf'`).run();
-  expect((await t.req('GET', '/files/cv_pdf')).json()).toEqual({ error: 'files_not_ready' });
+  t.db.prepare(`UPDATE application_files SET relpath = '../secret.txt' WHERE kind = 'cv_docx'`).run();
+  expect((await t.req('GET', '/files/cv_docx')).json()).toEqual({ error: 'files_not_ready' });
 });
 
-// ---------- PDF exporter ----------
-
-test('the Word exporter refuses paths outside out/ before spawning anything', async () => {
+test('inside: a path outside out/ is refused', () => {
   const root = tmp('aos-render-out-');
   expect(inside(root, '7/cv.docx')).toBe(join(root, '7', 'cv.docx'));
   for (const rel of ['..', '../x.docx', '', root.slice(0, -1)]) expect(() => inside(root, rel)).toThrow('path outside the output folder');
-  await expect(wordExport(root)(join(root, '..', 'x.docx'), join(root, 'x.pdf'))).rejects.toThrow('path outside the output folder');
-  await expect(wordExport(root)(join(root, 'x.docx'), join(tmpdir(), 'x.pdf'))).rejects.toThrow('path outside the output folder');
-});
-
-/** True while `pid` runs (a zombie left to a non-reaping init counts as gone). */
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, 'utf8'));
-  } catch {
-    return true; // no /proc (Windows): kill(0) succeeded
-  }
-};
-
-test('the exporter: exit code decides; a hung run is killed at the timeout together with the Word process it announced', async () => {
-  const node = process.execPath;
-  await expect(runExporter([node, '-e', 'process.exit(0)'], 5000)).resolves.toBeUndefined();
-  await expect(runExporter([node, '-e', 'process.exit(3)'], 5000)).rejects.toThrow('pdf export failed');
-  await expect(runExporter([join(tmpdir(), 'no-such-exporter')], 5000)).rejects.toThrow('pdf exporter could not start');
-
-  // Like word-export.ps1: start a second process ("Word"), announce its pid, then hang.
-  const hang = `const w = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-    console.log('pid:' + w.pid); setInterval(() => {}, 1000);`;
-  const out = tmp('aos-render-hang-');
-  const started = Date.now();
-  const run = runExporter([node, '-e', `${hang}; require('fs').writeFileSync(${JSON.stringify(join(out, 'pid'))}, String(w.pid))`], 1500);
-  await expect(run).rejects.toThrow('pdf export timed out');
-  expect(Date.now() - started).toBeLessThan(5000);
-  const word = Number(readFileSync(join(out, 'pid'), 'utf8'));
-  await expect.poll(() => alive(word), { timeout: 5000 }).toBe(false);
 });
