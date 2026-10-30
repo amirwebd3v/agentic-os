@@ -10,7 +10,7 @@ import type { Config } from '../config.ts';
 import type { Database } from '../db/index.ts';
 import type { JobHandler } from './runner.ts';
 
-const Payload = z.object({ applicationId: z.number().int().positive(), attempt: z.union([z.literal(1), z.literal(2)]) });
+const Payload = z.object({ applicationId: z.number().int().positive(), attempt: z.union([z.literal(1), z.literal(2)]), stop: z.enum(['gaps', 'ats']).optional() });
 
 /**
  * Job `career_verify` (contract §4 step 4, §6): plain code, the CV only (the letter comes later, career-v2.md §5).
@@ -39,11 +39,11 @@ export const careerVerify =
       if (report.ok || attempt === 2) {
         setApp(db, id, { step: 'ats' });
         event(db, id, 'step', { from: 'verify', to: 'ats', ...counts });
-        enqueueStep(db, id, 'ats', 0);
+        enqueueStep(db, id, 'ats', 0, p.data.stop);
       } else {
         setApp(db, id, { step: 'draft' });
         event(db, id, 'retry', { from: 'verify', to: 'draft', ...counts });
-        enqueueStep(db, id, 'draft', 2);
+        enqueueStep(db, id, 'draft', 2, p.data.stop);
       }
     })();
   };

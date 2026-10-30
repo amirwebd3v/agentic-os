@@ -274,6 +274,13 @@ fieldset.about input, fieldset.about textarea { font-weight: 400; color: var(--f
 .asks summary, .manual summary, details.removed summary { cursor: pointer; color: var(--muted); }
 .asks summary:hover, details.removed summary:hover { color: var(--fg); }
 .asks ul { margin: 0; padding-left: var(--s5); }
+/* #72, #73: the tab's one refresh button, top right; the out-of-date banner; the posting form. */
+.tab-head { margin: var(--s3) 0 0; }
+.tab-head .notice { display: flex; gap: var(--s3); align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.tab-head .notice p { margin: 0; }
+.tab-actions { justify-content: flex-end; }
+.posting-edit { display: grid; gap: var(--s3); margin-top: var(--s5); }
+.posting-edit label { display: grid; gap: var(--s1); font-size: 14px; color: var(--muted); }
 
 .doc { display: grid; grid-template-columns: minmax(0, var(--measure)); gap: var(--s7); align-items: start; margin-top: var(--s6); }
 .reading { font-family: var(--serif); font-size: 18px; line-height: 29px; min-width: 0; font-optical-sizing: auto; }

@@ -2,7 +2,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import {
-  ApiError, archiveApplication, checkAts, deleteApplication, dismissSuggestions, fileUrl, renameApplication, retryApplication, sendAnswers,
+  ApiError, archiveApplication, checkAts, deleteApplication, dismissSuggestions, editPosting, fileUrl, refreshPart, renameApplication, restoreDraft,
+  retryApplication, sendAnswers,
   type FileKind, type Line, type Suggestion,
 } from '../api';
 import CvEditor from '../components/CvEditor.vue';
@@ -69,6 +70,10 @@ const ACTION_ERRORS: Record<string, string> = {
   bad_answers: 'Those answers no longer match the questions. Reload the page.',
   unknown_suggestion: 'That suggestion no longer exists. Reload the page.',
   provider_not_configured: 'Connect a provider first (see the banner at the top).',
+  busy: 'A step is still running. Wait until it finishes.',
+  archived: 'Restore the application from the archive first.',
+  posting_too_long: 'The posting is longer than 30,000 characters. Paste only the job description.',
+  research_too_long: 'Your company notes are longer than 20,000 characters. Keep the parts that matter.',
 };
 async function act(fn: () => Promise<void>) {
   busy.value = true;
@@ -178,13 +183,68 @@ const rename = () =>
     naming.value = false;
   });
 
+// ---------- #72, #73: edit the posting, refresh a part, out-of-date banners ----------
+const sent = computed(() => !!app.value && ['applied', 'withdrawn'].includes(app.value.status));
+/** Why the refresh buttons are off, or null. The server refuses the same cases (`busy`, `archived`). */
+const refreshBlock = computed(() => {
+  if (running.value) return 'Wait until the current step finishes.';
+  if (app.value?.archived_at) return 'Restore the application from the archive first.';
+  if (dirty.value) return 'Save or discard your changes first.';
+  return null;
+});
+const STALE_CV = { posting: 'Out of date: the posting changed', master: 'Out of date: your master CV changed' } as const;
+const STALE_LETTER = { posting: 'Out of date: the posting changed', context: 'Out of date: the company details changed', cv: 'Out of date: the CV changed' } as const;
+/** Files made before the draft went back to review are from the old version. */
+const oldFiles = computed(() => !!app.value?.files.length && !['final', 'applied', 'withdrawn'].includes(app.value.status));
+const refresh = (part: 'posting' | 'cv' | 'letter') => {
+  if (part === 'letter' && !window.confirm('Start the cover letter over? Your answers to its questions are discarded and the questions are asked again.')) return;
+  return act(() => career.change(() => refreshPart(id, part)));
+};
+const TAB_ACTION = { posting: 'Re-read posting', cv: 'Refresh CV', letter: 'Refresh letter' } as const;
+/** The tab's refresh (#73): the posting always, the CV and letter once there is a draft. */
+const tabPart = computed(() => {
+  if (sent.value || !app.value) return null;
+  if (tab.value === 'posting') return 'posting';
+  return (tab.value === 'cv' || tab.value === 'letter') && app.value.draft ? tab.value : null;
+});
+const staleText = computed(() => {
+  const s = app.value?.stale;
+  if (tab.value === 'cv' && s?.cv) return STALE_CV[s.cv];
+  return tab.value === 'letter' && s?.letter ? STALE_LETTER[s.letter] : null;
+});
+const restore = () => act(() => career.change(() => restoreDraft(id, app.value!.draft!.versions)));
+
+const posting = ref({ posting: '', company_name: '', company_website: '', research: '', target_country: '' });
+const postingFrom = () => ({
+  posting: app.value?.posting ?? '',
+  company_name: app.value?.context?.company_name ?? '',
+  company_website: app.value?.context?.company_website ?? '',
+  research: app.value?.context?.research ?? '',
+  target_country: app.value?.context?.target_country ?? '',
+});
+const postingSaved = ref('');
+const postingDirty = computed(() => JSON.stringify(posting.value) !== postingSaved.value);
+const resetPosting = () => {
+  posting.value = postingFrom();
+  postingSaved.value = JSON.stringify(posting.value);
+};
+// A poll never throws away an unsaved posting edit.
+watch(() => [app.value?.posting, app.value?.context], () => (postingSaved.value && postingDirty.value ? undefined : resetPosting()), { immediate: true });
+const savePosting = () =>
+  act(async () => {
+    const { posting: text, ...rest } = posting.value;
+    const extra = Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+    await career.change(() => editPosting(id, { posting: text, ...extra }));
+    resetPosting();
+  });
+
 const tracked = computed(() => !!app.value && ['final', 'applied', 'withdrawn'].includes(app.value.status));
 const TABS = computed(() =>
   [
     { key: 'cv', label: 'CV', show: !!app.value?.draft },
     { key: 'letter', label: 'Cover letter', show: !!app.value?.draft || !!app.value?.questions },
     { key: 'fit', label: 'Fit and ATS', show: !!app.value?.gaps || !!app.value?.ats },
-    { key: 'posting', label: 'The posting', show: !!app.value?.requirements },
+    { key: 'posting', label: 'The posting', show: !!app.value?.requirements || !!app.value?.posting },
     { key: 'tracking', label: 'Tracking', show: tracked.value },
   ].filter((t) => t.show) as { key: Tab; label: string }[],
 );
@@ -298,6 +358,9 @@ onUnmounted(() => {
         <ul v-if="app.files.length" class="downloads">
           <li v-for="f in app.files" :key="f.kind"><a :href="fileUrl(app.id, f.kind)" download>{{ FILES[f.kind] }} <span class="hint">{{ kb(f.bytes) }}</span></a></li>
         </ul>
+        <p v-if="oldFiles" class="notice attention">
+          <strong>These files are from the old version.</strong> The draft changed after you finalised it; finalise again to create new files.
+        </p>
 
         <p v-if="actionError" class="notice danger" role="alert">{{ actionError }}</p>
         <p v-if="app.requirements?.injection_suspected" class="notice attention">
@@ -307,6 +370,20 @@ onUnmounted(() => {
 
       <div v-if="TABS.length > 1" class="seg tabs" role="group" aria-label="Parts of this application">
         <button v-for="t in TABS" :key="t.key" type="button" :aria-pressed="tab === t.key" @click="tab = t.key">{{ t.label }}</button>
+      </div>
+
+      <div v-if="tabPart" class="tab-head">
+        <div v-if="staleText" class="notice attention" role="status">
+          <p><strong>{{ staleText }}.</strong> {{ tabPart === 'cv' ? 'Your own lines are kept.' : 'The answers to its questions are asked again.' }}</p>
+          <button type="button" :disabled="busy || !!refreshBlock" @click="refresh(tabPart)">Refresh</button>
+        </div>
+        <span class="row tab-actions">
+          <span v-if="refreshBlock" class="hint">{{ refreshBlock }}</span>
+          <button v-if="tabPart === 'cv' && app.can_restore" type="button" class="quiet" :disabled="busy || !!refreshBlock || !editable" @click="restore">
+            Restore previous version
+          </button>
+          <button type="button" class="quiet" :disabled="busy || !!refreshBlock" @click="refresh(tabPart)">{{ TAB_ACTION[tabPart] }}</button>
+        </span>
       </div>
 
       <div v-if="tab === 'cv' && app.draft" class="doc">
@@ -352,13 +429,28 @@ onUnmounted(() => {
         <button v-if="editable" type="button" class="quiet" @click="addParagraph">Add paragraph</button>
       </section>
 
-      <section v-else-if="tab === 'posting' && app.requirements" class="asks" aria-label="What the posting asks for">
-        <h2>Must have</h2>
-        <ul><li v-for="r in app.requirements.must_have" :key="r.id">{{ r.text }}</li></ul>
-        <template v-if="app.requirements.nice_to_have.length">
-          <h2>Nice to have</h2>
-          <ul><li v-for="r in app.requirements.nice_to_have" :key="r.id">{{ r.text }}</li></ul>
+      <section v-else-if="tab === 'posting'" class="asks" aria-label="What the posting asks for">
+        <template v-if="app.requirements">
+          <h2>Must have</h2>
+          <ul><li v-for="r in app.requirements.must_have" :key="r.id">{{ r.text }}</li></ul>
+          <template v-if="app.requirements.nice_to_have.length">
+            <h2>Nice to have</h2>
+            <ul><li v-for="r in app.requirements.nice_to_have" :key="r.id">{{ r.text }}</li></ul>
+          </template>
         </template>
+        <form v-if="app.posting !== null && app.posting !== undefined && !sent" class="posting-edit" @submit.prevent="savePosting">
+          <h2>The posting</h2>
+          <label>Posting <textarea v-model="posting.posting" rows="12" maxlength="30000" required></textarea></label>
+          <label>Company <input v-model="posting.company_name" type="text" maxlength="200" /></label>
+          <label>Website <input v-model="posting.company_website" type="text" maxlength="500" /></label>
+          <label>Target country <input v-model="posting.target_country" type="text" maxlength="100" /></label>
+          <label>Your notes on the company <textarea v-model="posting.research" rows="5" maxlength="20000"></textarea></label>
+          <div class="row">
+            <button type="submit" :disabled="busy || !postingDirty || !!refreshBlock || !posting.posting.trim()">Save the posting</button>
+            <button v-if="postingDirty" type="button" class="quiet" @click="resetPosting">Discard</button>
+            <span class="hint">A changed posting is read again; the CV and letter are then out of date.</span>
+          </div>
+        </form>
       </section>
 
       <TrackingPanel v-else-if="tab === 'tracking'" :app="app" />

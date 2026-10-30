@@ -393,8 +393,11 @@ function pipeline(answers: { match?: Answer; drafts?: Answer[]; letters?: Answer
 
 const FULL_RUN = ['intake:0', 'match:0', 'gaps:0', 'draft:1', 'verify:1', 'ats:0', 'company:0', 'vacancy:0', 'questions:0', 'letter:1', 'letter_verify:1'].map((k) => `career:${k}`);
 /** The CV as the draft step writes it (no letter yet), and with the letter after the letter step. */
-const cvOnly = (d: ReturnType<typeof good>) => ({ ...asDraft(d), letter: { paragraphs: [] } });
-const withLetter = (d: ReturnType<typeof good>, versions = 2) => ({ ...asDraft(d), versions });
+const BUILT_CV = { posting: 1, master: expect.stringMatching(/^[0-9a-f]{64}$/), job: expect.any(Number) };
+const cvOnly = (d: ReturnType<typeof good>) => ({ ...asDraft(d), letter: { paragraphs: [] }, built: { cv: BUILT_CV } });
+const withLetter = (d: ReturnType<typeof good>, versions = 2) => ({
+  ...asDraft(d), versions, built: { cv: BUILT_CV, letter: { posting: 1, context: 0, cv: expect.any(Number) } },
+});
 
 test('intake → … → letter_verify: draft_ready; master cached, requirements not; no contact value in any prompt; no text in events or audit', async () => {
   const t = pipeline();

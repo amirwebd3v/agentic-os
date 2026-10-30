@@ -112,6 +112,12 @@ export type ApplicationDetail = ApplicationSummary & {
   vacancy?: { why_open: Point; business_problem: Point; outcomes: Point[]; priorities: Point[] } | null;
   questions?: { evidence: { need: string; master_ids: string[] }[]; questions: { id: string; text: string; why: string }[] } | null;
   answers?: { answers: { id: string; question_id: string; text: string | null }[]; questions_version: number } | null;
+  /** The posting as pasted (owner text, shown in a textarea only). */
+  posting?: string | null;
+  /** Why the CV or the letter is out of date (#72), null when current. */
+  stale?: { cv: 'posting' | 'master' | null; letter: 'posting' | 'context' | 'cv' | null } | null;
+  /** A CV refresh can be undone (#73). */
+  can_restore?: boolean;
 };
 export type Point = { id: string; text: string; status: 'verified' | 'assumption'; quotes: string[] };
 export type Suggestion = { id: string; section: string; entry_id?: string; text: string; why: string; keyword?: string };
@@ -158,6 +164,12 @@ export const createManualApplication = (a: { company: string; role_title: string
 export const renameApplication = (id: number, names: { company?: string; role_title?: string }) =>
   json<ApplicationDetail>('PATCH', appPath(id), names);
 export const retryApplication = (id: number) => json<ApplicationDetail>('POST', `${appPath(id)}/retry`);
+/** #72: a new posting text re-reads it (202); company fields alone or an unchanged text answer 200. */
+export const editPosting = (id: number, a: NewApplication) => json<ApplicationDetail>('PUT', `${appPath(id)}/posting`, a);
+/** #73: re-read the posting, rebuild the CV, or start the letter over (202). */
+export const refreshPart = (id: number, part: 'posting' | 'cv' | 'letter') => json<ApplicationDetail>('POST', `${appPath(id)}/refresh`, { part });
+/** Puts back the CV a refresh replaced (`409 draft_changed` when `versions` is stale). */
+export const restoreDraft = (id: number, versions: number) => json<ApplicationDetail>('POST', `${appPath(id)}/draft/restore`, { versions });
 export const archiveApplication = (id: number, archived: boolean) => json<ApplicationDetail>('POST', `${appPath(id)}/archive`, { archived });
 /** Permanent: the posting, draft, files and notes are deleted (204). */
 export const deleteApplication = async (id: number): Promise<void> => void (await call('DELETE', appPath(id)));

@@ -7,7 +7,7 @@ import type { Requirements } from '../career/intake.ts';
 import { askQuestions, companyBrief, letterSources, vacancyBrief, writeLetter } from '../career/letter.ts';
 import type { Answers, AppContext, Company, Questions, Vacancy } from '../career/letter.ts';
 import { atStep, enqueueStep, event, failStep, lastIds, latest, readMaster, saveText, setApp, TailorError } from '../career/tailor.ts';
-import type { Step } from '../career/tailor.ts';
+import type { Step, Stop } from '../career/tailor.ts';
 import type { VerifyReport } from '../career/verify.ts';
 import { verifyDraft } from '../career/verify.ts';
 import type { Database } from '../db/index.ts';
@@ -18,7 +18,11 @@ import type { JobHandler } from './runner.ts';
 // The steps after `match` (career-v2.md §3–§5): gaps → [draft → verify] → ats → company → vacancy → questions →
 // [needs_answers] → letter → letter_verify. One attempt per job; an expected model failure is `failed/provider_error`.
 
-const Payload = z.object({ applicationId: z.number().int().positive(), attempt: z.union([z.literal(0), z.literal(1), z.literal(2)]) });
+const Payload = z.object({
+  applicationId: z.number().int().positive(),
+  attempt: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+  stop: z.enum(['gaps', 'ats']).optional(),
+});
 
 /** The newest row of a kind with its version, or null. */
 export function latestRow(db: Database, id: number, kind: string): { version: number; body: string } | null {
@@ -43,7 +47,7 @@ export function currentAnswers(db: Database, id: number): Answers | null {
   return q && a && a.questions_version === q.version ? a : null;
 }
 
-type Ctx = { id: number; attempt: 0 | 1 | 2; jobId: number; llmDeps: Parameters<typeof analyseGaps>[0] };
+type Ctx = { id: number; attempt: 0 | 1 | 2; stop: Stop | undefined; jobId: number; llmDeps: Parameters<typeof analyseGaps>[0] };
 
 /**
  * A step's job: checks the payload and that the application still waits at `step`, then runs `body`. Inputs are read
@@ -55,10 +59,10 @@ const stepJob =
   async (job) => {
     const p = Payload.safeParse(job.payload);
     if (!p.success) throw new TailorError(`career_${step}: invalid payload`);
-    const { applicationId: id, attempt } = p.data;
+    const { applicationId: id, attempt, stop } = p.data;
     if (!atStep(deps.db, id, step)) return;
     const llmDeps = { db: deps.db, config: deps.config, contact: loadContact(deps.config.vaultDir), ...(deps.llm ? { llm: deps.llm } : {}) };
-    await body(deps, { id, attempt, jobId: job.id, llmDeps });
+    await body(deps, { id, attempt, stop, jobId: job.id, llmDeps });
   };
 
 /** The model call of a step; an expected failure marks the application `failed/provider_error` and gives null. */
@@ -73,34 +77,55 @@ async function model<T>(db: Database, id: number, step: Step, fn: () => Promise<
 }
 
 /** Stores a step's output, moves to `to` and queues it: one transaction. `detail`: counts only. */
-function advance(db: Database, id: number, kind: string, value: unknown, from: Step, to: Step, attempt: 0 | 1 | 2, detail: Record<string, unknown> = {}): void {
+function advance(db: Database, id: number, kind: string, value: unknown, from: Step, to: Step, attempt: 0 | 1 | 2, detail: Record<string, unknown> = {}, stop?: Stop): void {
   db.transaction(() => {
     saveText(db, id, kind, value);
     setApp(db, id, { step: to });
     event(db, id, 'step', { from, to, ...detail });
-    enqueueStep(db, id, to, attempt);
+    enqueueStep(db, id, to, attempt, stop);
+  })();
+}
+
+/**
+ * The end of a partial run (#72, #73), instead of `advance`: stores the step's output and puts the application back
+ * at rest. Pending questions (asked, not answered) → `needs_answers`; otherwise the latest verify report decides
+ * `draft_ready` or `flagged` (a `final` application comes back as a draft: render again needs finalising again).
+ */
+function rest(db: Database, id: number, kind: string, value: unknown, from: Step, detail: Record<string, unknown>): void {
+  db.transaction(() => {
+    saveText(db, id, kind, value);
+    const pending = !!latestOrNull<Questions>(db, id, 'questions')?.questions.length && !currentAnswers(db, id);
+    const ok = latestOrNull<VerifyReport>(db, id, 'verify_report')?.ok ?? true;
+    const to = pending
+      ? { status: 'needs_answers', step: 'questions', fail_code: null }
+      : { status: ok ? 'draft_ready' : 'flagged', step: 'letter_verify', fail_code: ok ? null : 'verify_failed' };
+    setApp(db, id, to);
+    event(db, id, 'status', { from, stopped: true, ...to, ...detail });
   })();
 }
 
 const verified = (points: { status: string }[]) => points.filter((p) => p.status === 'verified').length;
 
 /** Job `career_gaps` (§3): master vs requirements, then the draft (attempt 1). */
-export const careerGaps = stepJob('gaps', async ({ db, config }, { id, jobId, llmDeps }) => {
+export const careerGaps = stepJob('gaps', async ({ db, config }, { id, stop, jobId, llmDeps }) => {
   const req = latest<Requirements>(db, id, 'requirements');
   const master = readMaster(config.vaultDir);
   const gaps = await model(db, id, 'gaps', () => analyseGaps(llmDeps, master, req, jobId));
   if (!gaps) return;
-  const keywords = gaps.missing_keywords.length;
-  advance(db, id, 'gaps', gaps, 'gaps', 'draft', 1, { keywords, in_master: gaps.missing_keywords.filter((k) => k.in_master).length, suggestions: gaps.suggestions.length });
+  const counts = { keywords: gaps.missing_keywords.length, in_master: gaps.missing_keywords.filter((k) => k.in_master).length, suggestions: gaps.suggestions.length };
+  if (stop === 'gaps') return rest(db, id, 'gaps', gaps, 'gaps', counts); // a re-read of the posting ends here
+  advance(db, id, 'gaps', gaps, 'gaps', 'draft', 1, counts, stop);
 });
 
-/** Job `career_ats` (§4): the check once after verify, on the CV as drafted; then `company`. */
-export const careerAts = stepJob('ats', async ({ db }, { id, jobId, llmDeps }) => {
+/** Job `career_ats` (§4): the check once after verify, on the CV as drafted; then `company` (a CV refresh ends here). */
+export const careerAts = stepJob('ats', async ({ db }, { id, stop, jobId, llmDeps }) => {
   const draft = latest<Draft>(db, id, 'draft');
   const req = latest<Requirements>(db, id, 'requirements');
   const report = await model(db, id, 'ats', () => atsCheck(llmDeps, draft, req, postingOf(db, id), jobId));
   if (!report) return;
-  advance(db, id, 'ats', report, 'ats', 'company', 0, { score: report.score, findings: report.findings.length });
+  const counts = { score: report.score, findings: report.findings.length };
+  if (stop === 'ats') return rest(db, id, 'ats', report, 'ats', counts);
+  advance(db, id, 'ats', report, 'ats', 'company', 0, counts);
 });
 
 /** Job `career_company` (§5): from the pasted research and the posting only. */
@@ -160,7 +185,13 @@ export const careerLetter = stepJob('letter', async ({ db, config }, { id, attem
   const paragraphs = await model(db, id, 'letter', () => writeLetter(llmDeps, master, inputs, retry, jobId));
   if (!paragraphs) return;
   let { l } = lastIds(db, id, draft);
-  const next: Draft = { ...draft, letter: { paragraphs: paragraphs.map((p) => ({ id: `l-${++l}`, ...p, origin: 'model' as const })) }, versions: draft.versions + 1 };
+  const next: Draft = {
+    ...draft,
+    letter: { paragraphs: paragraphs.map((p) => ({ id: `l-${++l}`, ...p, origin: 'model' as const })) },
+    versions: draft.versions + 1,
+    // #72: what the letter rests on, for the stale check (the CV by the draft job that built it).
+    built: { ...draft.built, letter: { posting: latestRow(db, id, 'posting')!.version, context: latestRow(db, id, 'context')?.version ?? 0, cv: draft.built?.cv?.job ?? 0 } },
+  };
   advance(db, id, 'draft', next, 'letter', 'letter_verify', attempt, { attempt, paragraphs: paragraphs.length });
 });
 

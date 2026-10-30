@@ -290,14 +290,22 @@ export function event(db: Database, id: number, kind: 'step' | 'failed' | 'retry
   audit(db, { actor: 'app', action: kind === 'failed' ? 'career.application.fail' : 'career.application.step', args: { application_id: id, event: kind, ...detail } });
 }
 
+/** Where a partial run ends (#72, #73): a re-read after `gaps`, a CV refresh after `ats`. Each step's payload carries it on. */
+export type Stop = 'gaps' | 'ats';
+
 /**
- * Queues the next step of the current run, key `career:<step>:<id>:<attempt>` (contract §4). A run restarted by
- * `POST …/retry` is the n-th `career_intake` of its application and adds `:<n>`, so no key of the failed run repeats.
+ * Queues the next step of the current run, key `career:<step>:<id>:<attempt>` (contract §4). A later run (a retry's
+ * `career_intake`, or a refresh's first job, `start`) is the n-th run of its application and adds `:<n>`, so no key
+ * of an earlier run repeats.
  */
-export function enqueueStep(db: Database, id: number, step: Step, attempt: 0 | 1 | 2): void {
-  const runs = db.prepare(`SELECT count(*) FROM jobs WHERE kind = 'career_intake' AND json_extract(payload, '$.applicationId') = ?`).pluck().get(id) as number;
+export function enqueueStep(db: Database, id: number, step: Step, attempt: 0 | 1 | 2, stop?: Stop, start = false): void {
+  const runs =
+    (db
+      .prepare(`SELECT count(*) FROM jobs WHERE json_extract(payload, '$.applicationId') = ? AND (kind = 'career_intake' OR json_extract(payload, '$.start') = 1)`)
+      .pluck()
+      .get(id) as number) + (start ? 1 : 0);
   const key = `career:${step}:${id}:${attempt}${runs > 1 ? `:${runs - 1}` : ''}`;
-  enqueue(db, `career_${step}`, key, step === 'match' ? { applicationId: id } : { applicationId: id, attempt });
+  enqueue(db, `career_${step}`, key, { applicationId: id, ...(step === 'match' ? {} : { attempt }), ...(stop && { stop }), ...(start && { start: true }) });
 }
 
 /** An expected failure: status `failed` with a fixed code, in one transaction with its event. Never throws text. */
@@ -308,7 +316,7 @@ export const failStep = (db: Database, id: number, step: Step, failCode: 'provid
   })();
 
 /** Sets the application's columns (`step`, `status`, `fail_code`) with `updated_at`; call inside a transaction. */
-export const setApp = (db: Database, id: number, cols: Record<string, string>): void => {
+export const setApp = (db: Database, id: number, cols: Record<string, string | null>): void => {
   const keys = Object.keys(cols);
   db.prepare(`UPDATE applications SET ${keys.map((k) => `${k} = ?`).join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);
 };

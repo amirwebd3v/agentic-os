@@ -279,3 +279,60 @@ test('waiting for answers: the questions are asked on the page and a skip is sen
   await vi.waitFor(() => expect(el.textContent).toContain('Writing the cover letter'));
   useCareerStore().stop();
 });
+
+const tabTo = async (el: HTMLElement, name: string) => {
+  ([...el.querySelectorAll('.tabs button')].find((b) => b.textContent === name) as HTMLButtonElement).click();
+  await vi.waitFor(() => expect(el.querySelector('.tab-actions button:last-child')?.textContent).toMatch(name === 'Cover letter' ? 'Refresh letter' : 'Re-read posting'));
+};
+
+test('#72: a stale CV shows the banner; Refresh CV is off with a reason while there are unsaved edits', async () => {
+  const calls = api({
+    'GET /api/career/applications/1': () => app({ stale: { cv: 'master', letter: 'cv' }, can_restore: true }),
+    'POST /api/career/applications/1/refresh': () => app({ status: 'processing', step: 'match' }),
+  });
+  const el = await mount();
+  expect(el.textContent).toContain('Out of date: your master CV changed');
+  const refresh = button(el, 'Refresh CV') as HTMLButtonElement;
+  expect(refresh.disabled).toBe(false);
+  expect(button(el, 'Restore previous version')).toBeTruthy();
+  type(byLabel(el, 'Acme GmbH, line 1'), 'Changed.');
+  await vi.waitFor(() => expect(refresh.disabled).toBe(true));
+  expect(el.querySelector('.tab-actions')!.textContent).toContain('Save or discard your changes first.');
+  button(el, 'Discard').click();
+  await vi.waitFor(() => expect(refresh.disabled).toBe(false));
+  refresh.click();
+  await vi.waitFor(() => expect(calls.find((c) => c.key === 'POST /api/career/applications/1/refresh')?.body).toEqual({ part: 'cv' }));
+  await vi.waitFor(() => expect(el.textContent).toContain('Wait until the current step finishes.'));
+  useCareerStore().stop();
+});
+
+test('#73: Refresh letter asks first; a declined confirm sends nothing', async () => {
+  const confirm = vi.fn(() => false);
+  vi.stubGlobal('confirm', confirm);
+  const calls = api({ 'GET /api/career/applications/1': () => app({ stale: { cv: null, letter: 'posting' } }) });
+  const el = await mount();
+  await tabTo(el, 'Cover letter');
+  expect(el.textContent).toContain('Out of date: the posting changed');
+  button(el, 'Refresh letter').click();
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(calls.some((c) => c.key.includes('refresh'))).toBe(false);
+});
+
+test('#72: the posting is edited as text and saved with the company fields; old files get a notice', async () => {
+  const calls = api({
+    'GET /api/career/applications/1': () =>
+      app({ posting: EVIL, context: { company_name: 'Acme', company_website: null, target_country: null, research: null }, files: [{ kind: 'cv_docx', bytes: 2048 }] }),
+    'PUT /api/career/applications/1/posting': () => app({ status: 'processing', step: 'intake', posting: 'New posting.' }),
+  });
+  const el = await mount();
+  expect(el.textContent).toContain('These files are from the old version.');
+  await tabTo(el, 'The posting');
+  expect(el.querySelector('img')).toBeNull();
+  const box = el.querySelector('.posting-edit textarea') as HTMLTextAreaElement;
+  expect(box.value).toBe(EVIL);
+  type(box, 'New posting.');
+  await vi.waitFor(() => expect((button(el, 'Save the posting') as HTMLButtonElement).disabled).toBe(false));
+  button(el, 'Save the posting').click();
+  await vi.waitFor(() => expect(calls.find((c) => c.key.startsWith('PUT'))?.body).toEqual({ posting: 'New posting.', company_name: 'Acme' }));
+  useCareerStore().stop();
+});
