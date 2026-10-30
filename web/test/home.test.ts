@@ -60,6 +60,7 @@ test('the dashboard shows usage, cost, system state and areas from aggregates, a
   expect(el.textContent).toContain('2 need you');
   expect(el.textContent).toContain('37 lines');
   expect(el.textContent).toContain('Not connected');
-  expect(el.querySelector('table.ledger tbody tr')).not.toBeNull(); // the chart's table view
+  expect(el.textContent).not.toContain('Show as a table'); // charts have no table toggle (#74)
+  expect(el.querySelector('.cols .col')!.getAttribute('aria-label')).toMatch(/: /); // values stay readable to screen readers
   expect(el.querySelector('a[href*="/applications/"]')).toBeNull(); // no application rows on Home
 });
