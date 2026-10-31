@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 
 // One series, one hue (the accent): bars for a magnitude over days (columns) or over categories (rows).
-// Values are aggregates from the server, never personal text. A table view carries the same numbers for screen readers.
+// Values are aggregates from the server, never personal text. Each column has an aria-label with its value; rows show it as text.
 type Bar = { label: string; value: number | null; hint?: string };
 const props = withDefaults(defineProps<{ data: Bar[]; title: string; format?: (n: number) => string; horizontal?: boolean; height?: number }>(), {
   format: (n: number) => n.toLocaleString('en'), horizontal: false, height: 140,
@@ -34,12 +34,5 @@ const ticks = computed(() => (props.data.length > 10 ? [0, Math.floor(props.data
         <span class="val">{{ d.value === null ? '—' : format(d.value) }}</span>
       </li>
     </ul>
-    <details class="as-table">
-      <summary>Show as a table</summary>
-      <table class="ledger">
-        <thead><tr><th scope="col">{{ horizontal ? 'Item' : 'Day' }}</th><th scope="col" class="num">{{ title }}</th></tr></thead>
-        <tbody><tr v-for="d in data" :key="d.label"><td>{{ d.label }}</td><td class="num">{{ d.value === null ? '—' : format(d.value) }}</td></tr></tbody>
-      </table>
-    </details>
   </figure>
 </template>
