@@ -16,7 +16,7 @@ export interface CareerIntakeDeps {
   llm?: typeof structured;
 }
 
-const Payload = z.object({ applicationId: z.number().int().positive() });
+const Payload = z.object({ applicationId: z.number().int().positive(), stop: z.enum(['gaps', 'ats']).optional() });
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 /** Job `career_intake` (contract §4 step 1). Expected failures mark the application and return; only fixed messages are thrown. */
@@ -60,6 +60,6 @@ export const careerIntake =
       );
       db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'step', ?)`).run(id, JSON.stringify(detail));
       audit(db, { actor: 'app', action: 'career.application.step', args: { application_id: id, ...detail } });
-      enqueueStep(db, id, 'match', 0);
+      enqueueStep(db, id, 'match', 0, p.data.stop);
     })();
   };

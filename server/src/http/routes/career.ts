@@ -8,7 +8,7 @@ import type { Requirements } from '../../career/intake.ts';
 import { BULLET_SECTIONS } from '../../career/master.ts';
 import type { BulletSectionName, EntrySectionName } from '../../career/master.ts';
 import { coverage, enqueueStep, event, lastIds, readMaster, saveText, setApp, TailorError } from '../../career/tailor.ts';
-import type { DraftV1, MasterIndex, Selection } from '../../career/tailor.ts';
+import type { DraftV1, MasterIndex, Selection, Stop } from '../../career/tailor.ts';
 import { audit } from '../../db/audit.ts';
 import type { Database } from '../../db/index.ts';
 import { enqueue } from '../../db/jobs.ts';
@@ -90,11 +90,25 @@ function enqueueRender(db: Database, id: number): void {
  * intake key takes the next attempt number; the steps store new versions, and `latest()` reads the newest.
  */
 export function retryRun(db: Database, id: number, masterHash: string): void {
+  startRun(db, id, 'intake', { hash: masterHash });
+}
+
+/**
+ * Starts a run at `from` (#72, #73): the whole pipeline (`intake` from a retry), a re-read (`intake`, `stop: 'gaps'`),
+ * a CV refresh (`match`, `stop: 'ats'`) or a letter refresh (`company`, to the end). The first job's key takes the
+ * next run number. `hash`: the master hash a run that rebuilds the CV records; null keeps the stored one.
+ */
+export function startRun(db: Database, id: number, from: 'intake' | 'match' | 'company', o: { hash?: string | null; stop?: Stop | undefined; detail?: Record<string, unknown> } = {}): void {
   db.transaction(() => {
-    db.prepare(`UPDATE applications SET status = 'processing', step = 'intake', fail_code = NULL, master_hash = ?, updated_at = ${NOW} WHERE id = ?`).run(masterHash, id);
-    event(db, id, 'retry', { to: 'intake' });
+    db.prepare(`UPDATE applications SET status = 'processing', step = ?, fail_code = NULL, master_hash = COALESCE(?, master_hash), updated_at = ${NOW} WHERE id = ?`).run(
+      from,
+      o.hash ?? null,
+      id,
+    );
+    event(db, id, 'retry', { to: from, ...(o.stop && { stop: o.stop }), ...o.detail });
+    if (from !== 'intake') return enqueueStep(db, id, from, 0, o.stop, true);
     const n = db.prepare(`SELECT count(*) FROM jobs WHERE kind = 'career_intake' AND json_extract(payload, '$.applicationId') = ?`).pluck().get(id) as number;
-    enqueue(db, 'career_intake', `career:intake:${id}:${n}`, { applicationId: id });
+    enqueue(db, 'career_intake', `career:intake:${id}:${n}`, { applicationId: id, ...(o.stop && { stop: o.stop }) });
   })();
 }
 
@@ -160,7 +174,13 @@ function putDraft(stored: Draft, body: DraftPut, masterEntryIds: ReadonlySet<str
     names.add(s.name);
     sections.push(bulletSection ? { name: s.name as BulletSectionName, bullets: s.bullets!.map(line) } : { name: s.name as EntrySectionName, entries: s.entries!.map(entry) });
   }
-  const draft: Draft = { v: 2, cv: { sections }, letter: { paragraphs: body.letter.paragraphs.map(line) }, versions: stored.versions + 1 };
+  const draft: Draft = {
+    v: 2,
+    cv: { sections },
+    letter: { paragraphs: body.letter.paragraphs.map(line) },
+    versions: stored.versions + 1,
+    ...(stored.built && { built: stored.built }), // an owner's edit changes neither part's sources (#72)
+  };
   if (bad) return null;
   for (const old of oldLines.values()) if (old.origin === 'model' && !seen.has(old.id)) distances.push(1);
   return { draft, refs, distances };
@@ -193,10 +213,56 @@ function draftSources(master: MasterIndex['master'], draft: Draft): Record<strin
   return Object.fromEntries(ids.filter((i) => all.has(i)).map((i) => [i, all.get(i)!]));
 }
 
+/** sha256 of `career/master.md`, or null when it is missing. */
+function masterHash(vaultDir: string): string | null {
+  try {
+    return sha256(readFileSync(join(vaultDir, 'career', 'master.md'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #72: why each part is out of date, or null. The CV: the posting or the master changed since it was built. The
+ * letter: the posting, the company context or the CV (another draft job) changed since it was written. A draft from
+ * before `built` was recorded was built from posting 1, context 1 (if any) and the run's master.
+ */
+function staleness(db: Database, id: number, draft: Draft, runHash: string, nowHash: string | null) {
+  const v = (kind: string) => latestRow(db, id, kind)?.version ?? 0;
+  const cv = draft.built?.cv ?? { posting: 1, master: runHash, job: 0 };
+  const letter = draft.built?.letter ?? { posting: 1, context: Math.min(v('context'), 1), cv: 0 };
+  return {
+    cv: v('posting') !== cv.posting ? 'posting' : nowHash && nowHash !== cv.master ? 'master' : null,
+    letter: !draft.letter.paragraphs.length
+      ? null
+      : v('posting') !== letter.posting
+        ? 'posting'
+        : v('context') !== letter.context
+          ? 'context'
+          : cv.job !== letter.cv
+            ? 'cv'
+            : null,
+  };
+}
+
+/**
+ * Where the running pipeline started and stops, so the page lists only those steps: the newest `startRun` event
+ * (every run after the first starts there), else the create run, which goes from intake to the end.
+ */
+function currentRun(db: Database, id: number): { from: 'intake' | 'match' | 'company'; stop: Stop | null } {
+  const ev = db
+    .prepare(`SELECT detail FROM application_events WHERE application_id = ? AND kind = 'retry' AND json_extract(detail, '$.to') IN ('intake', 'match', 'company') ORDER BY id DESC LIMIT 1`)
+    .pluck()
+    .get(id) as string | undefined;
+  const d = ev ? (JSON.parse(ev) as { to: 'intake' | 'match' | 'company'; stop?: Stop }) : null;
+  return { from: d?.to ?? 'intake', stop: d?.stop ?? null };
+}
+
 /** `ApplicationDetail` (contract §8.2), or null when there is no such application. */
 function applicationDetail(db: Database, vaultDir: string, id: number) {
-  const summary = db.prepare(`SELECT ${SUMMARY} FROM applications WHERE id = ? AND deleted_at IS NULL`).get(id);
+  const summary = db.prepare(`SELECT ${SUMMARY}, master_hash FROM applications WHERE id = ? AND deleted_at IS NULL`).get(id) as { master_hash: string; status: string } | undefined;
   if (!summary) return null;
+  const { master_hash: runHash, ...rest } = summary;
   const requirements = latest<Requirements>(db, id, 'requirements');
   const selection = latest<Selection>(db, id, 'selection');
   const raw = latest<Draft | DraftV1>(db, id, 'draft');
@@ -208,7 +274,11 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
     .pluck()
     .all(id) as string[];
   return {
-    ...summary,
+    ...rest,
+    posting: latestRow(db, id, 'posting')?.body ?? null, // the owner's pasted text: rendered as text only
+    stale: draft ? staleness(db, id, draft, runHash, masterHash(vaultDir)) : null,
+    can_restore: draft?.built?.cv?.previous !== undefined, // a CV refresh can be undone (#73)
+    run: rest.status === 'processing' ? currentRun(db, id) : null,
     requirements,
     coverage: requirements && selection ? coverage(requirements, selection) : null,
     draft,
@@ -249,11 +319,15 @@ export const careerRoutes =
     const vaultDir = vaultOverride ?? api.config.vaultDir;
     const masterPath = join(vaultDir, 'career', 'master.md');
     failStuckApplications(db); // boot: openDb's recoverStaleLocks fails a career job that was running at a crash
-    type App = { status: string; step: string | null; master_hash: string };
+    type App = { status: string; step: string | null; master_hash: string; archived_at: string | null };
     // A deleted application is gone for every route: 404, like an unknown id.
-    const appRow = (id: number) => db.prepare('SELECT status, step, master_hash FROM applications WHERE id = ? AND deleted_at IS NULL').get(id) as App | undefined;
+    const appRow = (id: number) =>
+      db.prepare('SELECT status, step, master_hash, archived_at FROM applications WHERE id = ? AND deleted_at IS NULL').get(id) as App | undefined;
     /** A step runs: the pipeline, or a render (which completes only while the status is `final`). */
     const running = (a: App) => a.status === 'processing' || (a.status === 'final' && a.step === 'render');
+    /** #72/#73: the code that refuses a posting edit or a refresh, or null. Sent or withdrawn applications stay as sent. */
+    const unrefreshable = (a: App) =>
+      a.archived_at ? 'archived' : running(a) ? 'busy' : a.master_hash === '' || a.status === 'applied' || a.status === 'withdrawn' ? 'wrong_status' : null;
     /** The master's hash for a new run, or the fixed code that refuses one. */
     const runHash = (): { hash: string } | { error: 'provider_not_configured' | 'master_missing' } => {
       if (!llm && !getLlm(api.config)) return { error: 'provider_not_configured' };
@@ -266,39 +340,46 @@ export const careerRoutes =
 
     type CreateBody = { posting: string; company_name?: string; company_website?: string; research?: string; target_country?: string };
     const optional = (max: number) => ({ type: 'string', maxLength: max });
-    api.post<{ Body: CreateBody }>(
-      '/career/applications',
-      {
-        schema: {
-          body: {
-            type: 'object',
-            // No maxLength on the posting and the research: too long is a fixed code, not Fastify's validation text.
-            properties: {
-              posting: { type: 'string', minLength: 1 },
-              company_name: optional(200),
-              company_website: optional(500),
-              research: { type: 'string' },
-              target_country: optional(100),
-            },
-            required: ['posting'],
-            additionalProperties: false,
-          },
-        },
+    const formBody = {
+      type: 'object',
+      // No maxLength on the posting and the research: too long is a fixed code, not Fastify's validation text.
+      properties: {
+        posting: { type: 'string', minLength: 1 },
+        company_name: optional(200),
+        company_website: optional(500),
+        research: { type: 'string' },
+        target_country: optional(100),
       },
-      async (req, reply) => {
+      required: ['posting'],
+      additionalProperties: false,
+    };
+    /** The form (create, and the posting edit of #72): the fixed code that refuses it, or its `context`. */
+    const readForm = (b: CreateBody): { error: string } | { ctx: AppContext } => {
+      if (b.posting.length > MAX_POSTING_CHARS) return { error: 'posting_too_long' };
+      if ((b.research?.length ?? 0) > MAX_RESEARCH_CHARS) return { error: 'research_too_long' };
+      // career-v2.md §5: the form beyond the posting, one `context` row. The website is text only, never fetched.
+      const oneLine = (v: string | undefined) => v?.replace(/[\p{Cc}\s]+/gu, ' ').trim() || null;
+      return {
+        ctx: {
+          company_name: oneLine(b.company_name),
+          company_website: oneLine(b.company_website),
+          target_country: oneLine(b.target_country),
+          research: b.research?.replace(/\r\n?/g, '\n').replace(/[^\P{Cc}\n\t]/gu, ' ').trim() || null,
+        },
+      };
+    };
+    /** Counts and which fields were given, never their values. */
+    const formAudit = (ctx: AppContext) => {
+      const given = (['company_name', 'company_website', 'target_country'] as const).filter((k) => ctx[k]);
+      return ctx.research || given.length ? { research_chars: ctx.research?.length ?? 0, fields: given } : {};
+    };
+    api.post<{ Body: CreateBody }>('/career/applications', { schema: { body: formBody } }, async (req, reply) => {
         const { posting } = req.body;
-        if (posting.length > MAX_POSTING_CHARS) return reply.code(400).send({ error: 'posting_too_long' });
-        if ((req.body.research?.length ?? 0) > MAX_RESEARCH_CHARS) return reply.code(400).send({ error: 'research_too_long' });
+        const form = readForm(req.body);
+        if ('error' in form) return reply.code(400).send(form);
         const run = runHash();
         if ('error' in run) return reply.code(409).send(run);
-        // career-v2.md §5: the form beyond the posting, one `context` row. The website is text only, never fetched.
-        const oneLine = (v: string | undefined) => v?.replace(/[\p{Cc}\s]+/gu, ' ').trim() || null;
-        const ctx: AppContext = {
-          company_name: oneLine(req.body.company_name),
-          company_website: oneLine(req.body.company_website),
-          target_country: oneLine(req.body.target_country),
-          research: req.body.research?.replace(/\r\n?/g, '\n').replace(/[^\P{Cc}\n\t]/gu, ' ').trim() || null,
-        };
+        const { ctx } = form;
         const summary = db.transaction(() => {
           // The typed company name shows until intake reads the posting's.
           const row = db.prepare(`INSERT INTO applications (step, master_hash, company) VALUES ('intake', ?, ?) RETURNING ${SUMMARY}`).get(run.hash, ctx.company_name) as { id: number };
@@ -308,11 +389,117 @@ export const careerRoutes =
           enqueue(db, 'career_intake', `career:intake:${row.id}:0`, { applicationId: row.id });
           return row;
         })();
-        // Counts and which fields were given, never their values.
-        const given = (['company_name', 'company_website', 'target_country'] as const).filter((k) => ctx[k]);
-        const extra = ctx.research || given.length ? { research_chars: ctx.research?.length ?? 0, fields: given } : {};
-        audit(db, { actor: 'user', action: 'career.application.create', args: { id: summary.id, chars: posting.length, ...extra } });
+        audit(db, { actor: 'user', action: 'career.application.create', args: { id: summary.id, chars: posting.length, ...formAudit(ctx) } });
         return reply.code(202).send(summary);
+    });
+
+    // ---------- #72, #73: edit the posting, refresh a part, restore the CV ----------
+    const EMPTY_CTX: AppContext = { company_name: null, company_website: null, target_country: null, research: null };
+    api.put<{ Params: { id: number }; Body: CreateBody }>('/career/applications/:id/posting', { schema: { params: ID_PARAMS, body: formBody } }, async (req, reply) => {
+      const { id } = req.params;
+      const app = appRow(id);
+      if (!app) return reply.code(404).send({ error: 'not_found' });
+      const no = unrefreshable(app);
+      if (no) return reply.code(409).send({ error: no });
+      const form = readForm(req.body);
+      if ('error' in form) return reply.code(400).send(form);
+      const { ctx } = form;
+      const { posting } = req.body;
+      const ctxRow = latestRow(db, id, 'context');
+      const newPosting = posting !== postingOf(db, id);
+      const newCtx = JSON.stringify(ctx) !== JSON.stringify(ctxRow ? (JSON.parse(ctxRow.body) as AppContext) : EMPTY_CTX);
+      if (!newPosting && !newCtx) return applicationDetail(db, vaultDir, id); // nothing changed: no new version, no run
+      const run = newPosting ? runHash() : null;
+      if (run && 'error' in run) return reply.code(409).send(run);
+      db.transaction(() => {
+        if (newCtx) saveText(db, id, 'context', ctx);
+        // The posting is raw text, not JSON.
+        if (newPosting)
+          db.prepare(
+            `INSERT INTO application_texts (application_id, kind, version, body)
+             VALUES (?, 'posting', (SELECT MAX(version) + 1 FROM application_texts WHERE application_id = ? AND kind = 'posting'), ?)`,
+          ).run(id, id, posting);
+        const versions = { posting: latestRow(db, id, 'posting')!.version, context: latestRow(db, id, 'context')?.version ?? 0 };
+        db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'edited', ?)`).run(id, JSON.stringify({ ...versions, rerun: newPosting }));
+        db.prepare(`UPDATE applications SET updated_at = ${NOW} WHERE id = ?`).run(id);
+        // The re-read: intake → match → gaps, then back at rest. A failed application runs the whole pipeline (a retry).
+        if (run) startRun(db, id, 'intake', app.status === 'failed' ? { hash: run.hash } : { stop: 'gaps', detail: { run: 'posting', from: app.status } });
+      })();
+      audit(db, { actor: 'user', action: 'career.application.posting_edit', args: { id, chars: posting.length, ...formAudit(ctx), rerun: newPosting } });
+      return reply.code(newPosting ? 202 : 200).send(applicationDetail(db, vaultDir, id));
+    });
+
+    type Part = 'posting' | 'cv' | 'letter';
+    const RUN_START = { posting: 'intake', cv: 'match', letter: 'company' } as const;
+    const STOP = { posting: 'gaps', cv: 'ats', letter: undefined } as const;
+    api.post<{ Params: { id: number }; Body: { part: Part } }>(
+      '/career/applications/:id/refresh',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: { type: 'object', properties: { part: { enum: ['posting', 'cv', 'letter'] } }, required: ['part'], additionalProperties: false },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        const { part } = req.body;
+        const app = appRow(id);
+        if (!app) return reply.code(404).send({ error: 'not_found' });
+        const no = unrefreshable(app);
+        if (no) return reply.code(409).send({ error: no });
+        // The CV starts at match (needs the requirements); the letter is written onto a draft.
+        if ((part !== 'posting' && !latestRow(db, id, 'requirements')) || (part === 'letter' && !latestRow(db, id, 'draft'))) {
+          return reply.code(409).send({ error: 'wrong_status' });
+        }
+        const run = runHash();
+        if ('error' in run) return reply.code(409).send(run);
+        // A failed application is not at rest: its refresh runs on to the end, like a retry from that step.
+        const stop = app.status === 'failed' ? undefined : STOP[part];
+        startRun(db, id, RUN_START[part], { hash: part === 'cv' ? run.hash : null, stop, detail: { run: part, from: app.status } });
+        audit(db, { actor: 'user', action: 'career.application.refresh', args: { id, part } });
+        return reply.code(202).send(applicationDetail(db, vaultDir, id));
+      },
+    );
+
+    // Puts back the CV a refresh replaced, as a new version; the letter stays. Refused like a PUT of the draft.
+    api.post<{ Params: { id: number }; Body: { versions: number } }>(
+      '/career/applications/:id/draft/restore',
+      {
+        schema: {
+          params: ID_PARAMS,
+          body: { type: 'object', properties: { versions: { type: 'integer', minimum: 1 } }, required: ['versions'], additionalProperties: false },
+        },
+      },
+      async (req, reply) => {
+        const { id } = req.params;
+        const app = appRow(id);
+        if (!app) return reply.code(404).send({ error: 'not_found' });
+        const no = unrefreshable(app);
+        if (no) return reply.code(409).send({ error: no });
+        const raw = latest<Draft | DraftV1>(db, id, 'draft');
+        if (!raw || (app.status !== 'draft_ready' && app.status !== 'flagged')) return reply.code(409).send({ error: 'wrong_status' });
+        const master = masterOrNull(vaultDir);
+        const stored = toDraftV2(raw, master);
+        if (req.body.versions !== stored.versions) return reply.code(409).send({ error: 'draft_changed' });
+        const previous = stored.built?.cv?.previous;
+        if (previous === undefined) return reply.code(409).send({ error: 'wrong_status' });
+        const body = db.prepare(`SELECT body FROM application_texts WHERE application_id = ? AND kind = 'draft' AND version = ?`).pluck().get(id, previous) as string;
+        const old = toDraftV2(JSON.parse(body) as Draft | DraftV1, master);
+        const oldCv = old.built?.cv ?? { posting: 1, master: app.master_hash, job: 0 };
+        const cvBuilt = { posting: oldCv.posting, master: oldCv.master, job: oldCv.job }; // one step back only: no `previous`
+        const draft: Draft = {
+          ...stored,
+          cv: old.cv,
+          versions: stored.versions + 1,
+          built: { cv: cvBuilt, ...(stored.built?.letter && { letter: stored.built.letter }) },
+        };
+        db.transaction(() => {
+          saveText(db, id, 'draft', draft);
+          db.prepare(`INSERT INTO application_events (application_id, kind, detail) VALUES (?, 'edited', ?)`).run(id, JSON.stringify({ restored: previous, version: draft.versions }));
+          db.prepare(`UPDATE applications SET updated_at = ${NOW} WHERE id = ?`).run(id);
+        })();
+        audit(db, { actor: 'user', action: 'career.application.restore', args: { id, restored: previous, version: draft.versions } });
+        return applicationDetail(db, vaultDir, id);
       },
     );
 

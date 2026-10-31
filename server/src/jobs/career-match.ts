@@ -6,7 +6,7 @@ import { LlmError } from '../llm/errors.ts';
 import type { CareerIntakeDeps } from './career-intake.ts';
 import type { JobHandler } from './runner.ts';
 
-const Payload = z.object({ applicationId: z.number().int().positive() });
+const Payload = z.object({ applicationId: z.number().int().positive(), stop: z.enum(['gaps', 'ats']).optional() });
 
 /** Job `career_match` (contract §4 step 2): requirements → `Selection`, then `career_gaps` (career-v2.md §3). */
 export const careerMatch =
@@ -34,6 +34,6 @@ export const careerMatch =
       saveText(db, id, 'selection', sel);
       setApp(db, id, { step: 'gaps' });
       event(db, id, 'step', { from: 'match', to: 'gaps', matched, total, unmatched: sel.unmatched.length, entries: sel.entries.length, bullets, skills: sel.skill_ids.length });
-      enqueueStep(db, id, 'gaps', 0);
+      enqueueStep(db, id, 'gaps', 0, p.data.stop);
     })();
   };

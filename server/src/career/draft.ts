@@ -34,9 +34,26 @@ export const CvSection = z.union([
   z.object({ name: z.enum(ENTRY_NAMES), entries: z.array(CvEntry) }).strict(),
 ]);
 export const CvDoc = z.object({ sections: z.array(CvSection) }).strict();
-export const Draft = z
-  .object({ v: z.literal(2), cv: CvDoc, letter: z.object({ paragraphs: z.array(CvLine) }).strict(), versions: z.number().int().positive() })
+/**
+ * What each part was built from (#72), set when the `draft` and `letter` steps write it: text versions, the master's
+ * hash, the draft job's id (the CV's identity) and the draft row a CV refresh replaced (`previous`, for Restore).
+ */
+export const Built = z
+  .object({
+    cv: z.object({ posting: z.number(), master: z.string(), job: z.number(), previous: z.number().optional() }).strict().optional(),
+    letter: z.object({ posting: z.number(), context: z.number(), cv: z.number() }).strict().optional(),
+  })
   .strict();
+export const Draft = z
+  .object({
+    v: z.literal(2),
+    cv: CvDoc,
+    letter: z.object({ paragraphs: z.array(CvLine) }).strict(),
+    versions: z.number().int().positive(),
+    built: Built.optional(),
+  })
+  .strict();
+export type Built = z.infer<typeof Built>;
 export type CvLine = z.infer<typeof CvLine>;
 export type CvEntry = z.infer<typeof CvEntry>;
 export type CvSection = z.infer<typeof CvSection>;
@@ -99,4 +116,38 @@ export function* draftLines(d: Draft): Generator<{ line: CvLine; section: string
     else for (const entry of s.entries) for (const line of entry.bullets) yield { line, section: s.name, entry };
   }
   for (const line of d.letter.paragraphs) yield { line, section: 'letter' };
+}
+
+/**
+ * A CV refresh (#73): the fresh CV with its ids moved past `last` (an id is never reused), plus every `owner` and
+ * `suggestion` line of `prev`, in the entry with the same `source` or else the same section. A line whose entry the
+ * fresh CV lacks goes, with a copy of that entry, to the end of its section. The letter of `prev` is kept as is.
+ */
+export function refreshDraft(prev: Draft, fresh: Draft, last: { l: number; e: number }): Draft {
+  const shift = (id: string, by: number) => `${id.slice(0, 2)}${Number(id.slice(2)) + by}`;
+  const moved = (ls: CvLine[]) => ls.map((l) => ({ ...l, id: shift(l.id, last.l) }));
+  const sections: CvSection[] = fresh.cv.sections.map((s) =>
+    'bullets' in s ? { ...s, bullets: moved(s.bullets) } : { ...s, entries: s.entries.map((e) => ({ ...e, id: shift(e.id, last.e), bullets: moved(e.bullets) })) },
+  );
+  const mine = (ls: CvLine[]) => ls.filter((l) => l.origin !== 'model');
+  for (const s of prev.cv.sections) {
+    let to = sections.find((x) => x.name === s.name);
+    if ('bullets' in s) {
+      const keep = mine(s.bullets);
+      if (!keep.length) continue;
+      if (!to) sections.push((to = { name: s.name, bullets: [] }));
+      if ('bullets' in to) to.bullets.push(...keep);
+      continue;
+    }
+    for (const e of s.entries) {
+      const keep = mine(e.bullets);
+      if (!keep.length) continue;
+      if (!to) sections.push((to = { name: s.name, entries: [] }));
+      if (!('entries' in to)) continue;
+      const same = e.source === undefined ? undefined : to.entries.find((x) => x.source === e.source);
+      if (same) same.bullets.push(...keep);
+      else to.entries.push({ ...e, bullets: keep });
+    }
+  }
+  return { ...fresh, cv: { sections }, letter: prev.letter, versions: prev.versions + 1 };
 }
