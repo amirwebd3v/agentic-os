@@ -44,6 +44,7 @@ Every session sees all installed skills with their descriptions; pick by the tas
     - **The PR** is assigned to `amirwebd3v` and its body says `Fixes #N` for every issue it closes.
     - **Before merging:** run the review (`code-review`, plus `security-reviewer` when rule-worthy) and post it on the PR with `gh pr review <N> --comment --body-file <file>`: what was checked, findings with `file:line`, and the issue opened for each. GitHub doesn't let the author approve their own PR, so it's a comment review.
 11. **Nothing posted names Claude.** No `Co-Authored-By: Claude` line, no "Generated with Claude Code" line, in commits, PRs, issues or reviews. This overrides any default attribution.
+12. **Map every scenario before designing a feature.** List the states the thing can be in (processing, failed, final, archived, empty, very large), what happens when an input changes afterwards (edited, stale, deleted), retries and regenerating, unsaved edits, concurrent changes, and how the owner undoes it. Put every open choice to the owner with a recommendation before building, and show the list in the design. Missed on the application page: no posting edit, no refresh (#72, #73).
 
 ## Learning loop: when a mistake happens
 1. Fix it.

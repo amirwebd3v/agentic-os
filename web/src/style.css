@@ -193,9 +193,6 @@ a.area:hover { border-color: var(--fg); }
 .rowbars .track { height: 10px; }
 .rowbars .track i { display: block; height: 100%; background: var(--accent-bg); border-radius: 0 4px 4px 0; }
 .rowbars .val { font-variant-numeric: tabular-nums; min-width: 2.5rem; text-align: right; }
-.as-table { margin-top: var(--s2); font-size: 13px; }
-.as-table summary { cursor: pointer; color: var(--muted); }
-.as-table table { margin-top: var(--s2); }
 @media (max-width: 960px) {
   .dash-grid { grid-template-columns: 1fr; }
   .figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
