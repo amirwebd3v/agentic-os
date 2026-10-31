@@ -118,6 +118,8 @@ export type ApplicationDetail = ApplicationSummary & {
   stale?: { cv: 'posting' | 'master' | null; letter: 'posting' | 'context' | 'cv' | null } | null;
   /** A CV refresh can be undone (#73). */
   can_restore?: boolean;
+  /** While processing: where this run started and where it stops (#73); null `stop` runs to the end. */
+  run?: { from: 'intake' | 'match' | 'company'; stop: 'gaps' | 'ats' | null } | null;
 };
 export type Point = { id: string; text: string; status: 'verified' | 'assumption'; quotes: string[] };
 export type Suggestion = { id: string; section: string; entry_id?: string; text: string; why: string; keyword?: string };

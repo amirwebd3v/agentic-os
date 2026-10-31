@@ -120,7 +120,7 @@ test('editing the posting: same limits as create; unchanged is a no-op; a new te
   const jobs = t.db.prepare("SELECT max(id) FROM jobs").pluck().get() as number;
   const res = await t.call('PUT', `/${id}/posting`, { posting: POSTING_2, company_name: 'Canary-c9 Co' });
   expect(res.statusCode).toBe(202);
-  expect(res.json()).toMatchObject({ status: 'processing', step: 'intake', posting: POSTING_2 });
+  expect(res.json()).toMatchObject({ status: 'processing', step: 'intake', posting: POSTING_2, run: { from: 'intake', stop: 'gaps' } });
   // Busy while it runs.
   expect((await t.call('PUT', `/${id}/posting`, { posting: POSTING })).json()).toEqual({ error: 'busy' });
   expect((await t.call('POST', `/${id}/refresh`, { part: 'cv' })).json()).toEqual({ error: 'busy' });

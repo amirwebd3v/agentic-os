@@ -282,7 +282,7 @@ test('waiting for answers: the questions are asked on the page and a skip is sen
 
 const tabTo = async (el: HTMLElement, name: string) => {
   ([...el.querySelectorAll('.tabs button')].find((b) => b.textContent === name) as HTMLButtonElement).click();
-  await vi.waitFor(() => expect(el.querySelector('.tab-actions button:last-child')?.textContent).toMatch(name === 'Cover letter' ? 'Refresh letter' : 'Re-read posting'));
+  await vi.waitFor(() => expect(el.querySelector('.tab-head')?.textContent).toMatch(name === 'Cover letter' ? /Refresh/ : /Re-read posting/));
 };
 
 test('#72: a stale CV shows the banner; Refresh CV is off with a reason while there are unsaved edits', async () => {
@@ -292,7 +292,8 @@ test('#72: a stale CV shows the banner; Refresh CV is off with a reason while th
   });
   const el = await mount();
   expect(el.textContent).toContain('Out of date: your master CV changed');
-  const refresh = button(el, 'Refresh CV') as HTMLButtonElement;
+  expect(button(el, 'Refresh CV')).toBeFalsy(); // one refresh button: the banner's
+  const refresh = button(el, 'Refresh') as HTMLButtonElement;
   expect(refresh.disabled).toBe(false);
   expect(button(el, 'Restore previous version')).toBeTruthy();
   type(byLabel(el, 'Acme GmbH, line 1'), 'Changed.');
@@ -313,9 +314,26 @@ test('#73: Refresh letter asks first; a declined confirm sends nothing', async (
   const el = await mount();
   await tabTo(el, 'Cover letter');
   expect(el.textContent).toContain('Out of date: the posting changed');
-  button(el, 'Refresh letter').click();
+  button(el, 'Refresh').click();
   expect(confirm).toHaveBeenCalledOnce();
   expect(calls.some((c) => c.key.includes('refresh'))).toBe(false);
+});
+
+test('#73: Restore asks first; a running re-read lists only its own steps', async () => {
+  const confirm = vi.fn(() => false);
+  vi.stubGlobal('confirm', confirm);
+  const calls = api({ 'GET /api/career/applications/1': () => app({ can_restore: true }) });
+  const el = await mount();
+  button(el, 'Restore previous version').click();
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(calls.some((c) => c.key.includes('restore'))).toBe(false);
+  useCareerStore().stop();
+
+  api({ 'GET /api/career/applications/1': () => app({ status: 'processing', step: 'match', run: { from: 'intake', stop: 'gaps' } }) });
+  const el2 = await mount();
+  expect([...el2.querySelectorAll('.steps li')].map((li) => li.textContent)).toHaveLength(3);
+  expect(el2.textContent).not.toContain('Writing the CV');
+  useCareerStore().stop();
 });
 
 test('#72: the posting is edited as text and saved with the company fields; old files get a notice', async () => {

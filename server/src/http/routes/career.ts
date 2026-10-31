@@ -245,9 +245,22 @@ function staleness(db: Database, id: number, draft: Draft, runHash: string, nowH
   };
 }
 
+/**
+ * Where the running pipeline started and stops, so the page lists only those steps: the newest `startRun` event
+ * (every run after the first starts there), else the create run, which goes from intake to the end.
+ */
+function currentRun(db: Database, id: number): { from: 'intake' | 'match' | 'company'; stop: Stop | null } {
+  const ev = db
+    .prepare(`SELECT detail FROM application_events WHERE application_id = ? AND kind = 'retry' AND json_extract(detail, '$.to') IN ('intake', 'match', 'company') ORDER BY id DESC LIMIT 1`)
+    .pluck()
+    .get(id) as string | undefined;
+  const d = ev ? (JSON.parse(ev) as { to: 'intake' | 'match' | 'company'; stop?: Stop }) : null;
+  return { from: d?.to ?? 'intake', stop: d?.stop ?? null };
+}
+
 /** `ApplicationDetail` (contract §8.2), or null when there is no such application. */
 function applicationDetail(db: Database, vaultDir: string, id: number) {
-  const summary = db.prepare(`SELECT ${SUMMARY}, master_hash FROM applications WHERE id = ? AND deleted_at IS NULL`).get(id) as { master_hash: string } | undefined;
+  const summary = db.prepare(`SELECT ${SUMMARY}, master_hash FROM applications WHERE id = ? AND deleted_at IS NULL`).get(id) as { master_hash: string; status: string } | undefined;
   if (!summary) return null;
   const { master_hash: runHash, ...rest } = summary;
   const requirements = latest<Requirements>(db, id, 'requirements');
@@ -265,6 +278,7 @@ function applicationDetail(db: Database, vaultDir: string, id: number) {
     posting: latestRow(db, id, 'posting')?.body ?? null, // the owner's pasted text: rendered as text only
     stale: draft ? staleness(db, id, draft, runHash, masterHash(vaultDir)) : null,
     can_restore: draft?.built?.cv?.previous !== undefined, // a CV refresh can be undone (#73)
+    run: rest.status === 'processing' ? currentRun(db, id) : null,
     requirements,
     coverage: requirements && selection ? coverage(requirements, selection) : null,
     draft,

@@ -148,6 +148,12 @@ const words = computed(() => paragraphs.value.map((p) => p.text).join(' ').split
 const label = computed(() => (app.value ? statusLabel(app.value) : null));
 const rendering = computed(() => label.value?.text === 'Creating files');
 const running = computed(() => app.value?.status === 'processing' || rendering.value);
+/** Only the steps this run goes through: a re-read stops at gaps, a CV refresh at ats, a letter refresh starts at company. */
+const runSteps = computed(() => {
+  const run = app.value?.run;
+  const end = run?.stop ? PIPELINE.indexOf(run.stop) + 1 : PIPELINE.length;
+  return PIPELINE.slice(run ? PIPELINE.indexOf(run.from) : 0, end);
+});
 const stepState = (s: (typeof PIPELINE)[number]) => {
   const now = PIPELINE.indexOf(app.value?.step as (typeof PIPELINE)[number]);
   const i = PIPELINE.indexOf(s);
@@ -212,7 +218,10 @@ const staleText = computed(() => {
   if (tab.value === 'cv' && s?.cv) return STALE_CV[s.cv];
   return tab.value === 'letter' && s?.letter ? STALE_LETTER[s.letter] : null;
 });
-const restore = () => act(() => career.change(() => restoreDraft(id, app.value!.draft!.versions)));
+const restore = () => {
+  if (!window.confirm("Put the previous CV back? The refreshed CV is replaced and can't be brought back.")) return;
+  return act(() => career.change(() => restoreDraft(id, app.value!.draft!.versions)));
+};
 
 const posting = ref({ posting: '', company_name: '', company_website: '', research: '', target_country: '' });
 const postingFrom = () => ({
@@ -313,7 +322,7 @@ onUnmounted(() => {
         <div v-if="app.status === 'processing'" class="notice">
           <p><strong>Working on it.</strong> This page updates by itself; you can leave it and come back.</p>
           <ol class="steps">
-            <li v-for="s in PIPELINE" :key="s" :class="stepState(s).toLowerCase()">
+            <li v-for="s in runSteps" :key="s" :class="stepState(s).toLowerCase()">
               <span class="step-state">{{ stepState(s) }}</span> {{ STEP_TEXT[s] }}
             </li>
           </ol>
@@ -382,7 +391,7 @@ onUnmounted(() => {
           <button v-if="tabPart === 'cv' && app.can_restore" type="button" class="quiet" :disabled="busy || !!refreshBlock || !editable" @click="restore">
             Restore previous version
           </button>
-          <button type="button" class="quiet" :disabled="busy || !!refreshBlock" @click="refresh(tabPart)">{{ TAB_ACTION[tabPart] }}</button>
+          <button v-if="!staleText" type="button" class="quiet" :disabled="busy || !!refreshBlock" @click="refresh(tabPart)">{{ TAB_ACTION[tabPart] }}</button>
         </span>
       </div>
 
