@@ -164,7 +164,10 @@ test('Refresh CV: match → … → ats with the current posting; owner lines ca
   await t.drain();
   expect(t.steps().slice(calls)).toEqual(['match', 'gaps', 'draft', 'ats']);
   const after = await t.detail(id);
-  expect(after.status).toBe('draft_ready');
+  // The kept letter was flagged (too short) before the refresh; the new CV passing doesn't clear that.
+  expect(after).toMatchObject({ status: 'flagged', fail_code: 'verify_failed' });
+  const report = t.db.prepare("SELECT body FROM application_texts WHERE kind = 'verify_report' ORDER BY version DESC LIMIT 1").pluck().get() as string;
+  expect(report).toContain('letter_length');
   expect(after.stale).toEqual({ cv: null, letter: 'posting' }); // the letter still rests on the old posting
   expect(after.can_restore).toBe(true);
   const d2 = after.draft;

@@ -195,6 +195,16 @@ export const careerLetter = stepJob('letter', async ({ db, config }, { id, attem
   advance(db, id, 'draft', next, 'letter', 'letter_verify', attempt, { attempt, paragraphs: paragraphs.length });
 });
 
+/** The whole draft, letter included, checked against the master as it is now; answers and company points are valid letter cites. */
+export function wholeDraftReport(db: Database, id: number, draft: Draft, vaultDir: string): VerifyReport {
+  const ctx = latestOrNull<AppContext>(db, id, 'context');
+  const company = latestOrNull<Company>(db, id, 'company');
+  return verifyDraft(draft, readMaster(vaultDir), latest<Requirements>(db, id, 'requirements'), loadContact(vaultDir), {
+    sources: company ? letterSources(company, currentAnswers(db, id)) : new Map(),
+    phrases: ctx?.company_name ? [ctx.company_name] : [],
+  });
+}
+
 /**
  * Job `career_letter_verify` (§5): the whole draft, letter included, by plain code; answer and verified company
  * point ids are valid letter cites. Pass → `draft_ready`. Letter violations on attempt 1 → `letter` attempt 2.
@@ -202,14 +212,8 @@ export const careerLetter = stepJob('letter', async ({ db, config }, { id, attem
  */
 export const careerLetterVerify = stepJob('letter_verify', async ({ db, config }, { id, attempt }) => {
   if (attempt === 0) throw new TailorError('career_letter_verify: invalid payload');
-  const master = readMaster(config.vaultDir);
   const draft = latest<Draft>(db, id, 'draft');
-  const ctx = latestOrNull<AppContext>(db, id, 'context');
-  const sources = letterSources(latest<Company>(db, id, 'company'), currentAnswers(db, id));
-  const report = verifyDraft(draft, master, latest<Requirements>(db, id, 'requirements'), loadContact(config.vaultDir), {
-    sources,
-    phrases: ctx?.company_name ? [ctx.company_name] : [],
-  });
+  const report = wholeDraftReport(db, id, draft, config.vaultDir);
   const letter = letterOnly(draft, report.violations);
   const counts = { attempt, violations: report.violations.length, codes: [...new Set(report.violations.map((v) => v.code))] };
   db.transaction(() => {
