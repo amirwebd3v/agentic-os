@@ -35,6 +35,7 @@ const inApps = () => route.path.startsWith('/applications');
         <RouterLink to="/" exact-active-class="router-link-active" active-class="">Home</RouterLink>
         <RouterLink to="/applications" :class="{ active: inApps() }">Applications</RouterLink>
         <RouterLink to="/cv">Master CV</RouterLink>
+        <RouterLink to="/email">Email</RouterLink>
         <RouterLink to="/review">
           Review
           <span v-if="review.total" class="badge count">{{ review.total }}<span class="sr-only"> waiting</span></span>

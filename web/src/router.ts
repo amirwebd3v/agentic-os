@@ -9,6 +9,7 @@ export const router = createRouter({
     { path: '/applications', component: () => import('./views/ApplicationsView.vue') },
     { path: '/applications/:id(\\d+)', component: () => import('./views/ApplicationView.vue'), props: true },
     { path: '/cv', component: () => import('./views/MasterView.vue') },
+    { path: '/email', component: () => import('./views/EmailView.vue') },
     { path: '/review', component: () => import('./views/ReviewView.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],

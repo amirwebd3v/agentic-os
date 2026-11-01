@@ -194,6 +194,14 @@ export const parseCvFiles = (files: { name: string; data: string }[]) => json<Ma
 /** Same, from the LinkedIn data export in the import folder; no model involved. */
 export const parseLinkedIn = () => json<MasterMerge>('POST', '/api/career/master/parse-linkedin', {});
 
+// Email (docs/week3/email-spec.md). Read-only access to Gmail; no token ever reaches the browser.
+export type MailAccount = { id: number; email: string; status: 'connected' | 'reconnect' | 'disconnected'; backfill_done: 0 | 1; last_synced_at: string | null };
+export type ConnectFlow = 'idle' | 'waiting' | 'connected' | 'cancelled' | 'wrong_scope' | 'failed' | 'timed_out';
+export type MailAccounts = { setup: boolean; flow: ConnectFlow; accounts: MailAccount[] };
+export const getMailAccounts = () => json<MailAccounts>('GET', '/api/email/accounts');
+export const connectMailAccount = () => json<{ url: string }>('POST', '/api/email/accounts/connect', {});
+export const disconnectMailAccount = (id: number, keep: boolean) => json<{ revoked: boolean }>('DELETE', `/api/email/accounts/${id}?keep=${keep ? 1 : 0}`);
+
 // Dashboard (career-v2.md §6): counts and aggregates only.
 export type Usage = { calls: number; input_tokens: number; output_tokens: number; failures?: number; cost: number | null };
 export type Dashboard = {
