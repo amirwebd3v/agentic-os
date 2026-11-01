@@ -12,7 +12,7 @@ A personal, local-first knowledge base for the areas of your life (career first;
 | Node.js | 22.12+ | nvm-windows or nodejs.org |
 | pnpm | 10 | `corepack enable` |
 | git | any recent | git-scm.com |
-| uv + NVIDIA driver (CUDA 13), **only for the parked decider sidecar** (needed again for the Email slice) | uv 0.13+ | `winget install --id=astral-sh.uv -e` |
+| uv + NVIDIA driver (CUDA 13), for the decider sidecar (Email triage) | uv 0.13+ | `winget install --id=astral-sh.uv -e` |
 
 There's no Visual Studio requirement: native packages use prebuilt binaries.
 
@@ -28,7 +28,7 @@ Then open `vaultDir` in Obsidian (*Open folder as vault*) and edit its `CLAUDE.m
 
 ## Daily use
 ```powershell
-pnpm dev          # server :3000 + web UI :5173
+pnpm dev          # server :3000 + web UI :5173 + Laya sidecar :8009
 ```
 1. Open the login link the server prints. If you've lost it, run `pnpm login-url`.
 2. Open http://127.0.0.1:5173. **Home** shows AI usage and cost, system health and each area. **Master CV**: upload one or more Word CVs (merged into one master, you check the new lines, then Save), or drop a LinkedIn export / any CV file into `dataDir/career/import/` and approve it under **Review**. **Applications**: paste a posting, edit the tailored CV and letter, finalise, download the `.docx` files, track milestones and follow-ups.
@@ -51,7 +51,7 @@ Check where a key is coming from with `pnpm secrets status`.
 | `pnpm verify` | Typecheck, lint, and all tests (server + web). The pre-push hook runs it; never bypass it. |
 | `pnpm build` | Builds the web UI into `web/dist`, which the server serves at :3000 |
 | `pnpm eval:career [prefix]` | Runs the career steps on the postings in `dataDir/career/evals/postings/` with the real provider (about $0.40 each), stores the numbers in `eval_runs` and the drafts under `dataDir/career/evals/runs/`. Creates no application. |
-| `pnpm sidecar:setup` / `pnpm sidecar` | The parked Laya decider (Python, CUDA). Not part of `pnpm dev`; the Email slice will use it. |
+| `pnpm sidecar:setup` / `pnpm sidecar` | The Laya decider (Python, CUDA) for Email triage. `pnpm dev` starts it; a sidecar crash does not stop the server. |
 | `pnpm secrets status` | Shows which secrets are set and where they come from |
 
 ## Firewall (one-time, admin PowerShell)

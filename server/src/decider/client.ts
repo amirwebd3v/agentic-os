@@ -28,8 +28,6 @@ export interface DecideResult {
 export interface DecideOptions {
   /** What the decision is about; logged on every `decisions` row. */
   subject?: { type: string; id: string };
-  model?: string;
-  maxLen?: number;
 }
 
 /** `decider_down`: unreachable, timed out or 5xx, so fall back to Claude. `decider_error`: 4xx or a malformed reply. */
@@ -88,9 +86,8 @@ export function createDecider({ db, baseURL, apiKey, model, timeoutMs = 5000 }: 
 
   return {
     async decide(state: unknown, questions: Record<string, Question>, opts: DecideOptions = {}): Promise<DecideResult> {
-      const useModel = opts.model ?? model;
       const t0 = performance.now();
-      const raw = await post({ state, questions, model: useModel, ...(opts.maxLen && { max_len: opts.maxLen }) });
+      const raw = await post({ state, questions, model });
       const latencyMs = Math.round(performance.now() - t0);
       const parsed = ResponseSchema.safeParse(raw);
       if (!parsed.success) throw new DeciderError('decider_error', `decider reply failed validation: ${parsed.error.message}`);
@@ -102,7 +99,7 @@ export function createDecider({ db, baseURL, apiKey, model, timeoutMs = 5000 }: 
       db.transaction(() => {
         for (const q of Object.keys(questions)) {
           const a = answers[q]!;
-          insert.run(type, id, q, answerText(a), a.confidence, useModel);
+          insert.run(type, id, q, answerText(a), a.confidence, model);
         }
       })();
       return { answers, latencyMs };
