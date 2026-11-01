@@ -22,6 +22,7 @@ const BATCH = 20;
 const UNITS_PER_MAIL = 60;
 export const CALIBRATION_MAILS = 200; // D12
 const MAX_BODY = 100_000; // only the start of a mail is ever used; this also bounds the scan on a hostile one
+const MAX_HTML = 400_000;
 const LAYA_CHARS = 4000; // about 1k tokens (spec §3)
 const SENSITIVE_YES = 0.8;
 const SENSITIVE_NO = 0.2;
@@ -37,14 +38,49 @@ export interface ParsedMail {
   body: string;
 }
 
-const decode = (data: string) => Buffer.from(data, 'base64url').toString('utf8');
-const stripHtml = (html: string) => html.replace(/<(?:style|script)\b[^>]*>[^]*?<\/(?:style|script)\s*>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ');
+/** A wrong charset would break redaction: "Müller" in Latin-1 would no longer match the contact's name. */
+function decode(part: GmailPart): string {
+  const type = part.headers?.find((h) => h.name.toLowerCase() === 'content-type')?.value ?? '';
+  const charset = /charset="?([\w.:-]+)/i.exec(type)?.[1] ?? 'utf-8';
+  const bytes = Buffer.from(part.body?.data ?? '', 'base64url');
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch {
+    return bytes.toString('utf8'); // an unknown charset name
+  }
+}
+
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', auml: 'ä', ouml: 'ö', uuml: 'ü', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü', szlig: 'ß', eacute: 'é', egrave: 'è' };
+const decodeEntities = (s: string) =>
+  s.replace(/&(?:#(\d{1,7})|#x([\da-f]{1,6})|(\w{2,8}));/gi, (m, dec?: string, hex?: string, name?: string) => {
+    if (name) return ENTITIES[name] ?? m;
+    const code = dec ? Number(dec) : parseInt(hex!, 16);
+    return code <= 0x10ffff ? String.fromCodePoint(code) : m;
+  });
+
+/** Linear, on purpose: a hostile mail must not stall the single worker. Regexes with `[^]*?` or `[^>]*` here were quadratic. */
+function dropBlocks(html: string): string {
+  const lower = html.toLowerCase();
+  const open = /<(style|script)\b/g;
+  let out = '';
+  let at = 0;
+  for (let m = open.exec(lower); m; m = open.exec(lower)) {
+    out += html.slice(at, m.index);
+    const close = lower.indexOf(`</${m[1]!}`, m.index);
+    if (close < 0) return out;
+    const end = lower.indexOf('>', close);
+    if (end < 0) return out;
+    at = open.lastIndex = end + 1;
+  }
+  return out + html.slice(at);
+}
+const stripHtml = (html: string) => decodeEntities(dropBlocks(html.slice(0, MAX_HTML)).replace(/<[^<>]*>/g, ' '));
 
 function bodyOf(part: GmailPart | undefined): { plain: string; html: string } {
   const out = { plain: '', html: '' };
   const walk = (p: GmailPart) => {
-    if (p.body?.data && p.mimeType === 'text/plain' && !out.plain) out.plain = decode(p.body.data);
-    if (p.body?.data && p.mimeType === 'text/html' && !out.html) out.html = decode(p.body.data);
+    if (p.body?.data && p.mimeType === 'text/plain' && !out.plain) out.plain = decode(p);
+    if (p.body?.data && p.mimeType === 'text/html' && !out.html) out.html = decode(p);
     p.parts?.forEach(walk);
   };
   if (part) walk(part);
@@ -89,6 +125,14 @@ const setting = <T>(db: Database, key: string, fallback: T): T => {
 /** Mails the owner has sorted. Home says "Sorting 37 of 200". */
 export const calibrationDone = (db: Database) => db.prepare(`SELECT count(*) FROM mail_messages WHERE source = 'owner'`).pluck().get() as number;
 
+/** Latched: trashing a sorted mail in Gmail lowers the count, and must not restart calibration. */
+export function isCalibrating(db: Database): boolean {
+  if (setting(db, 'calibrated', false)) return false;
+  if (calibrationDone(db) < CALIBRATION_MAILS) return true;
+  db.prepare(`INSERT INTO mail_settings (key, value) VALUES ('calibrated', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true'`).run();
+  return false;
+}
+
 export function enqueueTriage(db: Database, accountId: number, delaySeconds = 0): void {
   const live = db.prepare(`SELECT 1 FROM jobs WHERE kind = 'mail_triage' AND status = 'queued' AND json_extract(payload, '$.accountId') = ?`).get(accountId);
   const pending = db.prepare('SELECT 1 FROM mail_pending WHERE account_id = ? LIMIT 1').get(accountId);
@@ -106,6 +150,18 @@ export const mailTriage =
     if (account !== 'connected') return;
     const setError = (code: string | null) => db.prepare('UPDATE mail_accounts SET triage_error = ? WHERE id = ?').run(code, accountId);
     const later = () => enqueueTriage(db, accountId, RETRY_S);
+    if (!db.prepare('SELECT 1 FROM mail_pending WHERE account_id = ? LIMIT 1').get(accountId)) {
+      setError(null);
+      return;
+    }
+    let owner: Contact;
+    try {
+      owner = contact();
+    } catch {
+      // Redaction can't be trusted without it. The next tick looks again, once the owner has fixed the file.
+      setError('contact_unreadable');
+      return;
+    }
 
     // Laya down: nothing is fetched and nothing goes to Claude to compensate.
     const laya = decider();
@@ -127,14 +183,13 @@ export const mailTriage =
       categories: categories.map((c) => c.id),
       personalId,
       noiseId,
-      calibrating: calibrationDone(db) < CALIBRATION_MAILS,
+      calibrating: isCalibrating(db),
       consent: setting(db, 'consent', false),
       thresholds: setting<Record<number, number>>(db, 'thresholds', {}),
       sensitiveYes: SENSITIVE_YES,
       sensitiveNo: SENSITIVE_NO,
     } satisfies Omit<GateContext, 'rule'>;
 
-    const owner = contact();
     const removePending = db.prepare('DELETE FROM mail_pending WHERE account_id = ? AND gmail_id = ?');
     const insert = db.prepare(
       `INSERT INTO mail_messages (account_id, gmail_id, rfc_message_id, internal_date, state, category_id, suggestion_id, source, is_personal, eligible, bulk, sender, subject, excerpt)
@@ -146,6 +201,19 @@ export const mailTriage =
         insert.run({ account_id: accountId, gmail_id: id, rfc_message_id: null, internal_date: new Date().toISOString(), state: 'failed', category_id: null, suggestion_id: null, source: null, is_personal: 0, eligible: 0, bulk: 0, sender: null, subject: null, excerpt: null });
         removePending.run(accountId, id);
       })();
+
+    /**
+     * D18: the same mail in the other account is analysed once. It takes the filed copy's category, keeps no text and
+     * isn't eligible, so no model runs and no paragraph counts it twice. Skipped mail still goes through the gate.
+     */
+    function copyOf(mail: ParsedMail): Extract<GateStep, { action: 'file' }> | null {
+      if (!mail.rfcMessageId || gate({ labels: mail.labels, bulk: false, secretsHit: true }, { ...base, rule: null }).action === 'skip') return null;
+      const category = db
+        .prepare(`SELECT category_id FROM mail_messages WHERE rfc_message_id = ? AND account_id <> ? AND state = 'filed' AND category_id IS NOT NULL LIMIT 1`)
+        .pluck()
+        .get(mail.rfcMessageId, accountId) as number | undefined;
+      return category === undefined ? null : { action: 'file', category, source: 'rule', eligible: false, keepText: false };
+    }
 
     async function classify(mail: ParsedMail, gmailId: string): Promise<Extract<GateStep, { action: 'skip' | 'file' | 'needs_sorting' }>> {
       const scan = scrubSecrets(`${mail.sender}\n${mail.subject}\n${mail.body}`);
@@ -187,7 +255,11 @@ export const mailTriage =
       try {
         message = await gmail.getMessage(id);
       } catch (err) {
-        if (!(err instanceof GmailError)) throw err;
+        // One bad mail must not block the mail behind it.
+        if (!(err instanceof GmailError) || err.kind === 'bad_request') {
+          failed(id);
+          continue;
+        }
         if (err.kind === 'not_found') {
           removePending.run(accountId, id); // gone at Gmail: nothing to sort
           continue;
@@ -196,6 +268,8 @@ export const mailTriage =
           db.prepare(`UPDATE mail_accounts SET status = 'reconnect', last_error = 'reconnect' WHERE id = ? AND status = 'connected'`).run(accountId);
           return;
         }
+        // Behind the others on the next try, in case only this mail keeps failing.
+        db.prepare(`UPDATE mail_pending SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE account_id = ? AND gmail_id = ?`).run(accountId, id);
         setError(err.kind);
         later();
         return;
@@ -209,39 +283,47 @@ export const mailTriage =
         failed(id);
         continue;
       }
-      let step;
       try {
-        step = await classify(mail, id);
-      } catch (err) {
-        if (err instanceof DeciderError && err.kind === 'decider_down') {
-          setError('classifier_down');
-          later();
-          return;
+        let step;
+        const twin = copyOf(mail);
+        if (twin) step = twin;
+        else {
+          try {
+            step = await classify(mail, id);
+          } catch (err) {
+            if (err instanceof DeciderError && err.kind === 'decider_down') {
+              setError('classifier_down');
+              later();
+              return;
+            }
+            if (!(err instanceof DeciderError)) throw err;
+            step = { action: 'needs_sorting', suggestion: null } as const;
+          }
         }
-        if (!(err instanceof DeciderError)) throw err;
-        step = { action: 'needs_sorting', suggestion: null } as const;
+        if (step.action === 'skip') {
+          removePending.run(accountId, id);
+          continue;
+        }
+        const fields = storedFields(step, mail, base, owner);
+        const row = {
+          account_id: accountId,
+          gmail_id: id,
+          rfc_message_id: mail.rfcMessageId,
+          internal_date: mail.internalDate,
+          state: step.action === 'file' ? 'filed' : 'needs_sorting',
+          category_id: step.action === 'file' ? step.category : null,
+          suggestion_id: step.action === 'needs_sorting' ? step.suggestion : null,
+          source: step.action === 'file' ? step.source : null,
+          bulk: mail.bulk ? 1 : 0,
+          ...fields,
+        };
+        db.transaction(() => {
+          insert.run(row);
+          removePending.run(accountId, id);
+        })();
+      } catch {
+        failed(id); // by id only: this error could quote the mail
       }
-      if (step.action === 'skip') {
-        removePending.run(accountId, id);
-        continue;
-      }
-      const fields = storedFields(step, mail, base, owner);
-      const row = {
-        account_id: accountId,
-        gmail_id: id,
-        rfc_message_id: mail.rfcMessageId,
-        internal_date: mail.internalDate,
-        state: step.action === 'file' ? 'filed' : 'needs_sorting',
-        category_id: step.action === 'file' ? step.category : null,
-        suggestion_id: step.action === 'needs_sorting' ? step.suggestion : null,
-        source: step.action === 'file' ? step.source : null,
-        bulk: mail.bulk ? 1 : 0,
-        ...fields,
-      };
-      db.transaction(() => {
-        insert.run(row);
-        removePending.run(accountId, id);
-      })();
     }
     enqueueTriage(db, accountId);
   };
@@ -251,7 +333,8 @@ export const mailPurge =
   ({ db }: { db: Database }): JobHandler =>
   async () => {
     db.prepare(`UPDATE mail_messages SET excerpt = NULL, eligible = 0 WHERE excerpt IS NOT NULL AND internal_date < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')`).run();
-    db.prepare(`DELETE FROM jobs WHERE kind LIKE 'mail\\_%' ESCAPE '\\' AND status IN ('done', 'failed') AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')`).run();
+    db.prepare(`DELETE FROM jobs WHERE kind LIKE 'mail\\_%' ESCAPE '\\' AND status IN ('done', 'failed') AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')
+       AND id NOT IN (SELECT job_id FROM llm_calls WHERE job_id IS NOT NULL)`).run(); // the cost ledger keeps its link
   };
 
 export function enqueuePurge(db: Database, now = new Date()): void {

@@ -6,7 +6,7 @@ import { DeciderError } from '../src/decider/client.ts';
 import { GmailError } from '../src/mail/gmail.ts';
 import type { Gmail, GmailMessage } from '../src/mail/gmail.ts';
 import { RateBudget } from '../src/mail/sync.ts';
-import { CALIBRATION_MAILS, calibrationDone, enqueuePurge, mailPurge, mailTriage, parseMail } from '../src/mail/triage.ts';
+import { CALIBRATION_MAILS, calibrationDone, enqueuePurge, isCalibrating, mailPurge, mailTriage, parseMail } from '../src/mail/triage.ts';
 import type { TriageDeps } from '../src/mail/triage.ts';
 import { makeTestDb } from './helpers.ts';
 
@@ -261,7 +261,103 @@ describe('jobs', () => {
   });
 });
 
+describe('review findings', () => {
+  test('a job the cost ledger points at survives the purge, and the purge does not fail', async () => {
+    const db = makeTestDb();
+    db.prepare(`INSERT INTO jobs (id, kind, idempotency_key, payload, status, created_at) VALUES (7, 'mail_triage', 'a', '{}', 'done', '2026-01-01'), (8, 'mail_triage', 'b', '{}', 'done', '2026-01-01')`).run();
+    const cols = db.prepare(`SELECT name FROM pragma_table_info('llm_calls') WHERE "notnull" = 1 AND dflt_value IS NULL AND pk = 0`).pluck().all() as string[];
+    const values: Record<string, unknown> = Object.fromEntries(cols.map((c) => [c, c.includes('tokens') || c.includes('ms') ? 1 : 'x']));
+    const all = { ...values, job_id: 7 };
+    db.prepare(`INSERT INTO llm_calls (${Object.keys(all).join(',')}) VALUES (${Object.keys(all).map(() => '?').join(',')})`).run(...(Object.values(all) as never[]));
+    await mailPurge({ db })({} as Job);
+    expect(db.prepare('SELECT id FROM jobs').pluck().all()).toEqual([7]);
+  });
+
+  test('a permanent Gmail refusal or a strange error is recorded, and the mail behind it goes on', async () => {
+    const t = setup({ ...THRESHOLDS, mails: { m1: new GmailError('bad_request'), m2: message('m2') } });
+    await t.run();
+    expect(t.rows().map((r) => r['state'])).toEqual(['failed', 'filed']);
+    const u = setup({ ...THRESHOLDS, deps: { gmailFor: () => ({ getMessage: async () => Promise.reject(new SyntaxError('bad json')) }) as unknown as Gmail } });
+    await u.run();
+    expect(u.rows()[0]).toMatchObject({ state: 'failed' });
+  });
+
+  test('a mail that keeps failing moves behind the others', async () => {
+    const t = setup({ ...THRESHOLDS, mails: { a: new GmailError('server'), b: message('b') } });
+    t.db.prepare(`UPDATE mail_pending SET created_at = '2026-01-01'`).run();
+    await t.run();
+    expect(t.db.prepare('SELECT gmail_id FROM mail_pending ORDER BY created_at, gmail_id').pluck().all()).toEqual(['b', 'a']);
+  });
+
+  test('trashing a sorted mail does not restart calibration', () => {
+    const t = setup({});
+    expect(isCalibrating(t.db)).toBe(false);
+    t.db.prepare(`DELETE FROM mail_messages WHERE gmail_id = 'old1'`).run();
+    expect(calibrationDone(t.db)).toBe(CALIBRATION_MAILS - 1);
+    expect(isCalibrating(t.db)).toBe(false);
+  });
+
+  test('the same mail in a second account takes the filed category, asks no model and keeps no text', async () => {
+    const t = setup({ ...THRESHOLDS, mails: { m2: message('dup') } });
+    t.db.prepare(`INSERT INTO mail_accounts (email) VALUES ('b@example.com')`).run();
+    t.db.prepare(`INSERT INTO mail_messages (account_id, gmail_id, rfc_message_id, internal_date, state, category_id, is_personal) VALUES (2, 'x', '<dup@example.com>', '2026-11-01', 'filed', 5, 1)`).run();
+    await t.run();
+    expect(t.decide).not.toHaveBeenCalled();
+    expect(t.rows()[0]).toMatchObject({ gmail_id: 'm2', category_id: 5, is_personal: 1, sender: null, excerpt: null });
+    expect(calibrationDone(t.db)).toBe(CALIBRATION_MAILS);
+  });
+
+  test('a copy in spam at the other account is still skipped', async () => {
+    const t = setup({ mails: { m2: message('dup', { labels: ['SPAM'] }) } });
+    t.db.prepare(`INSERT INTO mail_accounts (email) VALUES ('b@example.com')`).run();
+    t.db.prepare(`INSERT INTO mail_messages (account_id, gmail_id, rfc_message_id, internal_date, state, category_id) VALUES (2, 'x', '<dup@example.com>', '2026-11-01', 'filed', 1)`).run();
+    await t.run();
+    expect(t.rows().map((r) => r['gmail_id'])).toEqual(['x']);
+    expect(t.pending()).toEqual([]);
+  });
+
+  test('an unreadable contact file stops the run visibly, without a retry loop', async () => {
+    const t = setup({ deps: { contact: () => { throw new Error('bad file'); } } });
+    await t.run();
+    expect(t.error().triage_error).toBe('contact_unreadable');
+    expect(t.fetched).toEqual([]);
+    expect(t.db.prepare(`SELECT count(*) FROM jobs WHERE kind = 'mail_triage'`).pluck().get()).toBe(0);
+  });
+
+  test('with nothing pending an old classifier error clears, and Laya is not asked', async () => {
+    const t = setup({ mails: {}, status: 'down' });
+    t.db.prepare(`UPDATE mail_accounts SET triage_error = 'classifier_down'`).run();
+    await t.run();
+    expect(t.error().triage_error).toBeNull();
+  });
+});
+
 describe('parsing', () => {
+  const html = (body: string, type = 'text/html; charset=utf-8'): GmailMessage => ({ id: 'x', internalDate: '1000', payload: { mimeType: 'text/html', headers: [{ name: 'From', value: 'a@example.com' }, { name: 'Content-Type', value: type }], body: { data: Buffer.from(body, 'latin1').toString('base64url') } } });
+
+  test.each([
+    ['stray brackets', '<'.repeat(1_000_000)],
+    ['unclosed style blocks', '<style>'.repeat(150_000)],
+    ['closed style blocks', '<style></style>'.repeat(60_000)],
+    ['entities', '&amp'.repeat(200_000)],
+  ])('hostile HTML cannot stall the worker: %s', (_, body) => {
+    const t0 = performance.now();
+    parseMail(html(body));
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+
+  test('a Latin-1 part and HTML entities decode, so the owner name can be redacted', () => {
+    const latin = { ...html('Hallo Müller', 'text/html; charset="iso-8859-1"') };
+    expect(parseMail(latin).body).toContain('Müller');
+    expect(parseMail(html('<p>J&uuml;rgen M&#252;ller &#x2603;</p>')).body).toContain('Jürgen Müller ☃');
+    expect(parseMail(html('hi', 'text/html; charset=no-such-thing')).body).toBe('hi');
+  });
+
+  test('a surviving tag after decoding stays plain text, and text behind a block is kept', () => {
+    expect(parseMail(html('a<style>x</style>b<script>y</script>c')).body).toBe('abc');
+    expect(parseMail(html('a<style>never closed')).body).toBe('a');
+  });
+
   test('prefers plain text, falls back to stripped HTML, and reads a bare From', () => {
     const html: GmailMessage = { id: 'x', internalDate: '1000', payload: { mimeType: 'text/html', headers: [{ name: 'from', value: 'bare@example.com' }], body: { data: b64('<style>p{}</style><p>Hello</p><script>x</script>') } } };
     const parsed = parseMail(html);
