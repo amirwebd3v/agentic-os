@@ -3,6 +3,7 @@ import { enqueue } from '../db/jobs.ts';
 import type { JobHandler } from '../jobs/runner.ts';
 import { GmailError } from './gmail.ts';
 import type { Gmail } from './gmail.ts';
+import { enqueueTriage } from './triage.ts';
 
 // Finds which mail is new or gone. One page per job, so Career jobs interleave; a job queues its own continuation.
 // The cursor moves only after a final page commits, and every write is safe to replay.
@@ -133,6 +134,7 @@ export const mailSync =
         }
       })();
       healthy();
+      enqueueTriage(db, accountId as number);
       if (page.nextPageToken) again(`list:${after}:${page.nextPageToken}`);
     }
 
@@ -166,6 +168,7 @@ export const mailSync =
         }
       })();
       healthy();
+      enqueueTriage(db, accountId as number);
       if (page.nextPageToken) again(`history:${start}:${page.nextPageToken}`);
     }
 
