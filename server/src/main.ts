@@ -19,8 +19,32 @@ import { careerRender } from './jobs/career-render.ts';
 import { careerAts, careerCompany, careerGaps, careerLetter, careerLetterVerify, careerQuestions, careerVacancy } from './jobs/career-steps.ts';
 import { careerVerify } from './jobs/career-verify.ts';
 import { startRunner } from './jobs/runner.ts';
+import { createGmail, GmailError } from './mail/gmail.ts';
+import { accessTokenSource } from './mail/oauth.ts';
+import { enqueueSyncs, mailSync, RateBudget } from './mail/sync.ts';
+import { credentialManagerTokens } from './mail/tokens.ts';
+import { getSecret } from './secrets.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
+
+const tokenSources = new Map<number, { refreshToken: string; source: () => Promise<string> }>();
+/**
+ * One source per account, because it caches the access token until expiry. A reconnect stores a new refresh token,
+ * which replaces the source at once. No token or client is `auth`: the account asks for a reconnect.
+ */
+const liveGmail = (accountId: number) =>
+  createGmail(async () => {
+    const refreshToken = credentialManagerTokens.get(accountId);
+    if (!refreshToken) throw new GmailError('auth');
+    let entry = tokenSources.get(accountId);
+    if (entry?.refreshToken !== refreshToken) {
+      const [id, secret] = [getSecret('gmail_client_id'), getSecret('gmail_client_secret')];
+      if (!id || !secret) throw new GmailError('auth');
+      entry = { refreshToken, source: accessTokenSource(id, secret, refreshToken) };
+      tokenSources.set(accountId, entry);
+    }
+    return entry.source();
+  });
 
 // Feature plugins, mounted under /api behind the session check. One line per ticket.
 const plugins: FastifyPluginAsync[] = [providerRoutes, areaRoutes, approvalRoutes(), careerRoutes(), careerMasterRoutes(), dashboardRoutes(), emailRoutes()];
@@ -52,11 +76,16 @@ const stopRunner = startRunner(
     career_letter: careerLetter({ db, config }),
     career_letter_verify: careerLetterVerify({ db, config }),
     career_render: careerRender({ db, config }),
+    mail_sync: mailSync({ db, gmailFor: liveGmail, budget: new RateBudget() }),
   },
   (err) => app.log.error(err, 'job failed'),
   (job) => failCareerJob(db, job),
 );
+enqueueSyncs(db);
+const syncTimer = setInterval(() => enqueueSyncs(db), 5 * 60_000); // also fires on wake from sleep
+syncTimer.unref();
 app.addHook('onClose', async () => {
+  clearInterval(syncTimer);
   await stopRunner();
 });
 await app.listen({ host: '127.0.0.1', port: config.server.port });
