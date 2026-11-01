@@ -711,6 +711,106 @@ test('parse: two Word CVs merged into the master, nothing written, no contact or
   await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe('aos: edit career/master.md\n'), GIT_WAIT);
 });
 
+const linkedin = async () => {
+  const t = await parseSetup();
+  mkdirSync(join(t.vault, 'career'));
+  mkdirSync(t.importDir, { recursive: true });
+  const parse = () => t.post('/api/career/master/parse-linkedin');
+  return { ...t, master: join(t.vault, 'career/master.md'), parseLi: parse };
+};
+
+test('parse-linkedin: new lines marked, no contact details, nothing written, no model; a stale hash is refused, then the same merge saves', async () => {
+  const t = await linkedin();
+  writeFileSync(t.master, MASTER);
+  cpSync(FIXTURE, t.importDir, { recursive: true });
+  writeFileSync(join(t.importDir, 'cv.pdf'), 'not read');
+  const res = await t.parseLi();
+  expect(res.statusCode).toBe(200);
+  const body = res.json();
+  expect(body.hash).toBe(sha256(MASTER));
+  expect(body.added.skills).toBe(1);
+  expect(body.added.languages).toBe(2);
+  expect(body.warnings).toContain("cv.pdf: skipped: only LinkedIn's own CSVs are read here");
+  const skills = body.sections.find((s: { name: string }) => s.name === 'Skills');
+  expect(skills.bullets).toContainEqual({ text: 'PostgreSQL', new: true, from: 'LinkedIn export' });
+  // The private columns of Profile.csv (name, street, birth date, postcode) reach no line.
+  expect(JSON.stringify(body.sections)).not.toMatch(/Erika|Mustermann|Musterstra|1990|12345/);
+
+  expect(t.llm.calls).toHaveLength(0);
+  expect(readFileSync(t.master, 'utf8')).toBe(MASTER);
+  expect(readdirSync(join(t.vault, 'career'))).toEqual(['master.md']);
+  expect(t.pending()).toEqual([]);
+  const audit = t.db.prepare(`SELECT args_redacted FROM audit_log WHERE action = 'career.master.parse'`).pluck().get() as string;
+  expect(JSON.parse(audit)).toMatchObject({ files: 6, read: 1, source: 'linkedin', skills: 1 });
+  expect(audit).not.toMatch(/Acme|Python|Erika/);
+
+  // Discard is the client dropping the answer: a second read gives the same merge.
+  expect((await t.parseLi()).json()).toEqual(body);
+
+  // The master changed during the review: the existing guard refuses, nothing is overwritten.
+  const put = (hash: string) => t.app.inject(t.authed({ method: 'PUT', url: '/api/career/master', payload: { hash, sections: strip(body.sections) } }));
+  writeFileSync(t.master, `${MASTER}\n`);
+  const stale = await put(body.hash);
+  expect([stale.statusCode, stale.json()]).toEqual([409, { error: 'master_changed' }]);
+  expect(readFileSync(t.master, 'utf8')).toBe(`${MASTER}\n`);
+  writeFileSync(t.master, MASTER);
+  expect((await put(body.hash)).statusCode).toBe(200);
+  expect(readFileSync(t.master, 'utf8')).toContain('- PostgreSQL  ^skill-postgresql\n');
+  await vi.waitFor(async () => expect(await vaultGit(t.vault, 'log', '--format=%s')).toBe('aos: edit career/master.md\n'), GIT_WAIT);
+
+  // Saved: importing again finds nothing new.
+  const again = await t.parseLi();
+  expect(again.json().added).toEqual({ entries: 0, bullets: 0, skills: 0, languages: 0 });
+  expect(strip(again.json().sections)).toEqual(parseMaster(readFileSync(t.master, 'utf8')).sections);
+});
+
+test('parse-linkedin: free text holding contact details is left out and counted, whether from contact.md, the export or its shape', async () => {
+  const t = await linkedin();
+  writeFileSync(t.master, MASTER);
+  writeFileSync(join(t.vault, 'career/contact.md'), `---\nname: "Erika Vault"\nphone: "+49 30 1234567"\naddress: "Berlin"\n---\n`);
+  writeFileSync(
+    join(t.importDir, 'Profile.csv'),
+    `First Name,Last Name,Headline,Summary\nErika,Mustermann,Keeps this headline,"Erika Mustermann wrote this.\nErika Vault too.\nMail erika@example.org.\nCall 030 1234567.\nSee example.net/me for more.\nBased in Berlin."`,
+  );
+  writeFileSync(join(t.importDir, 'Positions.csv'), `Company Name,Title,Description,Location,Started On,Finished On\nFresh Co,Dev,Call me on +49 170 7654321.,"Berlin, Germany",2024,\n`);
+  const res = await t.parseLi();
+  const body = res.json();
+  const text = JSON.stringify(body.sections);
+  expect(text).not.toMatch(CONTACT_LIKE);
+  expect(text).not.toMatch(/Vault|7654321/);
+  expect(text).toContain('Keeps this headline');
+  expect(text).toContain('Based in Berlin.'); // an address line is an ordinary place here
+  expect(body.sections.find((s: { name: string }) => s.name === 'Experience').entries.some((e: { org: string; location: string }) => e.org === 'Fresh Co' && e.location === 'Berlin, Germany')).toBe(true);
+  expect(body.warnings).toContain('6 item(s) with contact details or too long for the editor were left out; add them by hand');
+});
+
+test('parse-linkedin errors: no master, empty folder, files missing, unknown columns (no model fallback), bad master; nothing in the master changes', async () => {
+  const t = await linkedin();
+  const noMaster = await t.parseLi();
+  expect([noMaster.statusCode, noMaster.json()]).toEqual([409, { error: 'master_missing' }]);
+  expect(existsSync(t.master)).toBe(false);
+
+  writeFileSync(t.master, MASTER);
+  expect((await t.parseLi()).json()).toEqual({ error: 'import_empty', warnings: [] });
+
+  writeFileSync(join(t.importDir, 'export.zip'), 'zip');
+  writeFileSync(join(t.importDir, 'Skills.csv'), 'Name\nRust\n'); // neither Profile.csv nor Positions.csv
+  const missing = await t.parseLi();
+  expect([missing.statusCode, missing.json()]).toEqual([400, { error: 'import_empty', warnings: ['export.zip: skipped: a .zip file; unzip it into this folder first'] }]);
+
+  writeFileSync(join(t.importDir, 'Positions.csv'), 'Firma,Titel,Beschreibung\nAcme,Dev,Secret line\n');
+  const unknown = await t.parseLi();
+  expect(unknown.statusCode).toBe(400);
+  expect(unknown.json().error).toBe('linkedin_unreadable');
+  expect(JSON.stringify(unknown.json())).not.toContain('Secret line');
+  expect(t.llm.calls).toHaveLength(0);
+
+  writeFileSync(t.master, MASTER.replace('## Skills', '## Hobbies'));
+  expect((await t.parseLi()).json()).toEqual({ error: 'bad_master' });
+  expect(t.db.prepare(`SELECT COUNT(*) FROM audit_log WHERE action = 'career.master.parse'`).pluck().get()).toBe(0);
+  expect((await t.app.inject({ method: 'POST', url: '/api/career/master/parse-linkedin', payload: {} })).statusCode).toBe(403); // not logged in, no CSRF token
+});
+
 test('parse errors: bad_upload, non-.docx → import_unreadable, contact_missing creates nothing, bad_master, provider_error, nothing found', async () => {
   const t = await parseSetup();
   const contact = join(t.vault, 'career/contact.md');

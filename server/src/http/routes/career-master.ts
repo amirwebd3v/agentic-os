@@ -4,10 +4,11 @@ import type { FastifyPluginAsync } from 'fastify';
 import { fileHash, stage } from '../../approvals/apply.ts';
 import { contactNote, loadContact } from '../../career/contact.ts';
 import type { Contact } from '../../career/contact.ts';
-import { DocumentError, importDocument, importText } from '../../career/document.ts';
+import { DocumentError, importDocument, importText, scrubContactLike } from '../../career/document.ts';
 import { MAX_FILE_BYTES, buildImport, readExport } from '../../career/linkedin.ts';
 import { BULLET_SECTIONS, ENTRY_SECTIONS, MasterError, editSections, masterFm, mergeMaster, parseMaster, serialiseMaster } from '../../career/master.ts';
 import type { Bullet, Section, SectionEdit } from '../../career/master.ts';
+import { redactContact } from '../../career/redact.ts';
 import { audit } from '../../db/audit.ts';
 import { getLlm } from '../../llm/client.ts';
 import type { structured } from '../../llm/client.ts';
@@ -95,11 +96,12 @@ const parseSchema = {
 
 /**
  * Drops what `PUT /career/master` would refuse (putSchema's text lengths, control characters) and counts it.
+ * `allowed` drops more by the caller's own rule.
  * ponytail: the item counts (50 bullets per entry, 100 entries) aren't cut here; past them the PUT says bad_master.
  */
-function fitForPut(sections: Section[]): { sections: Section[]; dropped: number } {
+function fitForPut(sections: Section[], allowed: (text: string) => boolean = () => true): { sections: Section[]; dropped: number } {
   let dropped = 0;
-  const ok = (t: string, max: number) => (t.length <= max && !/\p{Cc}/u.test(t)) || (dropped++, false);
+  const ok = (t: string, max: number) => (t.length <= max && !/\p{Cc}/u.test(t) && allowed(t)) || (dropped++, false);
   const lines = (bs: Bullet[]) => bs.filter((b) => ok(b.text, 2000));
   const fitted = sections.map((s): Section =>
     'bullets' in s
@@ -207,6 +209,30 @@ export const careerMasterRoutes =
       }
     };
 
+    /** `null` when the file is outside the grammar. */
+    const sectionsOf = (text: string): Section[] | null => {
+      try {
+        return parseMaster(text).sections;
+      } catch (err) {
+        if (err instanceof MasterError) return null;
+        throw err;
+      }
+    };
+    const contactOrWarn = (warnings: string[]): Contact => {
+      try {
+        return loadContact(vaultDir);
+      } catch {
+        warnings.push('career/contact.md has invalid frontmatter; fix it in Obsidian');
+        return {};
+      }
+    };
+    /** The response of both merge routes. `args` go to the audit log: counts only. */
+    const merged = (hash: string | null, current: Section[], incoming: { from: string; sections: Section[] }[], warnings: string[], args: Record<string, unknown>) => {
+      const { sections, added } = mergeMaster(current, incoming);
+      audit(db, { actor: 'user', action: 'career.master.parse', args: { ...args, ...added } });
+      return { hash, sections, added, warnings };
+    };
+
     api.get('/career/master', async () => {
       const { text, hash } = read();
       return text === null ? { exists: false } : view(text, hash!);
@@ -224,24 +250,14 @@ export const careerMasterRoutes =
         if (wrong.length) return reply.code(400).send({ error: 'import_unreadable', warnings: wrong.map((f) => `${f.name}: skipped: not a .docx file`) });
         if (!dirs.llm && !getLlm(api.config)) return reply.code(409).send({ error: 'provider_not_configured' });
         const warnings: string[] = [];
-        let contact: Contact = {};
-        try {
-          contact = loadContact(vaultDir);
-        } catch {
-          warnings.push('career/contact.md has invalid frontmatter; fix it in Obsidian');
-        }
+        const contact = contactOrWarn(warnings);
         if (!contact.name) {
           warnings.push('fill in at least your name in career/contact.md, then try again'); // unlike the import, creates nothing
           return reply.code(409).send({ error: 'contact_missing', warnings });
         }
         const { text, hash } = read();
-        let current: Section[] = [];
-        try {
-          if (text !== null) current = parseMaster(text).sections;
-        } catch (err) {
-          if (err instanceof MasterError) return reply.code(409).send({ error: 'bad_master' }); // fix it in Obsidian first
-          throw err;
-        }
+        const current = text === null ? [] : sectionsOf(text);
+        if (!current) return reply.code(409).send({ error: 'bad_master' }); // fix it in Obsidian first
 
         const incoming: { from: string; sections: Section[] }[] = [];
         for (const f of files) {
@@ -264,11 +280,38 @@ export const careerMasterRoutes =
           incoming.push({ from: f.name, sections });
         }
         if (!incoming.length) return reply.code(400).send({ error: 'import_unreadable', warnings });
-        const { sections, added } = mergeMaster(current, incoming);
-        audit(db, { actor: 'user', action: 'career.master.parse', args: { files: files.length, read: incoming.length, ...added } });
-        return { hash, sections, added, warnings };
+        return merged(hash, current, incoming, warnings, { files: files.length, read: incoming.length });
       },
     );
+
+    // LinkedIn's data export in the import folder → the current master merged with it. No model, no fallback to one,
+    // and nothing written. With no master yet, `POST /career/master/import` is the first-time path (it also proposes contact.md).
+    api.post('/career/master/parse-linkedin', async (_req, reply) => {
+      const { text, hash } = read();
+      if (text === null) return reply.code(409).send({ error: 'master_missing' });
+      const current = sectionsOf(text);
+      if (!current) return reply.code(409).send({ error: 'bad_master' });
+      const { sources, files, warnings } = readExport(importDir);
+      if (files['Profile.csv'] === undefined && files['Positions.csv'] === undefined) return reply.code(400).send({ error: 'import_empty', warnings });
+      for (const f of sources) if (!f.known) warnings.push(`${f.name}: skipped: only LinkedIn's own CSVs are read here`);
+      let result;
+      try {
+        result = buildImport(files);
+      } catch (err) {
+        if (!(err instanceof MasterError)) throw err; // text the master grammar can't hold
+        result = null;
+      }
+      if (!result) return reply.code(400).send({ error: 'linkedin_unreadable', warnings });
+      warnings.push(...result.warnings);
+      // Master lines reach the model later. The export's contact columns are never mapped, but free text can hold the same
+      // details: such a line is left out, as in a Word import. The address lines would hit ordinary places ("Berlin"), so not those.
+      // ponytail: scrubContactLike also hits `Node.js/TS` and `1.000.000`; the warning below says so, and the owner adds them by hand.
+      const known = [{ ...contactOrWarn(warnings), address: '', dob: '' }, { name: result.name ?? '' }];
+      const allowed = (t: string) => scrubContactLike(t) === t && known.every((c) => redactContact(t, c) === t);
+      const { sections, dropped } = fitForPut(parseMaster(result.master).sections, allowed);
+      if (dropped) warnings.push(`${dropped} item(s) with contact details or too long for the editor were left out; add them by hand`);
+      return merged(hash, current, [{ from: 'LinkedIn export', sections }], warnings, { files: Object.keys(files).length, read: 1, source: 'linkedin' });
+    });
 
     // One git process at a time. ponytail: the writer and approvals have their own chains; a failed commit is caught by the next `add -A`
     let committing: Promise<unknown> = Promise.resolve();

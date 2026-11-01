@@ -151,6 +151,8 @@ export interface ImportResult {
   master: string;
   /** Absent for a document import: the owner's `contact.md` already exists and is not part of the proposal. */
   contact?: string;
+  /** The name in the export's `Profile.csv`, also in `contact`. */
+  name?: string;
   stats: { entries: number; bullets: number; skills: number };
   warnings: string[];
 }
@@ -228,5 +230,5 @@ export function buildImport(files: Partial<Record<LinkedInFile, string>>, now = 
   if (skipped) warnings.push(`${skipped} row(s) without a start date skipped; add them in Obsidian`);
   if (!built || mismatch) return null;
   const name = profile ? clean(`${clean(profile['first name'])} ${clean(profile['last name'])}`) : '';
-  return { ...built, contact: contactNote(name, 'linkedin-import', now), warnings };
+  return { ...built, contact: contactNote(name, 'linkedin-import', now), name, warnings };
 }

@@ -56,6 +56,57 @@ test('the master renders as editable text; a change shows the save bar and saves
   });
 });
 
+const NEW_SKILL = { text: 'Rust', new: true, from: 'LinkedIn export' };
+const merge = (added: object, sections: object[] = SECTIONS) => Response.json({ hash: 'h1', sections, added: { entries: 0, bullets: 0, skills: 0, languages: 0, ...added }, warnings: ['Skills.csv: note'] });
+
+test('LinkedIn export: new lines are tagged and saved without their marks; Discard puts the master back', async () => {
+  const withNew = [{ name: 'Skills', bullets: [{ id: 'skill-python', text: 'Python' }, NEW_SKILL] }, SECTIONS[1]!];
+  const { el, calls } = await mount((body) => ('sections' in body ? Response.json({ exists: true, hash: 'h2', sections: SECTIONS }) : merge({ skills: 1 }, withNew)));
+  click(el, 'Import LinkedIn export');
+  await vi.waitFor(() => expect(el.querySelector('.notice.ok')?.textContent).toContain('your LinkedIn export: 0 new entries, 0 new lines, 1 skills'));
+  expect(el.querySelector('.notice.ok')?.textContent).toContain('Skills.csv: note');
+  expect(el.textContent).toContain('New from LinkedIn export');
+  expect(calls).toEqual([{}]);
+
+  click(el, 'Discard');
+  await vi.waitFor(() => expect(el.textContent).not.toContain('New from LinkedIn export'));
+  expect(el.querySelector('.savebar')).toBeNull();
+  expect(calls).toHaveLength(1); // nothing was written
+
+  click(el, 'Import LinkedIn export');
+  await vi.waitFor(() => expect(el.querySelector('.savebar')).not.toBeNull());
+  click(el, 'Save');
+  await vi.waitFor(() => expect(calls).toHaveLength(3));
+  expect((calls[2] as { hash: string; sections: MasterSection[] }).sections[0]).toEqual({ name: 'Skills', bullets: [{ id: 'skill-python', text: 'Python' }, { text: 'Rust' }] });
+});
+
+test('LinkedIn export: nothing new keeps unsaved edits; an error shows its warnings and leaves the editor alone', async () => {
+  let answer = () => merge({});
+  const { el } = await mount(() => answer());
+  click(el, 'Add a skill');
+  await vi.waitFor(() => expect(el.querySelector('.savebar')).not.toBeNull());
+  click(el, 'Import LinkedIn export');
+  await vi.waitFor(() => expect(el.querySelector('.notice.ok')?.textContent).toContain('Nothing new in your LinkedIn export'));
+  expect(el.querySelectorAll('#cv-Skills textarea')).toHaveLength(3);
+  expect(el.querySelector('.savebar')).not.toBeNull();
+
+  answer = () => Response.json({ error: 'import_empty', warnings: ['export.zip: skipped'] }, { status: 400 });
+  click(el, 'Import LinkedIn export');
+  await vi.waitFor(() => expect(el.querySelector('[role="alert"]')?.textContent).toContain('No LinkedIn export found'));
+  expect(el.querySelector('[role="alert"]')?.textContent).toContain('export.zip: skipped');
+  expect(el.querySelectorAll('#cv-Skills textarea')).toHaveLength(3);
+});
+
+test('no master yet: no LinkedIn button, since the merge needs a master', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ exists: false })));
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
+  const el = document.createElement('div');
+  document.body.append(el);
+  createApp(MasterView).use(router).mount(el);
+  await vi.waitFor(() => expect(el.querySelector('.composer')).not.toBeNull());
+  expect(el.textContent).not.toContain('Import LinkedIn export');
+});
+
 test('a stale hash says the file changed in Obsidian; a bad date is caught before saving', async () => {
   const { el, calls } = await mount(() => Response.json({ error: 'master_changed' }, { status: 409 }));
   const start = el.querySelector<HTMLInputElement>('#cv-Experience input[placeholder="2021-03"]')!;

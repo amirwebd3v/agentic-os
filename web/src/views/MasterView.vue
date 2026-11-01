@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
-import { ApiError, getMaster, parseCvFiles, saveMaster, type MasterSection, type MasterState } from '../api';
+import { ApiError, getMaster, parseCvFiles, parseLinkedIn, saveMaster, type MasterMerge, type MasterSection, type MasterState } from '../api';
 import CvEditor from '../components/CvEditor.vue';
 import { allLines, cleaned, isEntries, problems, type CvSection } from '../cv';
 
@@ -15,7 +15,7 @@ const error = ref<string | null>(null);
 const notice = ref<string | null>(null);
 const warnings = ref<string[]>([]);
 const busy = ref(false);
-const reading = ref(false);
+const reading = ref<'word' | 'linkedin' | null>(null);
 const starting = ref(false);
 const dragging = ref(false);
 const picker = ref<HTMLInputElement>();
@@ -62,6 +62,9 @@ const PARSE_ERRORS: Record<string, string> = {
   import_unreadable: 'Those files gave no text. Only Word files (.docx) can be read here.',
   bad_upload: 'Choose up to 10 Word files (.docx), each under 5 MB.',
   bad_master: 'Your current career/master.md can’t be read, so nothing can be merged into it. Fix it in Obsidian first.',
+  import_empty: 'No LinkedIn export found. Request it under Settings → Get a copy of your data on LinkedIn, unzip it into career/import in the data folder (it needs Profile.csv or Positions.csv), then try again.',
+  linkedin_unreadable: 'Those files don’t have the columns of a LinkedIn export, so nothing was read. Download the export again, in English if you can.',
+  master_missing: 'There is no master CV to merge into yet. Import a Word CV or start writing first.',
 };
 const base64 = (f: File) =>
   new Promise<string>((ok, fail) => {
@@ -70,34 +73,40 @@ const base64 = (f: File) =>
     r.onerror = () => fail(r.error);
     r.readAsDataURL(f);
   });
+async function runImport(kind: 'word' | 'linkedin', what: string, parse: () => Promise<MasterMerge>) {
+  reading.value = kind;
+  error.value = null;
+  notice.value = null;
+  warnings.value = [];
+  try {
+    const res = await parse();
+    warnings.value = res.warnings;
+    const a = res.added;
+    // Nothing to review: the editor and anything typed in it stay as they are.
+    if (!a.entries && !a.bullets && !a.skills && !a.languages) return void (notice.value = `Nothing new in ${what}: everything is already in your master CV.`);
+    // The merge replaces the editor's content, so anything typed meanwhile is kept only if it was saved.
+    hash.value = res.hash;
+    sections.value = res.sections;
+    starting.value = true;
+    notice.value = `Read ${what}: ${a.entries} new entries, ${a.bullets} new lines, ${a.skills} skills and ${a.languages} languages, marked “New”. Check them, then Save.`;
+  } catch (err) {
+    const code = err instanceof ApiError ? err.detail : undefined;
+    error.value = (code && PARSE_ERRORS[code]) || "Couldn't read the files. Is the server running?";
+    warnings.value = err instanceof ApiError ? err.warnings : [];
+  } finally {
+    reading.value = null;
+    if (picker.value) picker.value.value = '';
+  }
+}
 async function importFiles(list: FileList | File[] | null) {
   const files = [...(list ?? [])];
   if (!files.length) return;
   const bad = files.filter((f) => !f.name.toLowerCase().endsWith('.docx') || f.size > MAX_BYTES);
   if (bad.length || files.length > MAX_FILES)
     return void (error.value = `Choose up to ${MAX_FILES} Word files (.docx), each under 5 MB.${bad.length ? ` Not accepted: ${bad.map((f) => f.name).join(', ')}.` : ''}`);
-  reading.value = true;
-  error.value = null;
-  notice.value = null;
-  warnings.value = [];
-  try {
-    const res = await parseCvFiles(await Promise.all(files.map(async (f) => ({ name: f.name, data: await base64(f) }))));
-    // The merge replaces the editor's content, so anything typed meanwhile is kept only if it was saved.
-    hash.value = res.hash;
-    sections.value = res.sections;
-    starting.value = true;
-    warnings.value = res.warnings;
-    const a = res.added;
-    notice.value = `Read ${files.length} ${files.length === 1 ? 'file' : 'files'}: ${a.entries} new entries, ${a.bullets} new lines, ${a.skills} skills and ${a.languages} languages, marked “New”. Check them, then Save.`;
-  } catch (err) {
-    const code = err instanceof ApiError ? err.detail : undefined;
-    error.value = (code && PARSE_ERRORS[code]) || "Couldn't read the files. Is the server running?";
-    warnings.value = err instanceof ApiError ? err.warnings : [];
-  } finally {
-    reading.value = false;
-    if (picker.value) picker.value.value = '';
-  }
+  await runImport('word', `${files.length} ${files.length === 1 ? 'file' : 'files'}`, async () => parseCvFiles(await Promise.all(files.map(async (f) => ({ name: f.name, data: await base64(f) })))));
 }
+const importLinkedIn = () => runImport('linkedin', 'your LinkedIn export', parseLinkedIn);
 const drop = (e: DragEvent) => {
   dragging.value = false;
   void importFiles(e.dataTransfer?.files ?? null);
@@ -164,7 +173,8 @@ onUnmounted(() => {
       </div>
       <div class="row">
         <input ref="picker" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple class="sr-only" aria-label="Word CVs to import" @change="importFiles(($event.target as HTMLInputElement).files)" />
-        <button type="button" :disabled="reading || busy" @click="picker?.click()">{{ reading ? 'Reading your CVs…' : 'Import Word CVs' }}</button>
+        <button v-if="state?.exists && 'sections' in state" type="button" :disabled="!!reading || busy" @click="importLinkedIn">{{ reading === 'linkedin' ? 'Reading your export…' : 'Import LinkedIn export' }}</button>
+        <button type="button" :disabled="!!reading || busy" @click="picker?.click()">{{ reading === 'word' ? 'Reading your CVs…' : 'Import Word CVs' }}</button>
       </div>
     </header>
 
@@ -173,14 +183,15 @@ onUnmounted(() => {
     <p v-else-if="!state" class="placeholder" role="status">Loading…</p>
 
     <template v-else>
-      <p v-if="error" class="notice danger" role="alert">
-        {{ error }} <button v-if="error.includes('Obsidian')" type="button" @click="load">Load the new version</button>
-      </p>
+      <div v-if="error" class="notice danger" role="alert">
+        <p>{{ error }} <button v-if="error.includes('Obsidian')" type="button" @click="load">Load the new version</button></p>
+        <ul v-if="warnings.length"><li v-for="(w, i) in warnings" :key="i">{{ w }}</li></ul>
+      </div>
       <div v-else-if="notice" class="notice ok" role="status">
         <p>{{ notice }}</p>
         <ul v-if="warnings.length"><li v-for="(w, i) in warnings" :key="i">{{ w }}</li></ul>
       </div>
-      <p v-if="reading" class="notice" role="status">Reading your CVs with the model. Your contact details are removed before anything is sent. This takes about a minute.</p>
+      <p v-if="reading === 'word'" class="notice" role="status">Reading your CVs with the model. Your contact details are removed before anything is sent. This takes about a minute.</p>
 
       <div v-if="state.exists && 'error' in state && !editing" class="notice danger" role="alert">
         <p><strong>career/master.md can't be read.</strong> {{ state.error }}</p>
@@ -192,7 +203,7 @@ onUnmounted(() => {
         <section class="notice">
           <h2>Import the CVs you have</h2>
           <p>Choose or drop one or more Word CVs. The app reads them, merges everything into one master CV without duplicates, and shows you the result to correct before saving.</p>
-          <button type="button" class="primary" :disabled="reading" @click="picker?.click()">Import Word CVs</button>
+          <button type="button" class="primary" :disabled="!!reading" @click="picker?.click()">Import Word CVs</button>
         </section>
         <section class="notice">
           <h2>Or write it here</h2>
