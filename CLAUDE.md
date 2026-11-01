@@ -18,7 +18,7 @@ Every session sees all installed skills with their descriptions; pick by the tas
 - **Check before a PR:** `pnpm verify`, then `simplify`, `ponytail:ponytail-review`, `code-review`. Add `security-reviewer` (cloud: `security-review`) when the change touches auth, uploads, prompts, contact data or spawns a process.
 - **New slice or big decision:** `feature-dev:feature-dev`, `architecture-designer`, `the-fool` (pre-mortem), `anthropic-skills:deep-research`.
 - **Not used on purpose:** `claude-mem:cloud-sync`, `knowledge-agent`, `screenpipe` (they copy data off this machine).
-- **claude-mem** stays off only for sessions reading email in the personal category. Everything else is allowed, including real CVs, postings and the vault.
+- **claude-mem** stays off only for sessions reading email in the personal category. Everything else is allowed, including real CVs, postings and the vault. A session opening the Email page on real mail runs with claude-mem off (the command guard can't see browser tools); only the owner's E8 run needs that.
 
 ## Hard rules
 1. **Green or no push.** The `pre-push` hook runs `pnpm verify`. Never use `--no-verify`. Judge a check by its exit code, never by grepping its output. A Claude Code hook (`.claude/settings.json` → `scripts/guard-command.mjs`, self-test `--test`) blocks that flag, a `gh pr merge` without `--match-head-commit`, and force-adding `docs/`.
