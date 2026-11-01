@@ -373,4 +373,10 @@ test('a letter may say "I\'d" and "I\'ve" and cite a whole job by its entry id',
   };
   const report = verifyDraft(draft, m, { company: 'Northwind', role_title: 'Engineer' }, {});
   expect(report.violations.filter((v) => v.code === 'unsupported_entity' || v.code === 'unknown_cite')).toEqual([]);
+
+  // A letter paragraph may cite up to 10 ids (a CV line stays at 5); 0 and 11 still fail.
+  const citing = (n: number) => verifyDraft({ ...draft, letter: { paragraphs: [para('l-1', 'I cut the build.', Array(n).fill('exp-acme-2021-aaaaaa'))] } }, m, { company: 'N', role_title: 'E' }, {}).violations.filter((v) => v.code === 'missing_cite');
+  expect(citing(10)).toEqual([]);
+  expect(citing(0)).toHaveLength(1);
+  expect(citing(11)).toHaveLength(1);
 });
