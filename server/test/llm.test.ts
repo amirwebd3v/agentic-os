@@ -37,7 +37,7 @@ function fakeFetch(...responses: (() => Response)[]) {
   });
 }
 
-const rows = () => db.prepare('SELECT pipeline, model, input_tokens, output_tokens, cache_read_tokens, error FROM llm_calls').all();
+const rows = () => db.prepare('SELECT pipeline, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, error FROM llm_calls').all();
 
 beforeEach(() => {
   db = makeTestDb();
@@ -100,7 +100,7 @@ test('structured: config baseURL and tier model, inherited ANTHROPIC_BASE_URL ig
   expect(out).toEqual({ answer: 'hi' });
   expect(requests[0]!.url).toBe('http://router.test:20128/v1/messages');
   expect(requests[0]!.body).toMatchObject({ model: config.llm.models.work, output_config: { format: { type: 'json_schema' } } });
-  expect(rows()).toEqual([{ pipeline: 'triage', model: config.llm.models.work, input_tokens: 11, output_tokens: 7, cache_read_tokens: 5, error: null }]);
+  expect(rows()).toEqual([{ pipeline: 'triage', model: config.llm.models.work, input_tokens: 11, output_tokens: 7, cache_read_tokens: 5, cache_write_tokens: 0, error: null }]);
 });
 
 test('structured: effort is sent only when set (plan R2)', async () => {

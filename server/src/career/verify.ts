@@ -30,7 +30,7 @@ export interface VerifyReport {
   violations: Violation[];
 }
 
-const MAX = { summary: 300, bullet: 300, paragraph: 1200, bullets: 18, minParagraphs: 3, maxParagraphs: 5, cites: 5, token: 40, minWords: 250, maxWords: 350 } as const;
+const MAX = { summary: 300, bullet: 300, paragraph: 1200, bullets: 18, minParagraphs: 3, maxParagraphs: 5, cites: 5, letterCites: 10, token: 40, minWords: 250, maxWords: 350 } as const;
 /**
  * Phrases a letter must not use (career-v2.md §5); the letter prompt bans a longer list. Matched whole-word and
  * case-insensitively, a space or hyphen matching either; the violation's token is the phrase from this list, never
@@ -101,7 +101,8 @@ export function verifyDraft(
     const ref = l.id;
     const model = l.origin === 'model';
     if (model && l.text.length > max) add('too_long', ref);
-    if (model && (l.cites.length < 1 || l.cites.length > MAX.cites)) add('missing_cite', ref);
+    // A letter paragraph holds several sentences, each with its own evidence (`extra` is set for the letter only).
+    if (model && (l.cites.length < 1 || l.cites.length > (extra ? MAX.letterCites : MAX.cites))) add('missing_cite', ref);
     const cited: string[] = [];
     for (const c of model ? l.cites : []) {
       // The letter may also cite a whole job (an entry id): its employer, title, dates and place are master facts.

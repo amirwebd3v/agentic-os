@@ -38,7 +38,8 @@ export const dashboardRoutes =
 
     // ponytail: rows are read one by one so days follow the user's local time; fine for a personal app's 30 days
     const calls = db.prepare(
-      `SELECT ts, pipeline, model, COALESCE(input_tokens, 0) input, COALESCE(output_tokens, 0) output, error IS NOT NULL failed
+      `SELECT ts, pipeline, model, COALESCE(input_tokens, 0) input, COALESCE(output_tokens, 0) output,
+         COALESCE(cache_read_tokens, 0) cache_read, COALESCE(cache_write_tokens, 0) cache_write, error IS NOT NULL failed
        FROM llm_calls WHERE ts >= ?`,
     );
     const count = (sql: string) => db.prepare(sql).pluck();
@@ -98,8 +99,8 @@ export const dashboardRoutes =
       const pipelines = new Map<string, Usage>();
       const totals = { ...empty(), failures: 0 };
       let priced = true;
-      for (const r of calls.all(start.toISOString()) as { ts: string; pipeline: string; model: string; input: number; output: number; failed: number }[]) {
-        const cost = costOf(r.model, r.input, r.output);
+      for (const r of calls.all(start.toISOString()) as { ts: string; pipeline: string; model: string; input: number; output: number; cache_read: number; cache_write: number; failed: number }[]) {
+        const cost = costOf(r.model, r.input, r.output, r.cache_read, r.cache_write);
         if (cost === null) priced = false;
         const day = days.get(localDay(new Date(r.ts)));
         if (day) {

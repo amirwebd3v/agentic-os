@@ -1,7 +1,8 @@
 /**
  * Anthropic first-party list prices, USD per million tokens, by model family and version (claude-api skill, cached
  * 2026-10-06). Keys are `<family>-<major>[.<minor>]`. A model not listed here is "not priced" (null), never guessed.
- * ponytail: cache reads/writes and Haiku 5.5's >100K-prompt rate are not priced; the estimate is input + output only.
+ * Cache reads cost 0.1× input, 5-minute cache writes 1.25×.
+ * ponytail: Haiku 5.5's >100K-prompt rate is not priced; add it if prompts that long appear.
  */
 export const PRICES: Record<string, { input: number; output: number }> = {
   'fable-5.1': { input: 10, output: 50 },
@@ -34,8 +35,8 @@ export function priceOf(model: string): { input: number; output: number } | null
 }
 
 /** USD for these tokens, or null when the model is unknown. Zero tokens cost 0 even for an unknown model. */
-export function costOf(model: string, inputTokens: number, outputTokens: number): number | null {
-  if (!inputTokens && !outputTokens) return 0;
+export function costOf(model: string, inputTokens: number, outputTokens: number, cacheRead = 0, cacheWrite = 0): number | null {
+  if (!inputTokens && !outputTokens && !cacheRead && !cacheWrite) return 0;
   const p = priceOf(model);
-  return p ? (inputTokens * p.input + outputTokens * p.output) / 1e6 : null;
+  return p ? ((inputTokens + cacheRead * 0.1 + cacheWrite * 1.25) * p.input + outputTokens * p.output) / 1e6 : null;
 }

@@ -575,10 +575,7 @@ test.each([
 });
 
 test.each([
-  ['a bullet under the wrong entry', () => ({ ...SELECTION, entries: [{ entry_id: K, bullet_ids: [`${N}-1a2b3c`] }] }), 'selection_invalid'],
-  ['an unknown id', () => ({ ...SELECTION, skill_ids: ['skill-cobol'] }), 'selection_invalid'],
-  ['an unknown requirement', () => ({ ...SELECTION, picks: [{ requirement_id: 'must-9', bullet_ids: ['sum-1'] }] }), 'selection_invalid'],
-  ['an entry twice', () => ({ ...SELECTION, entries: [...SELECTION.entries, SELECTION.entries[0]] }), 'selection_invalid'],
+  ['only stray ids', () => ({ picks: [{ requirement_id: 'must-9', bullet_ids: ['nope'] }], entries: [{ entry_id: K, bullet_ids: [`${N}-1a2b3c`] }], skill_ids: ['skill-cobol'] }), 'no_match'],
   ['nothing selected', () => ({ picks: [], entries: [{ entry_id: N, bullet_ids: [] }], skill_ids: [] }), 'no_match'],
   ['a provider error', () => { throw new LlmError('overloaded', 'provider error 529', 529); }, 'provider_error'],
   ['an answer outside the schema', () => ({ picks: 'all' }), 'provider_error'],
@@ -588,6 +585,24 @@ test.each([
   expect(t.app()).toEqual({ status: 'failed', step: 'match', fail_code: code });
   expect(t.jobs()).toEqual([{ key: `career:match:${t.id}:0`, status: 'done' }]);
   expect(t.db.prepare('SELECT detail FROM application_events').pluck().all()).toEqual([JSON.stringify({ step: 'match', fail_code: code })]);
+});
+
+test('match: stray ids are dropped and a repeated entry merged, the rest of the answer is kept (#92)', async () => {
+  const first = SELECTION.entries[0]!;
+  const t = pipeline({
+    match: () => ({
+      picks: [...SELECTION.picks, { requirement_id: 'must-9', bullet_ids: ['sum-1'] }],
+      entries: [{ ...first, bullet_ids: [...first.bullet_ids, 'nope', `${K}-0a1b2c`] }, first, { entry_id: 'no-such-entry', bullet_ids: [] }],
+      skill_ids: [...SELECTION.skill_ids, 'skill-cobol'],
+    }),
+  }, config, 'match');
+  await t.run();
+  expect((t.app() as { fail_code: string | null }).fail_code).toBeNull();
+  const sel = JSON.parse(t.db.prepare("SELECT body FROM application_texts WHERE application_id = ? AND kind = 'selection'").pluck().get(t.id) as string);
+  expect(sel.entries.find((e: { entry_id: string }) => e.entry_id === first.entry_id)).toEqual(first);
+  expect(sel.entries.map((e: { entry_id: string }) => e.entry_id)).not.toContain('no-such-entry');
+  expect(sel.skill_ids).toEqual(SELECTION.skill_ids);
+  expect(sel.picks.map((p: { requirement_id: string }) => p.requirement_id)).not.toContain('must-9');
 });
 
 test('draft: an answer outside the schema → provider_error; a missing master → failed/internal through the runner', async () => {
