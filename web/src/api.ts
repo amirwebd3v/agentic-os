@@ -189,10 +189,10 @@ export type MasterState =
 export const getMaster = () => json<MasterState>('GET', '/api/career/master');
 export const saveMaster = (hash: string | null, sections: MasterSection[]) => json<MasterState>('PUT', '/api/career/master', { hash, sections });
 /** Reads Word CVs and returns the master merged with them; nothing is written (career-v2.md §2). */
-export const parseCvFiles = (files: { name: string; data: string }[]) =>
-  json<{ hash: string | null; sections: CvSection[]; added: { entries: number; bullets: number; skills: number; languages: number }; warnings: string[] }>(
-    'POST', '/api/career/master/parse', { files },
-  );
+export type MasterMerge = { hash: string | null; sections: CvSection[]; added: { entries: number; bullets: number; skills: number; languages: number }; warnings: string[] };
+export const parseCvFiles = (files: { name: string; data: string }[]) => json<MasterMerge>('POST', '/api/career/master/parse', { files });
+/** Same, from the LinkedIn data export in the import folder; no model involved. */
+export const parseLinkedIn = () => json<MasterMerge>('POST', '/api/career/master/parse-linkedin', {});
 
 // Dashboard (career-v2.md §6): counts and aggregates only.
 export type Usage = { calls: number; input_tokens: number; output_tokens: number; failures?: number; cost: number | null };
