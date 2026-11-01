@@ -152,7 +152,7 @@ function putDraft(stored: Draft, body: DraftPut, masterEntryIds: ReadonlySet<str
     }
     if (old.text !== text) {
       refs.push(old.id);
-      // ponytail: Levenshtein is O(n·m); the stored line is capped at 2000 chars for the metric only.
+      // ponytail: Levenshtein is O(n·m); the stored line is capped at 2000 chars for the metric only. Sample lines if saving a draft gets slow.
       if (old.origin === 'model') distances.push(editDistance(old.text.slice(0, 2000), text));
     }
     return { ...old, text };
@@ -850,6 +850,7 @@ export const careerRoutes =
         audit(db, { actor: 'user', action: 'career.application.ats', args: { id, error: 'provider_error' } });
         return reply.code(502).send({ error: 'provider_error' });
       }
+      if (!appRow(id)) return reply.code(404).send({ error: 'not_found' }); // deleted during the call: store nothing
       saveText(db, id, 'ats', report);
       audit(db, { actor: 'user', action: 'career.application.ats', args: { id, score: report.score, draft_version: report.draft_version } });
       return applicationDetail(db, vaultDir, id);

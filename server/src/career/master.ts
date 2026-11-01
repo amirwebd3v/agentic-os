@@ -287,7 +287,7 @@ export interface MergeAdded {
 
 /** Entry key: case and whitespace ignored. */
 const headKey = (s: string) => s.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
-/** Line key: case, whitespace and punctuation ignored. ponytail: `#` is kept so `C#` stays apart from `C`. */
+/** Line key: case, whitespace and punctuation ignored. ponytail: `#` is kept so `C#` stays apart from `C`; keep `+` the same way if `C++` ever merges with `C`. */
 const lineKey = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[\p{P}\s]/gu, (c) => (c === '#' ? c : ''));
 
 /**

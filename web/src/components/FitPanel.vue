@@ -25,8 +25,10 @@ function start(s: Suggestion) {
   truthful.value = false;
   alsoMaster.value = true;
 }
+/** A suggestion's `[number]`-style gap must be filled in before the line can reach the CV. */
+const hasGap = () => /\[[^\]]*\]/.test(text.value);
 function confirm(s: Suggestion) {
-  if (!truthful.value || !text.value.trim()) return;
+  if (!truthful.value || !text.value.trim() || hasGap()) return;
   emit('accept', s, text.value.trim(), alsoMaster.value);
   accepting.value = null;
 }
@@ -97,7 +99,7 @@ function confirm(s: Suggestion) {
             <label class="check"><input v-model="truthful" type="checkbox" /> This is true for me</label>
             <label class="check"><input v-model="alsoMaster" type="checkbox" /> Also add it to my master CV</label>
             <div class="row">
-              <button type="submit" :disabled="!truthful || !text.trim() || busy">Add to the CV</button>
+              <button type="submit" :disabled="!truthful || !text.trim() || hasGap() || busy">Add to the CV</button>
               <button type="button" class="quiet" @click="accepting = null">Cancel</button>
             </div>
           </form>

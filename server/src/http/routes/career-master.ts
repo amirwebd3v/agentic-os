@@ -97,7 +97,7 @@ const parseSchema = {
 /**
  * Drops what `PUT /career/master` would refuse (putSchema's text lengths, control characters) and counts it.
  * `allowed` drops more by the caller's own rule.
- * ponytail: the item counts (50 bullets per entry, 100 entries) aren't cut here; past them the PUT says bad_master.
+ * ponytail: the item counts (50 bullets per entry, 100 entries) aren't cut here; past them the PUT says bad_master. Cut them here if a real import reaches them.
  */
 function fitForPut(sections: Section[], allowed: (text: string) => boolean = () => true): { sections: Section[]; dropped: number } {
   let dropped = 0;
@@ -142,6 +142,12 @@ export const careerMasterRoutes =
       let source_files: string[];
       let auditFiles: string[]; // a CV's file name can hold the owner's name: audit only its type
       if (result) {
+        // Master lines reach the model later: free text holding contact details is left out, as in the later merge.
+        const m = parseMaster(result.master);
+        const name = { name: result.name ?? '' };
+        const { sections, dropped } = fitForPut(m.sections, (t) => scrubContactLike(t) === t && redactContact(t, name) === t);
+        result = { ...result, master: serialiseMaster({ ...m, sections }) };
+        if (dropped) warnings.push(`${dropped} item(s) with contact details or too long for the editor were left out; add them by hand`);
         source_files = auditFiles = Object.keys(files);
         for (const f of sources) if (!f.known) warnings.push(`${f.name}: skipped: the LinkedIn CSVs were imported instead`);
       } else {
@@ -305,7 +311,7 @@ export const careerMasterRoutes =
       warnings.push(...result.warnings);
       // Master lines reach the model later. The export's contact columns are never mapped, but free text can hold the same
       // details: such a line is left out, as in a Word import. The address lines would hit ordinary places ("Berlin"), so not those.
-      // ponytail: scrubContactLike also hits `Node.js/TS` and `1.000.000`; the warning below says so, and the owner adds them by hand.
+      // ponytail: scrubContactLike also hits `Node.js/TS` and `1.000.000`; the warning below says so, and the owner adds them by hand. Narrow the scrub if that gets tedious.
       const known = [{ ...contactOrWarn(warnings), address: '', dob: '' }, { name: result.name ?? '' }];
       const allowed = (t: string) => scrubContactLike(t) === t && known.every((c) => redactContact(t, c) === t);
       const { sections, dropped } = fitForPut(parseMaster(result.master).sections, allowed);
@@ -313,7 +319,7 @@ export const careerMasterRoutes =
       return merged(hash, current, [{ from: 'LinkedIn export', sections }], warnings, { files: Object.keys(files).length, read: 1, source: 'linkedin' });
     });
 
-    // One git process at a time. ponytail: the writer and approvals have their own chains; a failed commit is caught by the next `add -A`
+    // One git process at a time. ponytail: the writer and approvals have their own chains; a failed commit is caught by the next `add -A`. Share one chain if commits start failing
     let committing: Promise<unknown> = Promise.resolve();
     const upsertNote = db.prepare(
       `INSERT INTO vault_notes (path, content_hash, last_written_by) VALUES (?, ?, 'user')
@@ -369,7 +375,7 @@ export const careerMasterRoutes =
         if (!wrote) return reply.code(409).send({ error: 'master_changed' });
         committing = committing
           .then(() => gitCommit(vaultDir, `aos: edit ${MASTER}\n\n${MASTER}`))
-          .catch((err: unknown) => api.log.warn(`vault commit failed: ${(err as Error).message}`));
+          .catch(() => api.log.warn('vault commit failed')); // never git's message: it carries paths and stderr
         return { exists: true, hash, sections };
       },
     );

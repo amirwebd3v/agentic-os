@@ -322,7 +322,7 @@ test('atsCode: the arithmetic of each code check', () => {
         {
           name: 'Experience',
           entries: [
-            { id: 'e-1', org: 'A', title: 'T', start: '2021-03', end: 'present', location: '', bullets: [line('l-2', 'Terraform on AWS daily.'), line('l-3', 'x'.repeat(300))] },
+            { id: 'e-1', org: 'A', title: 'T', start: '2021-03', end: 'present', location: '', bullets: [line('l-2', 'Terraform on AWS daily.'), line('l-3', 'x'.repeat(301))] },
             { id: 'e-2', org: 'B', title: 'T', start: '', end: '', location: '', bullets: [] },
           ],
         },
@@ -346,7 +346,7 @@ test('atsCode: the arithmetic of each code check', () => {
     length: [0, 5], // far under 350 words
     dates: [2.5, 5], // one of two entries dated
     contact: [3.3, 5], // phone missing
-    bullets: [3.3, 5], // one of three lines at 300 characters
+    bullets: [3.3, 5], // one of three lines over 300 characters
   });
   expect(parts.find((p) => p.name === 'keywords')!.notes).toEqual(['Not found: Kubernetes and Helm']);
   expect(parts.find((p) => p.name === 'contact')!.notes).toEqual(['Not set in contact.md: phone']);
@@ -379,4 +379,9 @@ test('a letter may say "I\'d" and "I\'ve" and cite a whole job by its entry id',
   expect(citing(10)).toEqual([]);
   expect(citing(0)).toHaveLength(1);
   expect(citing(11)).toHaveLength(1);
+
+  // A model line can't pull the date of birth into the document; the name is still allowed.
+  const placeholder = (t: string) => verifyDraft({ ...draft, letter: { paragraphs: [para('l-1', t, ['exp-acme-2021-aaaaaa'])] } }, m, { company: 'N', role_title: 'E' }, {}).violations.filter((v) => v.code === 'bad_placeholder');
+  expect(placeholder('Born {{CONTACT_DOB}}.')).toHaveLength(1);
+  expect(placeholder('Reach {{CONTACT_EMAIL}}.')).toEqual([]);
 });

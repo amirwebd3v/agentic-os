@@ -185,7 +185,7 @@ ${DATA_RULE}
 - 250 to 350 words in 3 to 5 paragraphs, first person ("I"), plain and specific. No salutation and no sign-off: they are added separately.
 - Open with what the candidate can do about the employer's business problem (<vacancy>), not with "I am applying". Link the candidate's results to the outcomes the role needs. Close with one concrete, modest sentence.
 - Build it from the master lines, the candidate's answers in <answers>, and the verified company points in <company>. Never invent a fact, number, employer, tool or result.
-- cites, for each paragraph including the first and the last: 1 to 10 ids that back every factual sentence in it: master ids (the " ^<id>" at a line's end), answer ids ("a-1") and verified company point ids ("c-2"). Every number, name, product, tool and acronym in a paragraph must appear in what it cites; the company name and the role title may always be used, spelled exactly as in <requirements> or <context> and never shortened.
+- cites, for each paragraph including the first and the last: 1 to 10 ids that back every factual sentence in it: master ids (the " ^<id>" at a line's end), answer ids ("a-1") and verified company point ids ("c-2"; only the words in a point's quotes count as backed). Every number, name, product, tool and acronym in a paragraph must appear in what it cites; the company name and the role title may always be used, spelled exactly as in <requirements> or <context> and never shortened.
 - Before you answer, check every capitalised word, acronym and number in each paragraph: it must stand in a line that paragraph cites, or go. A skill in <master> needs that line's id in cites. The employer's product or team names need a verified company point in cites.
 - Never use these phrases or close variants: ${BANNED.map((b) => `"${b}"`).join(', ')}.
 - Never write a name, e-mail address, phone number, street address or URL. If the letter must refer to one, use only {{CONTACT_NAME}}, {{CONTACT_EMAIL}}, {{CONTACT_PHONE}}, {{CONTACT_ADDRESS}}, {{CONTACT_URL}}.`;
@@ -244,7 +244,7 @@ export async function writeLetter(
       'The previous letter failed the checks in <violations>. Each ref is a paragraph id in <previous_letter>, or "letter" for the whole letter (its length or paragraph count). Write the whole letter again and fix every one. missing_cite: give that paragraph 1 to 10 ids. unsupported_entity or unsupported_number: cite a line containing that token, or remove it; a word from the posting alone is not evidence.',
       // A bare "letter_length" made the model guess; the count tells it which way and how far (both are numbers only).
       ...(retry.violations.some((v) => v.code === 'letter_length')
-        ? [`The previous letter had ${retry.letter.map((l) => l.text).join(' ').split(/\s+/).filter(Boolean).length} words; this one must have 250 to 350. Add substance from <master>, <answers> and <vacancy>, not filler.`]
+        ? [`The previous letter had ${retry.letter.map((l) => l.text).join(' ').split(/\s+/).filter(Boolean).length} words; this one must have 250 to 350. Add substance from <master> and <answers>, not filler.`]
         : []),
     );
   }

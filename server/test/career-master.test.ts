@@ -161,6 +161,20 @@ async function setup(llm?: typeof structured) {
   return { ...t, vault, importDir, imp, post, pending };
 }
 
+test('first LinkedIn import leaves out a line holding contact details, with a warning', async () => {
+  const t = await setup();
+  mkdirSync(t.importDir, { recursive: true });
+  cpSync(FIXTURE, t.importDir, { recursive: true });
+  const skills = join(t.importDir, 'Skills.csv');
+  writeFileSync(skills, `${readFileSync(skills, 'utf8').trimEnd()}
+call me on +49 170 1234567
+`);
+  const res = await t.imp();
+  expect(res.statusCode).toBe(201);
+  expect(JSON.parse(t.pending()[0]!.payload).master).not.toContain('1234567');
+  expect(res.json().warnings.join(' ')).toContain('left out');
+});
+
 test('import → one pending approval → approve writes both files as the user’s → master_exists', async () => {
   const t = await setup();
   expect((await t.imp()).json()).toEqual({ error: 'import_empty', warnings: [] }); // no folder yet
