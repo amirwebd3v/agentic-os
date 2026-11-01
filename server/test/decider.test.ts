@@ -20,9 +20,14 @@ afterEach(() => {
 });
 
 async function fake(handler: RequestListener): Promise<string> {
-  srv = createServer(handler);
-  await new Promise<void>((r) => srv!.listen(0, '127.0.0.1', r));
-  return `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  // fetch refuses its "bad ports" (all ≤ 10080: 4190, 6667…), and Windows hands out ephemeral ports that low.
+  for (;;) {
+    srv = createServer(handler);
+    await new Promise<void>((r) => srv!.listen(0, '127.0.0.1', r));
+    const { port } = srv.address() as AddressInfo;
+    if (port > 10080) return `http://127.0.0.1:${port}`;
+    srv.close();
+  }
 }
 
 const json = (body: unknown, status = 200): RequestListener => (_req, res) => {
