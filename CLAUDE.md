@@ -18,6 +18,7 @@ Every session sees all installed skills with their descriptions; pick by the tas
 - **Check before a PR:** `pnpm verify`, then `simplify`, `ponytail:ponytail-review`, `code-review`. Add `security-reviewer` (cloud: `security-review`) when the change touches auth, uploads, prompts, contact data or spawns a process.
 - **New slice or big decision:** `feature-dev:feature-dev`, `architecture-designer`, `the-fool` (pre-mortem), `anthropic-skills:deep-research`.
 - **Not used on purpose:** `claude-mem:cloud-sync`, `knowledge-agent`, `screenpipe` (they copy data off this machine).
+- **claude-mem** stays off only for sessions reading email in the personal category. Everything else is allowed, including real CVs, postings and the vault.
 
 ## Hard rules
 1. **Green or no push.** The `pre-push` hook runs `pnpm verify`. Never use `--no-verify`. Judge a check by its exit code, never by grepping its output. A Claude Code hook (`.claude/settings.json` → `scripts/guard-command.mjs`, self-test `--test`) blocks that flag, a `gh pr merge` without `--match-head-commit`, and force-adding `docs/`.
@@ -63,3 +64,4 @@ Every session sees all installed skills with their descriptions; pick by the tas
 - 2026-10-26: stopping a backgrounded `pnpm … tsx src/main.ts` left node holding its port. → After stopping a dev server, check the port with `netstat -ano` and stop that PID once its command line confirms it is yours.
 - 2026-10-26: `/tmp` is shared by parallel sessions. A `pnpm verify > /tmp/v.log` showed a sibling worktree's failure as if it were ours. → Write logs and scratch files to the session's own scratchpad, never a fixed `/tmp` name.
 - 2026-10-27: `/code-review <sha>` checked out that commit and left a detached HEAD, so the next commit and my edits landed off the branch. → After any review skill run `git branch --show-current` before committing, and review a past commit with `git show` or a worktree, not a checkout.
+- 2026-11-01: a decider test flaked "under load", but the cause was `fetch` refusing a random port on its bad-port list. → Print the error's `cause` before believing a timing theory; a test server for `fetch` must avoid ports ≤ 10080.
