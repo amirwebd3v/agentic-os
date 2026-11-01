@@ -11,12 +11,9 @@ export interface TokenStore {
 }
 
 export const credentialManagerTokens: TokenStore = {
+  // Null means no entry. A Credential Manager failure throws: treating it as "no token" would skip the revoke.
   get(accountId) {
-    try {
-      return entry(accountId).getPassword();
-    } catch {
-      return null;
-    }
+    return entry(accountId).getPassword();
   },
   set(accountId, token) {
     entry(accountId).setPassword(token);

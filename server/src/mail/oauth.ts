@@ -28,6 +28,22 @@ export type ConsentResult =
   | { status: 'granted'; accessToken: string; refreshToken: string }
   | { status: 'cancelled' | 'wrong_scope' | 'failed' | 'timed_out' };
 
+/**
+ * True when the token no longer works: revoked now, or Google says it was already invalid (400). False when Google
+ * couldn't be reached in time. The error is dropped on purpose: its URL carries the token.
+ */
+export async function revoke(client: OAuthClient, token: string, timeoutMs = 10_000): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  const call = client.revokeToken(token).then(
+    () => true,
+    (err: { status?: number; response?: { status?: number } }) => (err.status ?? err.response?.status) === 400,
+  );
+  return Promise.race([call, late]).finally(() => clearTimeout(timer));
+}
+
 const page = (text: string) => `<!doctype html><meta charset="utf-8"><title>Agentic OS</title><p>${text}</p>`;
 
 /** The scope must be exactly read-only: anything wider is revoked and refused. */
@@ -35,7 +51,7 @@ async function exchange(client: OAuthClient, code: string, codeVerifier: string,
   const { tokens } = await client.getToken({ code, codeVerifier, redirect_uri });
   const held = tokens.refresh_token ?? tokens.access_token;
   if (tokens.scope?.trim() !== GMAIL_SCOPE) {
-    if (held) await client.revokeToken(held).catch(() => undefined);
+    if (held) await revoke(client, held);
     return { status: 'wrong_scope' };
   }
   if (!tokens.access_token || !tokens.refresh_token) return { status: 'failed' };
@@ -65,6 +81,7 @@ export async function startConsent(client: OAuthClient, done: (result: ConsentRe
   const state = randomBytes(32).toString('base64url');
   const { server, redirect } = await listenOnSafePort();
   let finished = false;
+  let exchanging = false;
   const finish = (result: ConsentResult) => {
     if (finished) return;
     finished = true;
@@ -91,7 +108,16 @@ export async function startConsent(client: OAuthClient, done: (result: ConsentRe
       return;
     }
     res.end(page('Done. You can close this tab and go back to Agentic OS.'));
-    exchange(client, code, codeVerifier, redirect).then(finish, () => finish({ status: 'failed' }));
+    if (exchanging) return; // a browser retry: Google would refuse the reused code and fail a good connect
+    exchanging = true;
+    exchange(client, code, codeVerifier, redirect).then(
+      (result) => {
+        // Cancelled or timed out meanwhile: nobody will store this token, so it must not stay valid at Google.
+        if (finished && result.status === 'granted') void revoke(client, result.refreshToken);
+        finish(result);
+      },
+      () => finish({ status: 'failed' }),
+    );
   });
 
   const url = client.generateAuthUrl({

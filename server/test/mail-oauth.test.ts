@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { emailRoutes } from '../src/http/routes/email.ts';
 import type { EmailDeps } from '../src/http/routes/email.ts';
 import { createGmail, GmailError } from '../src/mail/gmail.ts';
-import { GMAIL_SCOPE, startConsent } from '../src/mail/oauth.ts';
+import { GMAIL_SCOPE, revoke, startConsent } from '../src/mail/oauth.ts';
 import type { ConsentResult, OAuthClient } from '../src/mail/oauth.ts';
 import { buildTestApp } from './helpers.ts';
 
@@ -111,6 +111,54 @@ describe('consent flow', () => {
   });
 });
 
+describe('tokens nobody will hold are revoked', () => {
+  test('a cancel while the code is being exchanged', async () => {
+    const { client, revoked } = fakeClient();
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const getToken = client.getToken.bind(client);
+    client.getToken = async (o) => {
+      await gate;
+      return getToken(o);
+    };
+    let result: ConsentResult | undefined;
+    const flow = await startConsent(client, (r) => (result = r));
+    const { redirect, state } = parts(flow.url);
+    await fetch(`${redirect}/?state=${state}&code=x`);
+    flow.cancel();
+    expect(result).toEqual({ status: 'cancelled' });
+    release();
+    await vi.waitFor(() => expect(revoked).toEqual(['rt']));
+  });
+
+  test('a browser retry does not exchange the code twice', async () => {
+    const { client } = fakeClient();
+    const getToken = vi.spyOn(client, 'getToken');
+    const flow = await startConsent(client, () => {});
+    const { redirect, state } = parts(flow.url);
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    getToken.mockImplementationOnce(async () => {
+      await gate;
+      return { tokens: { access_token: 'at', refresh_token: 'rt', scope: GMAIL_SCOPE } };
+    });
+    await fetch(`${redirect}/?state=${state}&code=x`);
+    await fetch(`${redirect}/?state=${state}&code=x`);
+    release();
+    await vi.waitFor(() => expect(getToken).toHaveBeenCalledTimes(1));
+  });
+
+  test('revoke: an already invalid token counts, a hang does not', async () => {
+    const { client } = fakeClient();
+    client.revokeToken = async () => Promise.reject(Object.assign(new Error('x'), { status: 400 }));
+    expect(await revoke(client, 't')).toBe(true);
+    client.revokeToken = async () => Promise.reject(new Error('offline'));
+    expect(await revoke(client, 't')).toBe(false);
+    client.revokeToken = () => new Promise(() => {});
+    expect(await revoke(client, 't', 10)).toBe(false);
+  });
+});
+
 describe('accounts routes', () => {
   async function setup(over: Partial<EmailDeps> & { emails?: string[] } = {}) {
     const emails = [...(over.emails ?? ['a@example.com'])];
@@ -192,6 +240,32 @@ describe('accounts routes', () => {
     expect(t.db.prepare('SELECT account_id FROM mail_messages').pluck().all()).toEqual([1]);
     expect((await del(9, '0')).statusCode).toBe(404);
     expect((await del(1, 'x')).statusCode).toBe(400);
+  });
+
+  test('a reconnect revokes the token it replaces', async () => {
+    const t = await setup({ emails: ['a@example.com', 'a@example.com'] });
+    t.tokens.m.set(1, 'old');
+    await t.connect();
+    await vi.waitFor(() => expect(t.fake.revoked).toEqual(['old']));
+    expect(t.tokens.m.get(1)).toBe('rt');
+  });
+
+  test('a Credential Manager failure leaves no connected row, and revokes the new token', async () => {
+    const tokens = memoryTokens();
+    const t = await setup({ tokens: { ...tokens.store, set: () => { throw new Error('keyring'); } } });
+    const { url } = (await t.app.inject(t.authed({ method: 'POST', url: '/api/email/accounts/connect' }))).json();
+    await fetch(`${parts(url).redirect}/?state=${parts(url).state}&code=x`);
+    await vi.waitFor(async () => expect((await t.get()).flow).toBe('failed'));
+    expect((await t.get()).accounts).toEqual([]);
+    expect(t.fake.revoked).toEqual(['rt']);
+  });
+
+  test('a Credential Manager failure on disconnect is visible and keeps the account', async () => {
+    const tokens = memoryTokens();
+    const t = await setup({ tokens: { ...tokens.store, get: () => { throw new Error('keyring'); } } });
+    t.db.prepare(`INSERT INTO mail_accounts (email) VALUES ('a@example.com')`).run();
+    expect((await t.app.inject(t.authed({ method: 'DELETE', url: '/api/email/accounts/1?keep=0' }))).statusCode).toBe(500);
+    expect((await t.get()).accounts).toHaveLength(1);
   });
 
   test('an offline revoke still removes the token and says it failed', async () => {
