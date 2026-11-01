@@ -137,7 +137,7 @@ const draftRules = (language: 'en' | 'de') => `You write a tailored CV from the 
 ${DATA_RULE}
 
 - Write in ${LANGUAGE_NAME[language]}, the language of the master CV, whatever the posting's language.
-- cites: 1 to 5 ids of master bullets or skills (the " ^<id>" at a line's end) that support the line. A CV bullet cites only bullets of the entry it is listed under.
+- cites: 1 to 5 ids (the " ^<id>" at a line's end) that support the line. A CV bullet cites only bullets of the entry it is listed under, never a skill; only the summary may cite skills.
 - Reword lightly, never add facts: every number, name, product, tool and acronym in a line must appear in the lines it cites.
 - Do not write employer names, job titles or dates as CV bullets: they are copied from the master separately.
 - Never write a name, e-mail address, phone number, street address or URL.

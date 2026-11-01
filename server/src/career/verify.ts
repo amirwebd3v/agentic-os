@@ -47,7 +47,8 @@ export interface VerifyOptions {
   /** More whole phrases the letter may name (the company name typed on the form). */
   phrases?: string[];
 }
-const PLACEHOLDERS = new Set(CONTACT_FIELDS.map((f) => `{{CONTACT_${f.toUpperCase()}}}`));
+/** The date of birth is never a placeholder a line may use: a posting could otherwise pull it into the document. */
+const PLACEHOLDERS = new Set(CONTACT_FIELDS.filter((f) => f !== 'dob').map((f) => `{{CONTACT_${f.toUpperCase()}}}`));
 
 const NUMBER = /\p{Nd}+(?:[.,]\p{Nd}+)*(?:\s?%)?/gu;
 /** Decimal comma and `40 %` normalised, so `4,5` matches `4.5` and `40 %` matches `40%`. */
@@ -77,7 +78,7 @@ const isEntity = ({ t, start }: { t: string; start: boolean }, language: 'en' | 
  * Checks a draft against the master (contract §6, career-v2.md §1): every model line traced to the lines it cites,
  * by plain code. Refs: a line id (`l-7`), an entry id (`e-2`: its `source` is unknown), or `cv`, `letter`, `cv.skills`.
  * Owner and suggestion lines are not checked against cites, only for contact leaks and placeholders.
- * ponytail: numbers written as words ("four") and wording ("led" for "helped") pass; the user's review is the last check.
+ * ponytail: numbers written as words ("four") and wording ("led" for "helped") pass; the user's review is the last check. Add a number-word list if the owner finds one in a draft.
  */
 export function verifyDraft(
   draft: Draft,

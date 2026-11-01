@@ -18,7 +18,7 @@ const ticks = computed(() => (props.data.length > 10 ? [0, Math.floor(props.data
   <figure class="chart" :aria-label="title">
     <div v-if="!horizontal" class="cols" :style="{ height: `${height}px` }" @mouseleave="hover = null">
       <span
-        v-for="(d, i) in data" :key="d.label" class="col" :class="{ on: hover === i }" tabindex="0"
+        v-for="(d, i) in data" :key="d.label" class="col" :class="{ on: hover === i }" tabindex="0" role="img"
         :aria-label="`${d.label}: ${d.value === null ? 'not known' : format(d.value)}`"
         @mouseenter="hover = i" @focus="hover = i" @blur="hover = null"
       ><i :style="{ height: d.value ? `max(2px, ${pct(d.value)})` : '0' }"></i></span>

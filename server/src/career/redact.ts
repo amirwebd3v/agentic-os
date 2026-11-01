@@ -30,7 +30,7 @@ function variants(field: ContactField, value: string): [string, number][] {
       return [[`(?:https?://)?(?:www\\.)?${esc(core)}/?`, core.length]];
     }
     case 'address': {
-      // ponytail: every single line is redacted too, so a line like "Germany" also hides that word in a posting; fine for prompts.
+      // ponytail: every single line is redacted too, so a line like "Germany" also hides that word in a posting; fine for prompts; match whole lines only if it hides a word the model needs.
       const lines = value.split(/[\n,]/).map((l) => l.trim()).filter((l) => l.length >= MIN_CHARS);
       const whole: [string, number][] = lines.length > 1 ? [[lines.map(lit).join('[\\s,]+'), value.length]] : [];
       return [...whole, ...lines.map((l): [string, number] => [lit(l), l.length])];

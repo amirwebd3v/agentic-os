@@ -14,7 +14,6 @@
     "verify": "pnpm typecheck && pnpm lint && pnpm test",
     "secrets": "pnpm --filter @agentic-os/server exec tsx src/cli/secrets.ts",
     "vault:init": "pnpm --filter @agentic-os/server exec tsx src/cli/vault-init.ts",
-    "vault:retire": "pnpm --filter @agentic-os/server exec tsx src/cli/vault-retire.ts",
     "dev": "concurrently -n server,web -c blue,green \"pnpm dev:server\" \"pnpm dev:web\"",
     "dev:server": "pnpm --filter @agentic-os/server exec tsx watch src/main.ts --dev",
     "dev:web": "pnpm --filter @agentic-os/web dev",

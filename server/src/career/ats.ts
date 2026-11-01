@@ -62,7 +62,7 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 /**
  * The code checks (60 of 100 points): keywords (must-have ×2, nice-to-have ×1, whole-word), Summary / Experience /
  * Skills present, 350–900 words, a parseable start on every entry, name / e-mail / phone set in `contact.md` (the
- * values the template's contact placeholders render), every CV line under 300 characters. Notes name requirements,
+ * values the template's contact placeholders render), every CV line at most 300 characters. Notes name requirements,
  * sections and contact field names, never contact values.
  */
 export function atsCode(d: Draft, req: Pick<Requirements, 'must_have' | 'nice_to_have'>, contact: Contact): { parts: AtsPart[]; findings: Finding[] } {
@@ -112,9 +112,9 @@ export function atsCode(d: Draft, req: Pick<Requirements, 'must_have' | 'nice_to
   if (noContact.length) findings.push({ severity: 'high', text: `Your contact details lack: ${noContact.join(', ')}.` });
 
   const lines: CvLine[] = d.cv.sections.flatMap((s) => ('bullets' in s ? s.bullets : s.entries.flatMap((e) => e.bullets)));
-  const long = lines.filter((l) => l.text.length >= BULLET_MAX);
+  const long = lines.filter((l) => l.text.length > BULLET_MAX);
   parts.push({ name: 'bullets', score: lines.length ? round1((POINTS.bullets * (lines.length - long.length)) / lines.length) : POINTS.bullets, max: POINTS.bullets, notes: long.map((l) => `Over ${BULLET_MAX} characters: ${l.id}`) });
-  if (long.length) findings.push({ severity: 'low', text: `${long.length} line(s) run to ${BULLET_MAX} characters or more.` });
+  if (long.length) findings.push({ severity: 'low', text: `${long.length} line(s) run over ${BULLET_MAX} characters.` });
 
   return { parts, findings };
 }

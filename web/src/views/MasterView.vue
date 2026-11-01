@@ -175,7 +175,7 @@ onUnmounted(() => {
         <p class="lede">Everything the app may say about you, from all your CVs in one place. Each tailored line cites a line here.</p>
       </div>
       <div class="row">
-        <input ref="picker" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple class="sr-only" aria-label="Word CVs to import" @change="importFiles(($event.target as HTMLInputElement).files)" />
+        <input ref="picker" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple class="sr-only" tabindex="-1" aria-label="Word CVs to import" @change="importFiles(($event.target as HTMLInputElement).files)" />
         <button v-if="state?.exists && 'sections' in state" type="button" :disabled="!!reading || busy" @click="importLinkedIn">{{ reading === 'linkedin' ? 'Reading your export…' : 'Import LinkedIn export' }}</button>
         <button type="button" :disabled="!!reading || busy" @click="picker?.click()">{{ reading === 'word' ? 'Reading your CVs…' : 'Import Word CVs' }}</button>
       </div>

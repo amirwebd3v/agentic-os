@@ -83,7 +83,7 @@ export const approvalRoutes =
     );
 
     // One git process at a time, so a batch approve doesn't fight over index.lock.
-    // ponytail: the writer has its own chain, so the two can still collide; a failed commit is caught by the next `add -A`
+    // ponytail: the writer has its own chain, so the two can still collide; a failed commit is caught by the next `add -A`. Share one chain if commits start failing
     let committing: Promise<unknown> = Promise.resolve();
     const apply = (id: number, decision: Decision, finalText?: string) => {
       const { status, wrote } = decide(db, vaultDir, id, decision, finalText);

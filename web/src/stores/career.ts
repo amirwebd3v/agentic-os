@@ -54,7 +54,7 @@ type Violation = VerifyReport['violations'][number];
 const VIOLATION_TEXT: Record<string, string> = {
   unknown_cite: 'cites a line that is not in your master CV',
   wrong_entry: 'cites a bullet from a different job',
-  missing_cite: 'needs 1 to 5 source lines',
+  missing_cite: 'needs 1 to 5 source lines (1 to 10 in the letter)',
   unsupported_number: 'has a number the source lines do not',
   unsupported_entity: 'names something the source lines do not',
   contact_leak: 'looks like contact details',

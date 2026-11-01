@@ -54,6 +54,7 @@ Every session sees all installed skills with their descriptions; pick by the tas
 4. Save a claude-mem note (`save_memory`, project `Agentic OS`) with cause → fix. Before starting a ticket, run `mem-search` on its topic.
 
 ## Lessons (append, newest last)
+- 2026-11-01: a worktree session can't edit the main checkout's `docs/` (a hook blocks it). → Put the exact edits in the shared notes folder for the session in the main checkout; don't work around the hook.
 - 2026-10-26: when a test fails, re-derive the *correct* behaviour before editing the code or the test. In the `..data` case, the test's assumption was wrong.
 - 2026-10-26: very long temp paths break native installs. Verify a PR in the session's own worktree instead.
 - 2026-10-26: claude-mem's worker needs Bun at `~/.bun/bin/bun.exe`. If memory tools fail, check `~/.claude-mem/logs` first.

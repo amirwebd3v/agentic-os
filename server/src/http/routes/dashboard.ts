@@ -36,7 +36,7 @@ export const dashboardRoutes =
     const { db } = api;
     const vaultDir = vaultOverride ?? api.config.vaultDir;
 
-    // ponytail: rows are read one by one so days follow the user's local time; fine for a personal app's 30 days
+    // ponytail: rows are read one by one so days follow the user's local time; fine for a personal app's 30 days; aggregate in SQL if Home gets slow
     const calls = db.prepare(
       `SELECT ts, pipeline, model, COALESCE(input_tokens, 0) input, COALESCE(output_tokens, 0) output,
          COALESCE(cache_read_tokens, 0) cache_read, COALESCE(cache_write_tokens, 0) cache_write, error IS NOT NULL failed
