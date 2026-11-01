@@ -2,7 +2,7 @@
 CREATE TABLE mail_accounts (
   id                  INTEGER PRIMARY KEY,
   email               TEXT NOT NULL UNIQUE,
-  status              TEXT NOT NULL DEFAULT 'connected' CHECK (status IN ('connected', 'reconnect')),
+  status              TEXT NOT NULL DEFAULT 'connected' CHECK (status IN ('connected', 'reconnect', 'disconnected')),
   history_id          TEXT,
   backfill_page_token TEXT,
   backfill_done       INTEGER NOT NULL DEFAULT 0 CHECK (backfill_done IN (0, 1)),
@@ -44,6 +44,20 @@ CREATE TABLE mail_messages (
   CHECK (is_personal = 0 OR (sender IS NULL AND subject IS NULL AND excerpt IS NULL AND eligible = 0)),
   CHECK (state = 'filed' OR (excerpt IS NULL AND eligible = 0))
 );
+-- is_personal must agree with the category, or the CHECKs above guard nothing.
+CREATE TRIGGER mail_messages_personal_insert BEFORE INSERT ON mail_messages
+WHEN (NEW.category_id IS NOT NULL AND NEW.category_id = (SELECT id FROM mail_categories WHERE system = 'personal')) <> (NEW.is_personal = 1)
+BEGIN SELECT RAISE(ABORT, 'is_personal disagrees with category'); END;
+CREATE TRIGGER mail_messages_personal_update BEFORE UPDATE ON mail_messages
+WHEN (NEW.category_id IS NOT NULL AND NEW.category_id = (SELECT id FROM mail_categories WHERE system = 'personal')) <> (NEW.is_personal = 1)
+BEGIN SELECT RAISE(ABORT, 'is_personal disagrees with category'); END;
+
+CREATE TRIGGER mail_categories_keep_system BEFORE DELETE ON mail_categories WHEN OLD.system IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'system category'); END;
+-- A removed category's mail moves to Needs sorting, which holds no excerpt and is never eligible.
+CREATE TRIGGER mail_categories_unfile BEFORE DELETE ON mail_categories WHEN OLD.system IS NULL
+BEGIN UPDATE mail_messages SET state = 'needs_sorting', excerpt = NULL, eligible = 0, source = NULL WHERE category_id = OLD.id; END;
+
 CREATE INDEX mail_messages_category ON mail_messages (category_id, internal_date);
 CREATE INDEX mail_messages_rfc ON mail_messages (rfc_message_id);
 
