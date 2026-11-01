@@ -100,10 +100,13 @@ async function runImport(kind: 'word' | 'linkedin', what: string, parse: () => P
 }
 async function importFiles(list: FileList | File[] | null) {
   const files = [...(list ?? [])];
-  if (!files.length) return;
+  if (!files.length || reading.value || busy.value) return; // a drop isn't stopped by the disabled buttons
   const bad = files.filter((f) => !f.name.toLowerCase().endsWith('.docx') || f.size > MAX_BYTES);
-  if (bad.length || files.length > MAX_FILES)
-    return void (error.value = `Choose up to ${MAX_FILES} Word files (.docx), each under 5 MB.${bad.length ? ` Not accepted: ${bad.map((f) => f.name).join(', ')}.` : ''}`);
+  if (bad.length || files.length > MAX_FILES) {
+    warnings.value = [];
+    error.value = `Choose up to ${MAX_FILES} Word files (.docx), each under 5 MB.${bad.length ? ` Not accepted: ${bad.map((f) => f.name).join(', ')}.` : ''}`;
+    return;
+  }
   await runImport('word', `${files.length} ${files.length === 1 ? 'file' : 'files'}`, async () => parseCvFiles(await Promise.all(files.map(async (f) => ({ name: f.name, data: await base64(f) })))));
 }
 const importLinkedIn = () => runImport('linkedin', 'your LinkedIn export', parseLinkedIn);
