@@ -39,7 +39,7 @@ function setup(gmail: Gmail, account: Record<string, unknown> = {}, budget = new
   db.prepare(`INSERT INTO mail_accounts (${Object.keys(cols).join(',')}) VALUES (${Object.keys(cols).map(() => '?').join(',')})`).run(...(Object.values(cols) as never[]));
   const handler = mailSync({ db, gmailFor: () => gmail, budget, now: () => NOW });
   const run = () => handler({ payload: { accountId: 1 } } as Job);
-  return { db, run, state: () => account1(db), pending: () => db.prepare('SELECT gmail_id FROM mail_pending ORDER BY gmail_id').pluck().all(), queued: () => db.prepare(`SELECT idempotency_key FROM jobs WHERE status = 'queued'`).pluck().all() as string[] };
+  return { db, run, state: () => account1(db), pending: () => db.prepare('SELECT gmail_id FROM mail_pending ORDER BY gmail_id').pluck().all(), queued: () => db.prepare(`SELECT idempotency_key FROM jobs WHERE status = 'queued' AND kind = 'mail_sync'`).pluck().all() as string[] };
 }
 const account1 = (db: Database) => db.prepare('SELECT * FROM mail_accounts WHERE id = 1').get() as Record<string, unknown>;
 const stored = (db: Database, id: string) => db.prepare(`INSERT INTO mail_messages (account_id, gmail_id, internal_date, state) VALUES (1, ?, '2026-11-01', 'needs_sorting')`).run(id);

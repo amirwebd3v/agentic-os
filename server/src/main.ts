@@ -22,11 +22,15 @@ import { startRunner } from './jobs/runner.ts';
 import { createGmail, GmailError } from './mail/gmail.ts';
 import { accessTokenSource } from './mail/oauth.ts';
 import { enqueueSyncs, mailSync, RateBudget } from './mail/sync.ts';
+import { enqueuePurge, enqueueTriage, mailPurge, mailTriage } from './mail/triage.ts';
+import { loadContact } from './career/contact.ts';
+import { createDecider } from './decider/client.ts';
 import { credentialManagerTokens } from './mail/tokens.ts';
 import { getSecret } from './secrets.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
 
+const mailBudget = new RateBudget(); // shared by sync and triage: the limit is per account, not per job kind
 const tokenSources = new Map<number, { refreshToken: string; source: () => Promise<string> }>();
 /**
  * One source per account, because it caches the access token until expiry. A reconnect stores a new refresh token,
@@ -76,13 +80,30 @@ const stopRunner = startRunner(
     career_letter: careerLetter({ db, config }),
     career_letter_verify: careerLetterVerify({ db, config }),
     career_render: careerRender({ db, config }),
-    mail_sync: mailSync({ db, gmailFor: liveGmail, budget: new RateBudget() }),
+    mail_sync: mailSync({ db, gmailFor: liveGmail, budget: mailBudget }),
+    mail_triage: mailTriage({
+      db,
+      config,
+      gmailFor: liveGmail,
+      budget: mailBudget,
+      contact: () => loadContact(config.vaultDir),
+      decider: () => {
+        const apiKey = getSecret('laya');
+        return apiKey ? createDecider({ db, baseURL: config.decider.baseURL, apiKey, model: config.decider.model }) : null;
+      },
+    }),
+    mail_purge: mailPurge({ db }),
   },
   (err) => app.log.error(err, 'job failed'),
   (job) => failCareerJob(db, job),
 );
-enqueueSyncs(db);
-const syncTimer = setInterval(() => enqueueSyncs(db), 5 * 60_000); // also fires on wake from sleep
+const mailTick = () => {
+  enqueueSyncs(db);
+  enqueuePurge(db);
+  for (const id of db.prepare(`SELECT id FROM mail_accounts WHERE status = 'connected'`).pluck().all() as number[]) enqueueTriage(db, id);
+};
+mailTick();
+const syncTimer = setInterval(mailTick, 5 * 60_000); // also fires on wake from sleep
 syncTimer.unref();
 app.addHook('onClose', async () => {
   clearInterval(syncTimer);
