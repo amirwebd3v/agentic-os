@@ -186,6 +186,7 @@ ${DATA_RULE}
 - Open with what the candidate can do about the employer's business problem (<vacancy>), not with "I am applying". Link the candidate's results to the outcomes the role needs. Close with one concrete, modest sentence.
 - Build it from the master lines, the candidate's answers in <answers>, and the verified company points in <company>. Never invent a fact, number, employer, tool or result.
 - cites, for each paragraph including the first and the last: 1 to 10 ids that back every factual sentence in it: master ids (the " ^<id>" at a line's end), answer ids ("a-1") and verified company point ids ("c-2"). Every number, name, product, tool and acronym in a paragraph must appear in what it cites; the company name and the role title may always be used, spelled exactly as in <requirements> or <context> and never shortened.
+- Before you answer, check every capitalised word, acronym and number in each paragraph: it must stand in a line that paragraph cites, or go. A skill in <master> needs that line's id in cites. The employer's product or team names need a verified company point in cites.
 - Never use these phrases or close variants: ${BANNED.map((b) => `"${b}"`).join(', ')}.
 - Never write a name, e-mail address, phone number, street address or URL. If the letter must refer to one, use only {{CONTACT_NAME}}, {{CONTACT_EMAIL}}, {{CONTACT_PHONE}}, {{CONTACT_ADDRESS}}, {{CONTACT_URL}}.`;
 

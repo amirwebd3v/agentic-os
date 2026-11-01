@@ -139,7 +139,8 @@ async function runCase(posting: string, stem: string) {
   return r;
 }
 
-const files = readdirSync(postingsDir).filter((f) => f.endsWith('.txt')).sort();
+// `pnpm eval:career 02` runs only the postings whose file name starts with that, e.g. after a provider failure.
+const files = readdirSync(postingsDir).filter((f) => f.endsWith('.txt') && f.startsWith(process.argv[2] ?? '')).sort();
 if (!files.length) throw new Error('No postings in dataDir/career/evals/postings.');
 mkdirSync(outDir, { recursive: true });
 const results: Record<string, unknown>[] = [];
