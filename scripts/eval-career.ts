@@ -100,6 +100,8 @@ async function runCase(posting: string, stem: string) {
     summary_chars: summary && 'bullets' in summary ? (summary.bullets[0]?.text.length ?? 0) : 0,
   };
 
+  writeFileSync(join(outDir, `${stem}.md`), draftNote(draft, cv, cv)); // kept if a later step fails; replaced at the end
+
   const ats = [await atsCheck(deps, draft, req, posting), await atsCheck(deps, draft, req, posting)];
   r.ats = { scores: ats.map((a) => a.score), rubric: ats.map((a) => a.parts.slice(-4).reduce((n, p) => n + p.score, 0)) };
 
@@ -176,3 +178,4 @@ console.log(`Application rows ${before.apps} → ${after.apps}, jobs ${before.jo
 db.close();
 console.log(`Drafts written to the evals/runs folder under dataDir: ${outDir}`);
 if (after.apps !== before.apps || after.jobs !== before.jobs) throw new Error('The eval changed the applications or jobs table.');
+if (graded.some((r) => r.failed)) process.exitCode = 1;
