@@ -27,12 +27,23 @@ import { getSecret } from './secrets.ts';
 import { syncAreasFromVault } from './vault/areas.ts';
 import { watchVault } from './vault/watch.ts';
 
-/** Reads the token per call, so a reconnect takes effect at once. No token or client is `auth`: the account asks for a reconnect. */
+const tokenSources = new Map<number, { refreshToken: string; source: () => Promise<string> }>();
+/**
+ * One source per account, because it caches the access token until expiry. A reconnect stores a new refresh token,
+ * which replaces the source at once. No token or client is `auth`: the account asks for a reconnect.
+ */
 const liveGmail = (accountId: number) =>
   createGmail(async () => {
-    const [id, secret, token] = [getSecret('gmail_client_id'), getSecret('gmail_client_secret'), credentialManagerTokens.get(accountId)];
-    if (!id || !secret || !token) throw new GmailError('auth');
-    return accessTokenSource(id, secret, token)();
+    const refreshToken = credentialManagerTokens.get(accountId);
+    if (!refreshToken) throw new GmailError('auth');
+    let entry = tokenSources.get(accountId);
+    if (entry?.refreshToken !== refreshToken) {
+      const [id, secret] = [getSecret('gmail_client_id'), getSecret('gmail_client_secret')];
+      if (!id || !secret) throw new GmailError('auth');
+      entry = { refreshToken, source: accessTokenSource(id, secret, refreshToken) };
+      tokenSources.set(accountId, entry);
+    }
+    return entry.source();
   });
 
 // Feature plugins, mounted under /api behind the session check. One line per ticket.

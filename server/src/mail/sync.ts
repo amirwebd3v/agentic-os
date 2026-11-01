@@ -11,6 +11,7 @@ const HISTORY_DAYS = 30; // D10
 const MAX_BACKOFF_S = 64;
 const MAX_RETRIES = 6; // then the next 5-minute cycle takes over
 const UNITS = { profile: 1, list: 5, history: 2 };
+const outOfScope = (label: string) => label === 'TRASH' || label === 'SPAM';
 
 /** 5,000 units a minute per account (spec §3). */
 export class RateBudget {
@@ -53,9 +54,18 @@ const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 export const syncKey = (accountId: number, epochSeconds: number) => `mail_sync:${accountId}:${Math.floor(epochSeconds / 300)}`;
 
-/** The 5-minute timer's one job: the unique key dedupes a wake-up against the regular tick. */
+/**
+ * The 5-minute timer's one job: the unique key dedupes a wake-up against the regular tick. An account with a live job
+ * is skipped: its keys hold the page token, so a second chain would never merge with the first.
+ */
 export function enqueueSyncs(db: Database, epochSeconds = Date.now() / 1000): void {
-  const ids = db.prepare(`SELECT id FROM mail_accounts WHERE status = 'connected'`).pluck().all() as number[];
+  const ids = db
+    .prepare(
+      `SELECT id FROM mail_accounts a WHERE status = 'connected' AND NOT EXISTS (
+         SELECT 1 FROM jobs WHERE kind = 'mail_sync' AND status IN ('queued', 'running') AND json_extract(payload, '$.accountId') = a.id)`,
+    )
+    .pluck()
+    .all() as number[];
   for (const id of ids) enqueue(db, 'mail_sync', syncKey(id, epochSeconds), { accountId: id });
 }
 
@@ -80,6 +90,8 @@ export const mailSync =
         db.prepare('DELETE FROM mail_pending WHERE account_id = ? AND gmail_id = ?').run(accountId, id);
       }
     };
+    /** The owner can disconnect during a network call. Nothing may be written back after that. */
+    const disconnected = () => db.prepare(`SELECT status FROM mail_accounts WHERE id = ?`).pluck().get(accountId) !== 'connected';
     const healthy = () => db.prepare('UPDATE mail_accounts SET failures = 0, last_error = NULL WHERE id = ?').run(accountId);
     const outOfBudget = (units: number) => {
       if (budget.take(accountId, units)) return false;
@@ -108,6 +120,7 @@ export const mailSync =
       }
       const token = account!.list_after === null ? null : account!.backfill_page_token;
       const page = await gmail.listMessages(`after:${after}`, token ?? undefined);
+      if (disconnected()) return;
       db.transaction(() => {
         pendingAll((page.messages ?? []).map((m) => m.id));
         if (page.nextPageToken) {
@@ -136,12 +149,15 @@ export const mailSync =
         again(`recover:${after}`);
         return;
       }
+      if (disconnected()) return;
       db.transaction(() => {
         for (const h of page.history ?? []) {
           pendingAll((h.messagesAdded ?? []).map((m) => m.message.id));
           removeAll((h.messagesDeleted ?? []).map((m) => m.message.id));
           // Mail bodies don't change, so a label matters only when it takes the mail out of scope.
-          removeAll((h.labelsAdded ?? []).filter((l) => l.labelIds?.some((id) => id === 'TRASH' || id === 'SPAM')).map((l) => l.message.id));
+          removeAll((h.labelsAdded ?? []).filter((l) => l.labelIds?.some(outOfScope)).map((l) => l.message.id));
+          // Restored from Trash or out of Spam: Gmail reports only the label change, so it counts as new mail.
+          pendingAll((h.labelsRemoved ?? []).filter((l) => l.labelIds?.some(outOfScope)).map((l) => l.message.id));
         }
         if (page.nextPageToken) {
           db.prepare('UPDATE mail_accounts SET history_page_token = ? WHERE id = ?').run(page.nextPageToken, accountId);
@@ -157,9 +173,10 @@ export const mailSync =
       await (account.history_id && account.list_after === null ? historyStep() : listStep());
     } catch (err) {
       if (!(err instanceof GmailError)) throw err;
+      if (disconnected()) return;
       if (err.kind === 'auth') {
         // No retry loop: a revoked or expired grant needs the owner. The other account carries on.
-        const code = err.reason === 'deleted_client' ? 'deleted_client' : 'reconnect';
+        const code = err.reason === 'deleted_client' || err.reason === 'invalid_client' ? err.reason : 'reconnect';
         db.prepare(`UPDATE mail_accounts SET status = 'reconnect', last_error = ? WHERE id = ?`).run(code, accountId);
         return;
       }

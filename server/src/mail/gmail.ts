@@ -17,7 +17,7 @@ export class GmailError extends Error {
 export interface GmailHeader { name: string; value: string }
 export interface GmailPart { mimeType?: string; headers?: GmailHeader[]; body?: { data?: string }; parts?: GmailPart[] }
 export interface GmailMessage { id: string; labelIds?: string[]; internalDate?: string; payload?: GmailPart }
-export interface GmailHistory { history?: { messagesAdded?: { message: { id: string } }[]; messagesDeleted?: { message: { id: string } }[]; labelsAdded?: { message: { id: string }; labelIds?: string[] }[] }[]; historyId?: string; nextPageToken?: string }
+export interface GmailHistory { history?: { messagesAdded?: { message: { id: string } }[]; messagesDeleted?: { message: { id: string } }[]; labelsAdded?: { message: { id: string }; labelIds?: string[] }[]; labelsRemoved?: { message: { id: string }; labelIds?: string[] }[] }[]; historyId?: string; nextPageToken?: string }
 
 export function createGmail(getAccessToken: () => Promise<string>, base = BASE) {
   async function get<T>(path: string, params: Record<string, string | undefined> = {}): Promise<T> {
@@ -35,7 +35,7 @@ export function createGmail(getAccessToken: () => Promise<string>, base = BASE) 
     const reason = body?.error?.errors?.[0]?.reason;
     if (res.status === 401) throw new GmailError('auth', reason);
     if (res.status === 404) throw new GmailError('not_found', reason);
-    if (res.status === 429 || (res.status === 403 && /rate|quota/i.test(reason ?? ''))) throw new GmailError('rate', reason);
+    if (res.status === 429 || (res.status === 403 && /rate|quota|limit/i.test(reason ?? ''))) throw new GmailError('rate', reason);
     if (res.status >= 500) throw new GmailError('server', reason);
     throw new GmailError('bad_request', reason);
   }

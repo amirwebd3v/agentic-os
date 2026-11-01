@@ -35,13 +35,16 @@ export function accessTokenSource(clientId: string, clientSecret: string, refres
       if (!token) throw new GmailError('auth');
       return token;
     } catch (err) {
-      if (err instanceof GmailError) throw err;
-      const code = (err as { response?: { data?: { error?: unknown } } }).response?.data?.error;
-      if (code === 'invalid_grant') throw new GmailError('auth', 'invalid_grant');
-      if (code === 'deleted_client' || code === 'invalid_client') throw new GmailError('auth', 'deleted_client');
-      throw new GmailError('network');
+      throw err instanceof GmailError ? err : tokenError(err);
     }
   };
+}
+
+/** No answer or a 5xx may pass, so it retries. Any other refusal won't, so it asks the owner instead of looping. */
+export function tokenError(err: unknown): GmailError {
+  const response = (err as { response?: { status?: number; data?: { error?: unknown } } }).response;
+  if (!response?.status || response.status >= 500) return new GmailError('network');
+  return new GmailError('auth', response.data?.error === 'deleted_client' ? 'deleted_client' : response.data?.error === 'invalid_client' ? 'invalid_client' : 'reconnect');
 }
 
 export type ConsentResult =

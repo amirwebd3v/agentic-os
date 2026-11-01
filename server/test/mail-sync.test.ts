@@ -3,6 +3,7 @@ import type { Database } from '../src/db/index.ts';
 import type { Job } from '../src/db/jobs.ts';
 import { GmailError } from '../src/mail/gmail.ts';
 import type { Gmail, GmailHistory } from '../src/mail/gmail.ts';
+import { tokenError } from '../src/mail/oauth.ts';
 import { enqueueSyncs, mailSync, RateBudget, syncKey } from '../src/mail/sync.ts';
 import { makeTestDb } from './helpers.ts';
 
@@ -96,6 +97,40 @@ describe('history', () => {
     expect(t.pending()).toEqual(['new']);
     expect(t.db.prepare('SELECT gmail_id FROM mail_messages').pluck().all()).toEqual(['kept']);
     expect(t.state()['history_id']).toBe('200');
+  });
+
+  test('mail restored from Trash or out of Spam is fetched again', async () => {
+    const f = page({ historyId: '200', history: [{ labelsRemoved: [{ message: { id: 'back' }, labelIds: ['TRASH'] }, { message: { id: 'ham' }, labelIds: ['SPAM'] }, { message: { id: 'read' }, labelIds: ['UNREAD'] }] }] });
+    const t = setup(f.gmail, { history_id: '100', backfill_done: 1 });
+    await t.run();
+    expect(t.pending()).toEqual(['back', 'ham']);
+  });
+
+  test('a disconnect during the network call writes nothing back', async () => {
+    let db: Database | undefined;
+    const during = () => db!.prepare(`UPDATE mail_accounts SET status = 'disconnected', history_id = NULL`).run();
+    const f = fake({
+      listHistory: async () => {
+        during();
+        return { historyId: '200', history: [{ messagesAdded: [{ message: { id: 'new' } }] }] };
+      },
+    });
+    const t = setup(f.gmail, { history_id: '100', backfill_done: 1 });
+    db = t.db;
+    await t.run();
+    expect(t.state()).toMatchObject({ status: 'disconnected', history_id: null });
+    expect(t.pending()).toEqual([]);
+
+    const failing = fake({
+      listHistory: async () => {
+        during();
+        throw new GmailError('auth');
+      },
+    });
+    const v = setup(failing.gmail, { history_id: '100' });
+    db = v.db;
+    await v.run();
+    expect(v.state()['status']).toBe('disconnected');
   });
 
   test('the cursor stays until the last page; a crash replays safely', async () => {
@@ -210,12 +245,32 @@ describe('rate budget and timer', () => {
     expect(b.take(1, 10)).toBe(true);
   });
 
+  test('the timer does not start a second chain beside a live one', () => {
+    const db = makeTestDb();
+    db.prepare(`INSERT INTO mail_accounts (email) VALUES ('a@example.com'), ('b@example.com')`).run();
+    db.prepare(`INSERT INTO jobs (kind, idempotency_key, payload) VALUES ('mail_sync', 'mail_sync:1:list:x', '{"accountId":1}')`).run();
+    enqueueSyncs(db, NOW);
+    expect(db.prepare('SELECT idempotency_key FROM jobs ORDER BY id').pluck().all()).toEqual(['mail_sync:1:list:x', syncKey(2, NOW)]);
+  });
+
+  test.each([
+    [{ response: { status: 400, data: { error: 'invalid_grant' } } }, 'auth', 'reconnect'],
+    [{ response: { status: 400, data: { error: 'invalid_request' } } }, 'auth', 'reconnect'],
+    [{ response: { status: 401, data: { error: 'invalid_client' } } }, 'auth', 'invalid_client'],
+    [{ response: { status: 401, data: { error: 'deleted_client' } } }, 'auth', 'deleted_client'],
+    [{ response: { status: 503 } }, 'network', undefined],
+    [new Error('socket hang up'), 'network', undefined],
+  ])('a refused token refresh is classified: %j', (err, kind, reason) => {
+    expect(tokenError(err)).toMatchObject({ kind, reason });
+  });
+
   test('the timer queues one job per connected account per 5 minutes', () => {
     const db = makeTestDb();
     db.prepare(`INSERT INTO mail_accounts (email, status) VALUES ('a@example.com', 'connected'), ('b@example.com', 'reconnect')`).run();
     enqueueSyncs(db, NOW);
     enqueueSyncs(db, NOW + 1);
     expect(db.prepare('SELECT idempotency_key FROM jobs').pluck().all()).toEqual([syncKey(1, NOW)]);
+    db.prepare(`UPDATE jobs SET status = 'done'`).run();
     enqueueSyncs(db, NOW + 300);
     expect(db.prepare('SELECT count(*) FROM jobs').pluck().get()).toBe(2);
   });
