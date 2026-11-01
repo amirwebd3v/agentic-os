@@ -171,8 +171,9 @@ const ModelDraft = z.object({
 });
 
 /**
- * Step 2: picks ids for the requirements. Unknown ids or a bullet under the wrong entry → `'selection_invalid'`,
- * nothing picked → `'no_match'`. Throws `LlmError` / `TailorError` (bad answer) for `provider_error`.
+ * Step 2: picks ids for the requirements. Ids not in the master, a bullet under the wrong entry and an unknown
+ * requirement are dropped, not fatal: one stray id must not lose the whole answer (#92), and nothing dropped can reach
+ * the CV. Nothing left → `'no_match'`; an id outside the grammar → `'selection_invalid'`. Throws `LlmError` / `TailorError` (bad answer) for `provider_error`.
  */
 export async function selectBullets(deps: IntakeDeps, m: MasterIndex, req: Requirements, jobId?: number): Promise<Selection | 'selection_invalid' | 'no_match'> {
   const raw = await (deps.llm ?? structured)(deps, {
@@ -187,15 +188,19 @@ export async function selectBullets(deps: IntakeDeps, m: MasterIndex, req: Requi
   if (!res.success) throw new TailorError('model output does not match Selection'); // never the Zod error
   const ids = (list: string[]) => [...new Set(list.map((s) => s.trim()))];
   const reqIds = new Set([...req.must_have, ...req.nice_to_have].map((r) => r.id));
-  const picks = res.data.picks.map((p) => ({ requirement_id: p.requirement_id.trim(), bullet_ids: ids(p.bullet_ids) }));
-  const entries = res.data.entries.map((e) => ({ entry_id: e.entry_id.trim(), bullet_ids: ids(e.bullet_ids) }));
-  const skill_ids = ids(res.data.skill_ids);
-  const valid =
-    picks.every((p) => reqIds.has(p.requirement_id) && p.bullet_ids.every((b) => m.sources.has(b))) &&
-    entries.every((e) => m.entries.has(e.entry_id) && e.bullet_ids.every((b) => m.owner.get(b) === e.entry_id)) &&
-    skill_ids.every((s) => m.skills.has(s)) &&
-    new Set(entries.map((e) => e.entry_id)).size === entries.length;
-  if (!valid) return 'selection_invalid';
+  const picks = res.data.picks
+    .map((p) => ({ requirement_id: p.requirement_id.trim(), bullet_ids: ids(p.bullet_ids).filter((b) => m.sources.has(b)) }))
+    .filter((p) => reqIds.has(p.requirement_id));
+  const entries: Selection['entries'] = [];
+  for (const e of res.data.entries) {
+    const entry_id = e.entry_id.trim();
+    if (!m.entries.has(entry_id)) continue;
+    const bullet_ids = ids(e.bullet_ids).filter((b) => m.owner.get(b) === entry_id);
+    const same = entries.find((x) => x.entry_id === entry_id);
+    if (same) same.bullet_ids = [...new Set([...same.bullet_ids, ...bullet_ids])];
+    else entries.push({ entry_id, bullet_ids });
+  }
+  const skill_ids = ids(res.data.skill_ids).filter((s) => m.skills.has(s));
   if (!skill_ids.length && entries.every((e) => !e.bullet_ids.length)) return 'no_match';
   const answered = new Set(picks.filter((p) => p.bullet_ids.length).map((p) => p.requirement_id));
   const sel = Selection.safeParse({ picks, unmatched: [...reqIds].filter((r) => !answered.has(r)), entries, skill_ids });

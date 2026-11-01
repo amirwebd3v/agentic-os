@@ -163,7 +163,7 @@ export const careerQuestions = stepJob('questions', async ({ db, config }, { id,
 });
 
 /** Letter-related violations: a letter paragraph's id or `letter`. */
-const letterOnly = (d: Draft, vs: VerifyReport['violations']) => {
+export const letterOnly = (d: Draft, vs: VerifyReport['violations']) => {
   const ids = new Set(['letter', ...d.letter.paragraphs.map((p) => p.id)]);
   return vs.filter((v) => ids.has(v.ref));
 };

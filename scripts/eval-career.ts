@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { atsCheck, cvText } from '../server/src/career/ats.ts';
+import { atsCheck, CRITERIA, cvText } from '../server/src/career/ats.ts';
 import { loadContact } from '../server/src/career/contact.ts';
 import type { Draft } from '../server/src/career/draft.ts';
 import { extractRequirements } from '../server/src/career/intake.ts';
@@ -15,6 +15,7 @@ import { verifyDraft } from '../server/src/career/verify.ts';
 import type { VerifyReport } from '../server/src/career/verify.ts';
 import { loadConfig } from '../server/src/config.ts';
 import { openDb } from '../server/src/db/index.ts';
+import { letterOnly } from '../server/src/jobs/career-steps.ts';
 import { LlmError } from '../server/src/llm/errors.ts';
 import { costOf } from '../server/src/llm/prices.ts';
 import { getSecret } from '../server/src/secrets.ts';
@@ -30,7 +31,6 @@ const master = readMaster(config.vaultDir);
 
 const postingsDir = join(config.dataDir, 'career', 'evals', 'postings');
 const outDir = join(config.dataDir, 'career', 'evals', 'runs', new Date().toISOString().replace(/[:.]/g, '-'));
-mkdirSync(outDir, { recursive: true });
 
 const rowCounts = () => db.prepare('SELECT (SELECT count(*) FROM applications) apps, (SELECT count(*) FROM jobs) jobs').get() as { apps: number; jobs: number };
 const before = rowCounts();
@@ -38,19 +38,19 @@ const words = (s: string) => s.match(/\S+/g)?.length ?? 0;
 const codes = (r: VerifyReport) => [...new Set(r.violations.map((v) => v.code))];
 
 /** What the calls since `lastCall` used; the app's jobs always carry a job id, these never do. */
-// ponytail: list price of input + output like the dashboard; `llm_calls` has no cache writes, so a cold cache costs more than this.
 function usageSince(lastCall: number) {
-  const rows = db.prepare(`SELECT model, input_tokens i, output_tokens o, cache_read_tokens c, error FROM llm_calls WHERE id > ? AND job_id IS NULL AND pipeline LIKE 'career-%'`).all(lastCall) as {
-    model: string; i: number | null; o: number | null; c: number | null; error: string | null;
+  const rows = db.prepare(`SELECT model, input_tokens i, output_tokens o, cache_read_tokens c, cache_write_tokens w, error FROM llm_calls WHERE id > ? AND job_id IS NULL AND pipeline LIKE 'career-%'`).all(lastCall) as {
+    model: string; i: number | null; o: number | null; c: number | null; w: number | null; error: string | null;
   }[];
   const sum = (f: (r: (typeof rows)[number]) => number) => rows.reduce((n, r) => n + f(r), 0);
-  const priced = rows.map((r) => costOf(r.model, r.i ?? 0, r.o ?? 0));
+  const priced = rows.map((r) => costOf(r.model, r.i ?? 0, r.o ?? 0, r.c ?? 0, r.w ?? 0));
   return {
     calls: rows.length,
     failed: rows.filter((r) => r.error).length,
     input_tokens: sum((r) => r.i ?? 0),
     output_tokens: sum((r) => r.o ?? 0),
     cache_read_tokens: sum((r) => r.c ?? 0),
+    cache_write_tokens: sum((r) => r.w ?? 0),
     cost_usd: priced.includes(null) ? null : Math.round(priced.reduce<number>((n, c) => n + c!, 0) * 10_000) / 10_000,
   };
 }
@@ -103,7 +103,7 @@ async function runCase(posting: string, stem: string) {
   writeFileSync(join(outDir, `${stem}.md`), draftNote(draft, cv, cv)); // kept if a later step fails; replaced at the end
 
   const ats = [await atsCheck(deps, draft, req, posting), await atsCheck(deps, draft, req, posting)];
-  r.ats = { scores: ats.map((a) => a.score), rubric: ats.map((a) => a.parts.slice(-4).reduce((n, p) => n + p.score, 0)) };
+  r.ats = { scores: ats.map((a) => a.score), rubric: ats.map((a) => a.parts.filter((p) => (CRITERIA as readonly string[]).includes(p.name)).reduce((n, p) => n + p.score, 0)) };
 
   const company = await companyBrief(deps, posting, null);
   const vacancy = await vacancyBrief(deps, posting, null);
@@ -116,14 +116,12 @@ async function runCase(posting: string, stem: string) {
   };
   draft = withLetter(await writeLetter(deps, master, inputs));
   let whole = verifyDraft(draft, master, req, deps.contact, opts);
-  const letterRefs = (d: Draft) => new Set(['letter', ...d.letter.paragraphs.map((p) => p.id)]);
-  const letterViolations = (d: Draft, rep: VerifyReport) => rep.violations.filter((v) => letterRefs(d).has(v.ref));
-  const firstLetter = letterViolations(draft, whole);
+  const firstLetter = letterOnly(draft, whole.violations);
   if (firstLetter.length) {
     draft = withLetter(await writeLetter(deps, master, inputs, { letter: draft.letter.paragraphs, violations: firstLetter }));
     whole = verifyDraft(draft, master, req, deps.contact, opts);
   }
-  const finalLetter = letterViolations(draft, whole);
+  const finalLetter = letterOnly(draft, whole.violations);
   r.letter = {
     pass_first: !firstLetter.length,
     pass: !finalLetter.length,
@@ -143,6 +141,7 @@ async function runCase(posting: string, stem: string) {
 
 const files = readdirSync(postingsDir).filter((f) => f.endsWith('.txt')).sort();
 if (!files.length) throw new Error('No postings in dataDir/career/evals/postings.');
+mkdirSync(outDir, { recursive: true });
 const results: Record<string, unknown>[] = [];
 for (const file of files) {
   const stem = file.replace(/\.txt$/, '');
@@ -173,7 +172,7 @@ db.prepare(`INSERT INTO eval_runs (suite, model, total, correct, escalated, resu
 
 const after = rowCounts();
 console.log(`\n${correct}/${results.length} with 0 unsupported claims and the letter passing`);
-console.log(`Cost (list price, input + output): ${costs.includes(null) ? 'not priced' : `$${costs.reduce<number>((n, c) => n + c!, 0).toFixed(4)} total`}`);
+console.log(`Cost (list price, with cache reads and writes): ${costs.includes(null) ? 'not priced' : `$${costs.reduce<number>((n, c) => n + c!, 0).toFixed(4)} total`}`);
 console.log(`Application rows ${before.apps} → ${after.apps}, jobs ${before.jobs} → ${after.jobs}`);
 db.close();
 console.log(`Drafts written to the evals/runs folder under dataDir: ${outDir}`);

@@ -45,6 +45,7 @@ test('prices: normalised family + version, unknown is null', () => {
   expect(priceKey('claude-sonnet-5-20260101')).toBe('sonnet-5');
   expect(priceKey('gpt-5')).toBeNull();
   expect(costOf('claude-opus-5-5[1m]', 1_000_000, 1_000_000)).toBe(24);
+  expect(costOf('claude-sonnet-5-5', 0, 0, 1_000_000, 1_000_000)).toBeCloseTo(2.7);
   expect(costOf('mystery-model', 10, 0)).toBeNull();
   expect(costOf('mystery-model', 0, 0)).toBe(0);
 });

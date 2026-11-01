@@ -31,7 +31,7 @@ export interface Finding {
 
 /** Points per code check; they add up to 60. The rubric's four criteria are 10 each: 40. */
 const POINTS = { keywords: 30, sections: 10, length: 5, dates: 5, contact: 5, bullets: 5 } as const;
-const CRITERIA = ['relevance', 'seniority', 'skills', 'clarity'] as const;
+export const CRITERIA = ['relevance', 'seniority', 'skills', 'clarity'] as const;
 const WORDS = { min: 350, max: 900 } as const;
 const BULLET_MAX = 300;
 const NEEDED_SECTIONS = ['Summary', 'Experience', 'Skills'] as const;
