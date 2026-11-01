@@ -21,10 +21,10 @@ const STALE_LOCK_MINUTES = 10;
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 /** Queues a job unless one with the same idempotency key exists. Returns true if inserted. */
-export function enqueue(db: Database, kind: string, idempotencyKey: string, payload: unknown): boolean {
+export function enqueue(db: Database, kind: string, idempotencyKey: string, payload: unknown, delaySeconds = 0): boolean {
   const info = db
-    .prepare('INSERT INTO jobs (kind, idempotency_key, payload) VALUES (?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING')
-    .run(kind, idempotencyKey, JSON.stringify(payload ?? null));
+    .prepare(`INSERT INTO jobs (kind, idempotency_key, payload, run_after) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ? || ' seconds')) ON CONFLICT(idempotency_key) DO NOTHING`)
+    .run(kind, idempotencyKey, JSON.stringify(payload ?? null), delaySeconds);
   return info.changes === 1;
 }
 

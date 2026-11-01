@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { CodeChallengeMethod, OAuth2Client } from 'google-auth-library';
+import { GmailError } from './gmail.ts';
 
 // Desktop-app OAuth: system browser, a random 127.0.0.1 port, PKCE S256 and a checked `state`.
 export const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
@@ -23,6 +24,25 @@ export const googleClient = (clientId: string, clientSecret: string): OAuthClien
     revokeToken: (token) => client.revokeToken(token),
   };
 };
+
+/** A short-lived access token from a stored refresh token. A dead grant is `auth`, so the account asks for a reconnect. */
+export function accessTokenSource(clientId: string, clientSecret: string, refreshToken: string): () => Promise<string> {
+  const client = new OAuth2Client({ clientId, clientSecret });
+  client.setCredentials({ refresh_token: refreshToken });
+  return async () => {
+    try {
+      const { token } = await client.getAccessToken();
+      if (!token) throw new GmailError('auth');
+      return token;
+    } catch (err) {
+      if (err instanceof GmailError) throw err;
+      const code = (err as { response?: { data?: { error?: unknown } } }).response?.data?.error;
+      if (code === 'invalid_grant') throw new GmailError('auth', 'invalid_grant');
+      if (code === 'deleted_client' || code === 'invalid_client') throw new GmailError('auth', 'deleted_client');
+      throw new GmailError('network');
+    }
+  };
+}
 
 export type ConsentResult =
   | { status: 'granted'; accessToken: string; refreshToken: string }

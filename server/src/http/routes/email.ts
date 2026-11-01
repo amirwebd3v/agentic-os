@@ -32,7 +32,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
 
   const upsert = db.prepare(
     `INSERT INTO mail_accounts (email) VALUES (?)
-     ON CONFLICT (email) DO UPDATE SET status = 'connected' RETURNING id`,
+     ON CONFLICT (email) DO UPDATE SET status = 'connected', failures = 0, last_error = NULL RETURNING id`,
   );
 
   /** Row and token commit together or not at all; a token nobody holds is revoked, including the one a reconnect replaces. */
@@ -56,7 +56,12 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
   api.get('/email/accounts', async () => ({
     setup: deps.client() !== null,
     flow: status,
-    accounts: db.prepare('SELECT id, email, status, backfill_done, last_synced_at FROM mail_accounts ORDER BY id').all(),
+    accounts: db
+      .prepare(
+        `SELECT id, email, status, backfill_done, last_synced_at, last_error, estimate,
+           (SELECT count(*) FROM mail_pending p WHERE p.account_id = a.id) AS pending FROM mail_accounts a ORDER BY id`,
+      )
+      .all(),
   }));
 
   api.post('/email/accounts/connect', async (_req, reply) => {
@@ -105,7 +110,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
         revoked = client ? await revoke(client, token) : false;
         deps.tokens.delete(id);
       }
-      if (req.query.keep === '1') db.prepare(`UPDATE mail_accounts SET status = 'disconnected', history_id = NULL, backfill_page_token = NULL WHERE id = ?`).run(id);
+      if (req.query.keep === '1') db.prepare(`UPDATE mail_accounts SET status = 'disconnected', history_id = NULL, backfill_page_token = NULL, list_after = NULL, next_history_id = NULL, history_page_token = NULL, failures = 0, last_error = NULL WHERE id = ?`).run(id);
       else db.prepare('DELETE FROM mail_accounts WHERE id = ?').run(id);
       return { revoked };
     },
