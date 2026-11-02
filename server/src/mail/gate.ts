@@ -11,6 +11,8 @@ export interface MailFacts {
   bulk: boolean;
   /** From `scrubSecrets` over the sender, subject and body. */
   secretsHit: boolean;
+  /** From `injectionSuspected`: the mail talks to the model. */
+  injection?: boolean;
 }
 
 export interface GateContext {
@@ -52,12 +54,15 @@ export function gate(mail: MailFacts, ctx: GateContext, answers: GateAnswers = {
   if (ctx.rule === ctx.personalId) return { action: 'file', category: ctx.personalId, source: 'rule', eligible: false, keepText: false };
   // A rule picks the category but doesn't excuse the checks: eligibility still needs Laya and a clean scan (D7).
   if (ctx.rule === null && mail.secretsHit) return { action: 'file', category: ctx.personalId, source: 'secrets', eligible: false, keepText: false };
+  // A mail that talks to the model is sorted by the owner, and no model sees it: both can be steered.
+  if (ctx.rule === null && mail.injection) return { action: 'needs_sorting', suggestion: null };
 
   const { laya, claude } = answers;
   if (!laya) return { action: 'ask_laya' };
   const sensitive = laya.sensitive >= ctx.sensitiveYes ? 'yes' : laya.sensitive <= ctx.sensitiveNo ? 'no' : 'unsure';
-  // D7, apart from the consent switch, which only guards calls: a mail stays eligible while consent is off.
-  const clean = sensitive === 'no' && !mail.secretsHit;
+  // D7, apart from the consent switch, which only guards calls: a mail stays eligible while consent is off. A mail
+  // under a rule that talks to the model keeps no text, so it never reaches a paragraph prompt either.
+  const clean = sensitive === 'no' && !mail.secretsHit && !mail.injection;
   const eligibleIn = (category: number, approved: boolean) => clean && (mail.bulk || approved) && category !== ctx.personalId && category !== ctx.noiseId;
 
   if (ctx.rule !== null) return { action: 'file', category: ctx.rule, source: 'rule', eligible: eligibleIn(ctx.rule, true), keepText: clean };

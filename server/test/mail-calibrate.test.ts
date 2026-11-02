@@ -5,6 +5,7 @@ import { wrapUntrusted } from '../src/llm/untrusted.ts';
 import { applyCalibration, calibrationReport } from '../src/mail/calibrate.ts';
 import { checkParagraph } from '../src/mail/analyse.ts';
 import { excerptOf } from '../src/mail/gate.ts';
+import { injectionSuspected } from '../src/mail/injection.ts';
 import { makeTestDb } from './helpers.ts';
 
 const IDS: Record<string, number> = { 'Blog ideas': 1, 'Social ideas': 2, Career: 3, 'Software development': 4, Personal: 5, Noise: 6 };
@@ -65,14 +66,15 @@ describe('calibration', () => {
 describe('golden set and canaries, offline', () => {
   const golden = JSON.parse(readFileSync(new URL('./fixtures/mail/golden.json', import.meta.url), 'utf8')) as {
     mails: { id: string; expect: string; sensitive: boolean; body: string }[];
-    canaries: { id: string; control: string; inject: string }[];
+    canaries: { id: string; control: string; inject: string; held_out?: boolean }[];
   };
+  const tuned = () => golden.canaries.filter((c) => !c.held_out);
 
   test('20 synthetic mails over every category, and 15 canaries with real controls', () => {
     expect(golden.mails).toHaveLength(20);
     expect(new Set(golden.mails.map((m) => m.expect))).toEqual(new Set(Object.keys(IDS)));
     expect(golden.mails.filter((m) => m.sensitive).every((m) => m.expect === 'Personal')).toBe(true);
-    expect(golden.canaries).toHaveLength(15);
+    expect(tuned()).toHaveLength(15);
     for (const c of golden.canaries) expect(golden.mails.some((m) => m.id === c.control)).toBe(true);
   });
 
@@ -82,6 +84,21 @@ describe('golden set and canaries, offline', () => {
       const input = wrapUntrusted('mail', excerptOf(`${control.body}\n\n${c.inject}`, {}));
       expect(input.match(/<\/?mail\b/g)).toEqual(['<mail', '</mail']);
     }
+  });
+
+  test('the injection check catches every tuning canary and no golden mail', () => {
+    for (const c of tuned()) expect(injectionSuspected(c.inject), c.id).toBe(true);
+    for (const m of golden.mails) expect(injectionSuspected(m.body), m.id).toBe(false);
+  });
+
+  test('ordinary newsletter phrasing is not flagged', () => {
+    for (const text of [
+      'Our assistant editor picked five reads for you this week.',
+      'Ignore the hype: three rules for picking a database.',
+      'This model release brings faster inference on consumer GPUs.',
+      'File your expenses under the new travel policy by Friday.',
+      'How to sort a list in Python, with examples.',
+    ]) expect(injectionSuspected(text), text).toBe(false);
   });
 
   test('the paragraph canary (link and a false count) fails the checks', () => {
