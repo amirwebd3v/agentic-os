@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { getDashboard, type ApplicationStatus, type Dashboard } from '../api';
 import BarChart from '../components/BarChart.vue';
+import EmailCard from '../components/EmailCard.vue';
 
 // The OS overview: how the agents work (usage, cost, failures), the state of the system, and each area at a glance.
 // Only counts and aggregates reach this page.
@@ -64,16 +65,13 @@ onMounted(() => getDashboard().then((d) => (data.value = d), () => (error.value 
           <p class="hint">{{ career!.master.entries !== null && career!.master.exists ? `${career!.master.entries} ${career!.master.entries === 1 ? 'entry' : 'entries'}, from all your CVs` : career!.master.exists ? 'Fix it on the Master CV page' : 'Import your Word CVs to start' }}</p>
         </RouterLink>
         <div class="area off">
-          <h2>Email</h2>
-          <p class="big"><span>Not connected</span></p>
-          <p class="hint">Triage and draft replies come with the email slice.</p>
-        </div>
-        <div class="area off">
           <h2>Social and blog</h2>
           <p class="big"><span>Not connected</span></p>
           <p class="hint">Drafts for posts come later.</p>
         </div>
       </section>
+
+      <EmailCard />
 
       <section class="dash-grid" aria-labelledby="ai-title">
         <div class="panel wide">

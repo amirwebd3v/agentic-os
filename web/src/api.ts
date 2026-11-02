@@ -207,6 +207,7 @@ export type MailCategory = { id: number; name: string; system: 'personal' | 'noi
 export type MailOverview = { calibration: { done: number; total: number; calibrating: boolean }; consent?: boolean; provider_ok?: boolean; categories: MailCategory[]; needs_sorting: number; rules: { sender: string; category_id: number }[] };
 export const setMailConsent = (consent: boolean) => json<MailOverview>('PUT', '/api/email/settings', { consent });
 export const refreshParagraphs = () => json<{ queued: number }>('POST', '/api/email/analyses/refresh', {});
+export const saveIdea = (categoryId: number) => json<{ saved: boolean; path: string }>('POST', `/api/email/categories/${categoryId}/ideas`, {});
 export const clearParagraphs = () => json<{ ok: true }>('DELETE', '/api/email/analyses');
 // Sender and subject are mail text: render as text only. A Personal mail has neither.
 export type MailRow = { id: number; gmail_id: string; state?: 'needs_sorting' | 'failed'; sender: string | null; subject: string | null; internal_date: string; account: string };
