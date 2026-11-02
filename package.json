@@ -21,6 +21,8 @@
     "login-url": "pnpm --filter @agentic-os/server exec tsx src/cli/login-url.ts",
     "smoke": "pnpm --filter @agentic-os/server exec tsx src/cli/provider-smoke.ts",
     "eval:career": "pnpm --filter @agentic-os/server exec tsx ../scripts/eval-career.ts",
+    "eval:mail": "pnpm --filter @agentic-os/server exec tsx ../scripts/eval-mail.ts",
+    "mail:calibrate": "pnpm --filter @agentic-os/server exec tsx ../scripts/mail-calibrate.ts",
     "sidecar:setup": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts setup",
     "sidecar": "pnpm --filter @agentic-os/server exec tsx ../scripts/sidecar.ts"
   },
