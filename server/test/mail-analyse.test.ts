@@ -53,6 +53,10 @@ describe('checks', () => {
     [{ paragraph: 'Read vuejs.org today.', cites: ['m1'] }, ['url']],
     [{ paragraph: '4 newsletters covered Vue.', cites: ['m1'] }, ['count_mismatch']],
     [{ paragraph: '  ', cites: ['m1'] }, ['empty']],
+    [{ paragraph: 'The newsletter lists 5 articles on Rust.', cites: ['m1'] }, []],
+    [{ paragraph: 'Four newsletters covered Vue.', cites: ['m1', 'm2'] }, ['count_mismatch']],
+    [{ paragraph: 'Two mails on Node.js and Vue.js.', cites: ['m1', 'm2'] }, []],
+    [{ paragraph: 'Try bit.ly/x or example.xyz.', cites: ['m1'] }, ['url']],
   ])('%j → %j', (out, problems) => {
     expect(checkParagraph(out, given).problems).toEqual(problems);
   });
@@ -72,6 +76,26 @@ describe('retry and failure', () => {
     expect(bad).toHaveBeenCalledTimes(2);
     expect((bad.mock.calls[1] as unknown as Call)[1].system.context).toMatch(/unknown_citation, url/);
     expect(paragraphOf(db, BLOG)).toMatchObject({ text: 'Old one.', refresh_failed: true });
+  });
+
+  test('consent switched off during the run: no retry call, nothing stored', async () => {
+    const db = setup();
+    mail(db);
+    const llm = vi.fn(async () => {
+      db.prepare(`UPDATE mail_settings SET value = 'false' WHERE key = 'consent'`).run();
+      return { paragraph: 'x', cites: [] };
+    });
+    await run(db, llm);
+    expect(llm).toHaveBeenCalledTimes(1);
+    expect(paragraphOf(db, BLOG)).toBeNull();
+  });
+
+  test('a failed rerun on the same day keeps that day\'s paragraph', async () => {
+    const db = setup();
+    const id = mail(db);
+    await run(db, vi.fn(async () => ({ paragraph: 'Good.', cites: [`m${id}`] })));
+    await run(db, vi.fn(async () => ({ paragraph: 'x', cites: [] })));
+    expect(paragraphOf(db, BLOG)?.text).toBe('Good.');
   });
 
   test('the retry can fix it', async () => {
@@ -128,18 +152,36 @@ describe('queuing', () => {
     mail(db);
     mail(db, { category_id: CAREER });
     mail(db, { category_id: PERSONAL, is_personal: 1, sender: null, subject: null, excerpt: null, eligible: 0 });
-    expect(enqueueAnalyses(db, '2026-11-02')).toBe(2);
-    expect(enqueueAnalyses(db, '2026-11-02')).toBe(0);
+    expect(enqueueAnalyses(db, config(), { day: '2026-11-02' })).toBe(2);
+    expect(enqueueAnalyses(db, config(), { day: '2026-11-02' })).toBe(0);
     const off = setup(false);
     mail(off);
-    expect(enqueueAnalyses(off, '2026-11-02')).toBe(0);
+    expect(enqueueAnalyses(off, config(), { day: '2026-11-02' })).toBe(0);
   });
 
-  test('a category with nothing newer than its last paragraph is skipped', () => {
+  test('a category whose mail the last paragraph already cited is skipped; a mail moved in counts as new', () => {
+    const db = setup();
+    const id = mail(db);
+    db.prepare(`INSERT INTO mail_analyses (category_id, day, text, cites, status) VALUES (${BLOG}, '2026-11-01', 'x', '[${id}]', 'ok')`).run();
+    expect(enqueueAnalyses(db, config(), { day: '2026-11-02' })).toBe(0);
+    mail(db, { category_id: BLOG, created_at: '2020-01-01T00:00:00.000Z' });
+    expect(enqueueAnalyses(db, config(), { day: '2026-11-02' })).toBe(1);
+  });
+
+  test('a provider mail may not go to queues nothing', () => {
     const db = setup();
     mail(db);
-    db.prepare(`INSERT INTO mail_analyses (category_id, day, text, status, created_at) VALUES (${BLOG}, '2026-11-01', 'x', 'ok', '2099-01-01T00:00:00.000Z')`).run();
-    expect(enqueueAnalyses(db, '2026-11-02')).toBe(0);
+    expect(enqueueAnalyses(db, config('https://router.example.com'), { day: '2026-11-02' })).toBe(0);
+  });
+
+  test('Refresh reruns a day that already ran, but not while a run is queued', () => {
+    const db = setup();
+    mail(db);
+    expect(enqueueAnalyses(db, config(), { day: '2026-11-02' })).toBe(1);
+    expect(enqueueAnalyses(db, config(), { day: '2026-11-02', force: true })).toBe(0);
+    db.prepare(`UPDATE jobs SET status = 'done'`).run();
+    expect(enqueueAnalyses(db, config(), { day: '2026-11-02' })).toBe(0);
+    expect(enqueueAnalyses(db, config(), { day: '2026-11-02', force: true })).toBe(1);
   });
 });
 

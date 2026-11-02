@@ -106,7 +106,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
 
   // Opening the page (or Home) is the "first open each day" that queues paragraphs (D11).
   api.get('/email/overview', async () => {
-    enqueueAnalyses(db);
+    enqueueAnalyses(db, api.config);
     return overview();
   });
   const overview = () => ({
@@ -134,8 +134,8 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
     return overview();
   });
 
-  /** The Refresh button: same per-day key as the daily run, so a second click while it runs is a no-op. */
-  api.post('/email/analyses/refresh', async () => ({ queued: enqueueAnalyses(db) }));
+  /** The Refresh button: reruns today; a second click while a job is queued or running is a no-op. */
+  api.post('/email/analyses/refresh', async () => ({ queued: enqueueAnalyses(db, api.config, { force: true }) }));
 
   api.delete('/email/analyses', async () => {
     db.prepare('DELETE FROM mail_analyses').run();
