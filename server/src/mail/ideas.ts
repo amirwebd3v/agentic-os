@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import matter from 'gray-matter';
 import type { Database } from '../db/index.ts';
@@ -19,17 +19,22 @@ export async function saveIdea(db: Database, vaultDir: string, categoryId: numbe
 
   const hash = createHash('sha256').update(paragraph.text).digest('hex').slice(0, 10);
   const slug = category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'category';
+  // The same paragraph saved on a later day is still the same idea.
+  const earlier = existsSync(resolveNotePath(vaultDir, 'ideas/x.md').replace(/x\.md$/, '')) ? readdirSync(resolveNotePath(vaultDir, 'ideas/x.md').replace(/x\.md$/, '')).find((f) => f.endsWith(`-${hash}.md`)) : undefined;
+  if (earlier) return { saved: false, path: `ideas/${earlier}` };
   const path = `ideas/${paragraph.created_at.slice(0, 10)}-${slug}-${hash}.md`;
   const abs = resolveNotePath(vaultDir, path);
-  if (existsSync(abs)) return { saved: false, path };
 
   // Links are built here from ids; the mail's own text never supplies one.
   const links = paragraph.cites.length
     ? (db.prepare(`SELECT m.gmail_id, a.email FROM mail_messages m JOIN mail_accounts a ON a.id = m.account_id WHERE m.id IN (${paragraph.cites.map(() => '?').join(',')})`).all(...paragraph.cites) as { gmail_id: string; email: string }[])
     : [];
-  const quote = paragraph.text.replace(/[\\`*_[\]<>#|]/g, (c) => `\\${c}`);
+  // Every ASCII punctuation mark escaped (CommonMark allows it): no link, embed, HTML, tag, or Obsidian `%%` comment
+  // that could hide the warning below.
+  const escape = (s: string) => s.replace(/\s+/g, ' ').trim().replace(/[!-/:-@[-`{-~]/g, '\\$&');
+  const quote = escape(paragraph.text);
   const body = [
-    `# ${category.name} idea`,
+    `# ${escape(category.name)} idea`,
     '',
     `> ${quote}`,
     '',

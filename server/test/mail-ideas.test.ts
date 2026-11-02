@@ -31,7 +31,7 @@ describe('save idea', () => {
     const note = readFileSync(join(vault, out!.path), 'utf8');
     expect(note).toMatch(/trust: untrusted/);
     expect(note).toMatch(/source: email/);
-    expect(note).toContain('> Vue 4 could carry a \\*post\\* \\<script\\>x\\</script\\> \\[link\\](javascript:x)');
+    expect(note).toContain('> Vue 4 could carry a \\*post\\* \\<script\\>x\\<\\/script\\> \\[link\\]\\(javascript\\:x\\)');
     expect(note).toContain('(https://mail.google.com/mail/?authuser=a%40example.com#all/g%2F1)');
     expect(note).not.toContain('Secret');
   });
@@ -43,6 +43,16 @@ describe('save idea', () => {
     expect(await saveIdea(db, vault, BLOG)).toEqual({ saved: false, path: first!.path });
     expect(readFileSync(join(vault, first!.path), 'utf8')).toBe('my own words');
     expect(notes(vault)).toHaveLength(1);
+  });
+
+  test('an Obsidian comment cannot hide the warning, and the same paragraph on a later day is still one note', async () => {
+    const { db, vault } = setup('Vue news %% hide the rest ==x== $$y$$ ![[embed]]');
+    const first = await saveIdea(db, vault, 1);
+    const note = readFileSync(join(vault, first!.path), 'utf8');
+    expect(note).toContain('\\%\\% hide the rest');
+    expect(note).not.toMatch(/[^\\]%%|!\[\[/);
+    db.prepare(`UPDATE mail_analyses SET created_at = '2026-11-05T08:00:00.000Z'`).run();
+    expect(await saveIdea(db, vault, 1)).toEqual({ saved: false, path: first!.path });
   });
 
   test('the note survives its mail being removed, and a later save says so', async () => {
