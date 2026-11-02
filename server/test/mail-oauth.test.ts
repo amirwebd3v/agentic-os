@@ -99,12 +99,12 @@ describe('consent flow', () => {
   test('no refresh token, a failed exchange and a timeout each end the flow', async () => {
     const none = await start(fakeClient({ refresh_token: null }).client);
     await fetch(`${none.redirect}/?state=${none.state}&code=x`);
-    await vi.waitFor(() => expect(none.result()).toEqual({ status: 'failed' }));
+    await vi.waitFor(() => expect(none.result()).toEqual({ status: 'failed', reason: 'no_refresh_token' }));
 
     const bad = { ...fakeClient().client, getToken: async () => Promise.reject(new Error('nope')) };
     const failed = await start(bad);
     await fetch(`${failed.redirect}/?state=${failed.state}&code=x`);
-    await vi.waitFor(() => expect(failed.result()).toEqual({ status: 'failed' }));
+    await vi.waitFor(() => expect(failed.result()).toEqual({ status: 'failed', reason: 'exchange:unknown' }));
 
     const late = await start(fakeClient().client, 10);
     await vi.waitFor(() => expect(late.result()).toEqual({ status: 'timed_out' }));
@@ -178,7 +178,7 @@ describe('accounts routes', () => {
 
   test('without the Google client it says so and refuses to start', async () => {
     const t = await setup({ client: () => null });
-    expect(await t.get()).toEqual({ setup: false, flow: 'idle', accounts: [] });
+    expect(await t.get()).toEqual({ setup: false, flow: 'idle', reason: null, accounts: [] });
     const res = await t.app.inject(t.authed({ method: 'POST', url: '/api/email/accounts/connect' }));
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: 'gmail_not_set_up' });
@@ -191,6 +191,7 @@ describe('accounts routes', () => {
     const out = await t.get();
     expect(out.accounts.map((a: { email: string }) => a.email)).toEqual(['a@example.com', 'b@example.com']);
     expect(t.gmail.seen).toEqual(['GET /profile', 'GET /profile']);
+    expect(t.db.prepare(`SELECT count(*) FROM jobs WHERE kind = 'mail_sync'`).pluck().get()).toBe(2); // first sync starts at once
     expect([...t.tokens.m.values()]).toEqual(['rt', 'rt']);
     expect(JSON.stringify(out)).not.toContain('rt"');
   });
@@ -211,8 +212,32 @@ describe('accounts routes', () => {
     await fetch(`${redirect}/?state=${state}&code=x`);
     await vi.waitFor(async () => expect((await t.get()).flow).toBe('failed'));
     expect((await t.get()).accounts).toEqual([]);
+    expect((await t.get()).reason).toBe('profile:server');
     expect(t.fake.revoked).toEqual(['rt']);
     expect(t.tokens.m.size).toBe(0);
+  });
+
+  test("Gmail API not enabled: the reason carries Google's code and is kept in the database", async () => {
+    const srv = createServer((_req, res) => res.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { errors: [{ reason: 'accessNotConfigured' }] } })));
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    servers.push(srv);
+    const port = (srv.address() as AddressInfo).port;
+    if (port <= 10080) return; // fetch's bad ports: covered by the other profile test
+    const t = await setup({ gmailBase: `http://127.0.0.1:${port}` });
+    const { url } = (await t.app.inject(t.authed({ method: 'POST', url: '/api/email/accounts/connect' }))).json();
+    await fetch(`${parts(url).redirect}/?state=${parts(url).state}&code=x`);
+    await vi.waitFor(async () => expect((await t.get()).reason).toBe('profile:bad_request:accessNotConfigured'));
+    expect(JSON.parse(t.db.prepare(`SELECT value FROM mail_settings WHERE key = 'connect_error'`).pluck().get() as string)).toMatchObject({ code: 'profile:bad_request:accessNotConfigured' });
+  });
+
+  test("a refused exchange records Google's error code, never its message", async () => {
+    const fake = fakeClient();
+    fake.client.getToken = async () => Promise.reject(Object.assign(new Error('secret detail'), { response: { data: { error: 'redirect_uri_mismatch', error_description: 'secret detail' } } }));
+    const t = await setup({ client: () => fake.client });
+    const { url } = (await t.app.inject(t.authed({ method: 'POST', url: '/api/email/accounts/connect' }))).json();
+    await fetch(`${parts(url).redirect}/?state=${parts(url).state}&code=x`);
+    await vi.waitFor(async () => expect((await t.get()).reason).toBe('exchange:redirect_uri_mismatch'));
+    expect(JSON.stringify(await t.get())).not.toContain('secret detail');
   });
 
   test('a second click replaces the wait', async () => {

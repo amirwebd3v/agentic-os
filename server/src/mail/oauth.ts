@@ -49,7 +49,15 @@ export function tokenError(err: unknown): GmailError {
 
 export type ConsentResult =
   | { status: 'granted'; accessToken: string; refreshToken: string }
-  | { status: 'cancelled' | 'wrong_scope' | 'failed' | 'timed_out' };
+  | { status: 'cancelled' | 'wrong_scope' | 'timed_out' }
+  /** `reason` is a fixed code (ours, or Google's error code), never a message: it is stored and shown. */
+  | { status: 'failed'; reason: string };
+
+/** Google's own error code from a failed call, e.g. `invalid_grant`; anything else is `unknown`. */
+export function googleCode(err: unknown): string {
+  const code = (err as { response?: { data?: { error?: unknown } } }).response?.data?.error;
+  return typeof code === 'string' && /^[a-z_]{1,40}$/i.test(code) ? code : 'unknown';
+}
 
 /**
  * True when the token no longer works: revoked now, or Google says it was already invalid (400). False when Google
@@ -77,7 +85,7 @@ async function exchange(client: OAuthClient, code: string, codeVerifier: string,
     if (held) await revoke(client, held);
     return { status: 'wrong_scope' };
   }
-  if (!tokens.access_token || !tokens.refresh_token) return { status: 'failed' };
+  if (!tokens.access_token || !tokens.refresh_token) return { status: 'failed', reason: 'no_refresh_token' };
   return { status: 'granted', accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
 }
 
@@ -139,7 +147,7 @@ export async function startConsent(client: OAuthClient, done: (result: ConsentRe
         if (finished && result.status === 'granted') void revoke(client, result.refreshToken);
         finish(result);
       },
-      () => finish({ status: 'failed' }),
+      (err: unknown) => finish({ status: 'failed', reason: `exchange:${googleCode(err)}` }),
     );
   });
 

@@ -18,6 +18,18 @@ const FLOW_TEXT: Partial<Record<ConnectFlow, string>> = {
   wrong_scope: 'Google gave wider access than read-only, so the app refused and revoked it. Nothing was connected.',
   failed: 'Connecting failed. Nothing was stored. Try again.',
 };
+/** What to do about a failed connect, from the server's fixed reason code. */
+function failureText(reason: string | null): string {
+  const tail = ` Nothing was stored.${reason ? ` (Code: ${reason})` : ''}`;
+  if (reason?.startsWith('profile:') && /accessNotConfigured|SERVICE_DISABLED/.test(reason)) return `Google signed you in, but the Gmail API isn't enabled in your Google Cloud project. Enable it under APIs & Services, wait a minute, then connect again.${tail}`;
+  if (reason?.startsWith('profile:auth') || reason?.startsWith('profile:bad_request')) return `Google signed you in, but refused to let the app read your Gmail profile. Check that the Gmail API is enabled and your account is allowed to use the app (a test user, if the app is still in Testing).${tail}`;
+  if (reason === 'exchange:redirect_uri_mismatch' || reason === 'exchange:invalid_client' || reason === 'exchange:unauthorized_client') return `Google refused the app's OAuth client. It must be a Desktop app client, saved with pnpm secrets set gmail_client_id and gmail_client_secret.${tail}`;
+  if (reason === 'exchange:invalid_grant') return `Google refused the sign-in code. It can expire within a minute; connect again and finish without waiting.${tail}`;
+  if (reason === 'no_refresh_token') return `Google didn't give the app lasting access. Remove the app under Security in your Google Account, then connect again.${tail}`;
+  if (reason === 'store') return `Signed in, but the token couldn't be saved in Windows Credential Manager.${tail}`;
+  return `Connecting failed.${tail} Try again.`;
+}
+
 const STATUS_TEXT: Record<MailAccount['status'], string> = {
   connected: 'Connected, read-only',
   reconnect: 'Needs reconnecting',
@@ -43,6 +55,7 @@ async function load() {
     const next = await getMailAccounts();
     state.value = next;
     if (next.flow === 'waiting') poll = setTimeout(() => void load(), 2000);
+    else if (next.flow === 'failed' && polling) notice.value = failureText(next.reason ?? null);
     else if (FLOW_TEXT[next.flow] && polling) notice.value = FLOW_TEXT[next.flow]!;
     if (next.flow !== 'waiting') polling = false;
   } catch {

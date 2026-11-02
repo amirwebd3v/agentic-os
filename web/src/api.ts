@@ -197,7 +197,7 @@ export const parseLinkedIn = () => json<MasterMerge>('POST', '/api/career/master
 // Email (docs/week3/email-spec.md). Read-only access to Gmail; no token ever reaches the browser.
 export type MailAccount = { id: number; email: string; status: 'connected' | 'reconnect' | 'disconnected'; backfill_done: 0 | 1; last_synced_at: string | null; last_error?: string | null; triage_error?: string | null; pending?: number; estimate?: number | null };
 export type ConnectFlow = 'idle' | 'waiting' | 'connected' | 'cancelled' | 'wrong_scope' | 'failed' | 'timed_out';
-export type MailAccounts = { setup: boolean; flow: ConnectFlow; accounts: MailAccount[] };
+export type MailAccounts = { setup: boolean; flow: ConnectFlow; reason?: string | null; accounts: MailAccount[] };
 export const getMailAccounts = () => json<MailAccounts>('GET', '/api/email/accounts');
 export const connectMailAccount = () => json<{ url: string }>('POST', '/api/email/accounts/connect', {});
 export const disconnectMailAccount = (id: number, keep: boolean) => json<{ revoked: boolean }>('DELETE', `/api/email/accounts/${id}?keep=${keep ? 1 : 0}`);
