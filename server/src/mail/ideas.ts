@@ -20,7 +20,8 @@ export async function saveIdea(db: Database, vaultDir: string, categoryId: numbe
   const hash = createHash('sha256').update(paragraph.text).digest('hex').slice(0, 10);
   const slug = category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'category';
   // The same paragraph saved on a later day is still the same idea.
-  const earlier = existsSync(resolveNotePath(vaultDir, 'ideas/x.md').replace(/x\.md$/, '')) ? readdirSync(resolveNotePath(vaultDir, 'ideas/x.md').replace(/x\.md$/, '')).find((f) => f.endsWith(`-${hash}.md`)) : undefined;
+  const ideasDir = dirname(resolveNotePath(vaultDir, `ideas/${hash}.md`));
+  const earlier = existsSync(ideasDir) ? readdirSync(ideasDir).find((f) => f.endsWith(`-${hash}.md`)) : undefined;
   if (earlier) return { saved: false, path: `ideas/${earlier}` };
   const path = `ideas/${paragraph.created_at.slice(0, 10)}-${slug}-${hash}.md`;
   const abs = resolveNotePath(vaultDir, path);
