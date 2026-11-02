@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { Database } from '../src/db/index.ts';
 import { emailRoutes } from '../src/http/routes/email.ts';
-import { hashKey, hmacSender, learnRules, ruleFor } from '../src/mail/senders.ts';
-import { sortMail } from '../src/mail/sorting.ts';
+import { hashKey, hashPersonalRules, hmacSender, learnRules, ruleFor } from '../src/mail/senders.ts';
+import { setSenderRule, sortMail } from '../src/mail/sorting.ts';
 import { buildTestApp, makeTestDb } from './helpers.ts';
 
 const [BLOG, CAREER, PERSONAL, NOISE] = [1, 3, 5, 6];
@@ -59,14 +59,13 @@ describe('learning rules from the owner', () => {
     expect(ruleFor(db, 'p@example.com', hash('p@example.com'))).toBe(PERSONAL);
   });
 
-  test('moving a mail against a learned rule drops it, and the mixed history keeps it from coming back', () => {
+  test('moving a mail against a learned rule switches it off, and it stays off', () => {
     const db = setup();
     const ids = [0, 1, 2].map(() => mail(db, { category_id: NOISE, sender: 'deals@shop.example' }));
     learnRules(db);
     sortMail(db, ids[0]!, BLOG, 'owner', hash);
-    expect(rules(db)).toEqual([]);
     learnRules(db);
-    expect(rules(db)).toEqual([]);
+    expect(ruleFor(db, 'deals@shop.example', null)).toBeUndefined();
   });
 
   test('moving a mail into Personal keeps the sender hash, and Noise keeps the sender only', () => {
@@ -77,6 +76,49 @@ describe('learning rules from the owner', () => {
     const q = mail(db, { category_id: BLOG, sender: 'deals@shop.example', subject: 'Sale' });
     sortMail(db, q, NOISE, 'owner', hash);
     expect(db.prepare('SELECT sender, subject FROM mail_messages WHERE id = ?').get(q)).toEqual({ sender: 'deals@shop.example', subject: null });
+  });
+});
+
+describe('review findings', () => {
+  test('"Always this sender" into Personal stores the hash, never the address; old address rules are converted', () => {
+    const db = setup();
+    const id = mail(db, { state: 'needs_sorting', source: null, sender: 'friend@mail.example' });
+    setSenderRule(db, 'friend@mail.example', PERSONAL, true, hash);
+    expect(rules(db)).toEqual([{ sender: hashKey(hash('friend@mail.example')), category_id: PERSONAL, learned: 0, disabled: 0 }]);
+    expect(db.prepare('SELECT sender FROM mail_messages WHERE id = ?').pluck().get(id)).toBeNull();
+    db.prepare(`INSERT INTO mail_sender_rules (sender, category_id) VALUES ('old@mail.example', ${PERSONAL})`).run();
+    hashPersonalRules(db, hash);
+    expect(JSON.stringify(rules(db))).not.toContain('@');
+    expect(ruleFor(db, 'old@mail.example', hash('old@mail.example'))).toBe(PERSONAL);
+  });
+
+  test('without the key, a Personal rule is not made at all', () => {
+    const db = setup();
+    setSenderRule(db, 'friend@mail.example', PERSONAL, false, null);
+    expect(rules(db)).toEqual([]);
+  });
+
+  test('moving a rule-filed mail into Personal turns the learned rule off for good', () => {
+    const db = setup();
+    for (let i = 0; i < 3; i++) mail(db, { category_id: NOISE, sender: 'deals@shop.example' });
+    learnRules(db);
+    const filedByRule = mail(db, { category_id: NOISE, sender: 'deals@shop.example', source: 'rule' });
+    sortMail(db, filedByRule, PERSONAL, 'owner', hash);
+    learnRules(db);
+    expect(ruleFor(db, 'deals@shop.example', null)).toBeUndefined();
+    expect(rules(db)).toContainEqual({ sender: 'deals@shop.example', category_id: NOISE, learned: 1, disabled: 1 });
+  });
+
+  test('a Noise twin keeps no subject, and a mail moved out of Personal drops its hash', () => {
+    const db = setup();
+    db.prepare(`INSERT INTO mail_accounts (email) VALUES ('b@example.com')`).run();
+    const a = mail(db, { category_id: CAREER, rfc_message_id: '<x>', subject: 'Hi', excerpt: 'text', eligible: 1 });
+    const b = mail(db, { account_id: 2, category_id: CAREER, rfc_message_id: '<x>', subject: 'Hi', source: 'rule' });
+    sortMail(db, a, NOISE, 'owner', hash);
+    expect(db.prepare('SELECT subject FROM mail_messages WHERE id = ?').pluck().get(b)).toBeNull();
+    const p = mail(db, { category_id: PERSONAL, is_personal: 1, sender: null, sender_hash: hash('x@example.com') });
+    sortMail(db, p, BLOG, 'owner', hash);
+    expect(db.prepare('SELECT sender_hash FROM mail_messages WHERE id = ?').pluck().get(p)).toBeNull();
   });
 });
 

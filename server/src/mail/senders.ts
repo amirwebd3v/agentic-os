@@ -57,8 +57,32 @@ export function learnRules(db: Database): number {
     .run(LEARN_AFTER).changes;
 }
 
-/** The owner moved a mail somewhere a learned rule disagrees with: the rule goes, and the mixed history keeps it gone. */
+/**
+ * The owner moved a mail somewhere a learned rule disagrees with: the rule is switched off, not deleted, so learning
+ * can't bring it back (a move into Personal moves that mail's history to the hash key, leaving the old key unmixed).
+ */
 export function forgetLearned(db: Database, sender: string | null, hash: string | null, categoryId: number): void {
   const keys = [sender, hash && hashKey(hash)].filter((k): k is string => !!k);
-  if (keys.length) db.prepare(`DELETE FROM mail_sender_rules WHERE learned = 1 AND category_id <> ? AND sender IN (${keys.map(() => '?').join(',')})`).run(categoryId, ...keys);
+  if (keys.length) db.prepare(`UPDATE mail_sender_rules SET disabled = 1 WHERE learned = 1 AND disabled = 0 AND category_id <> ? AND sender IN (${keys.map(() => '?').join(',')})`).run(categoryId, ...keys);
+}
+
+/** The key a rule for this category is stored under: a Personal sender by its hash only, never its address. */
+export function ruleKey(db: Database, sender: string, categoryId: number, hash: SenderHash | null): string | null {
+  const personal = db.prepare(`SELECT 1 FROM mail_categories WHERE id = ? AND system = 'personal'`).get(categoryId);
+  if (!personal) return sender;
+  return hash ? hashKey(hash(sender)) : null;
+}
+
+/** Rules made before Personal senders were hashed: their addresses become hashes. Runs at startup. */
+export function hashPersonalRules(db: Database, hash: SenderHash | null): void {
+  if (!hash) return;
+  const rows = db
+    .prepare(`SELECT r.sender, r.category_id, r.learned, r.disabled FROM mail_sender_rules r JOIN mail_categories c ON c.id = r.category_id WHERE c.system = 'personal' AND r.sender NOT LIKE '#%'`)
+    .all() as { sender: string; category_id: number; learned: number; disabled: number }[];
+  db.transaction(() => {
+    for (const r of rows) {
+      db.prepare('INSERT INTO mail_sender_rules (sender, category_id, learned, disabled) VALUES (?, ?, ?, ?) ON CONFLICT (sender) DO NOTHING').run(hashKey(hash(r.sender)), r.category_id, r.learned, r.disabled);
+      db.prepare('DELETE FROM mail_sender_rules WHERE sender = ?').run(r.sender);
+    }
+  })();
 }

@@ -1,5 +1,5 @@
 import type { Database } from '../db/index.ts';
-import { forgetLearned } from './senders.ts';
+import { forgetLearned, ruleKey } from './senders.ts';
 import type { SenderHash } from './senders.ts';
 
 interface Row { id: number; account_id: number; gmail_id: string; rfc_message_id: string | null; sender: string | null; excerpt: string | null }
@@ -37,7 +37,7 @@ export function sortMail(db: Database, mailId: number, categoryId: number, sourc
     const keepsText = category.system === null;
     const excerpt = keepsText ? row.excerpt : null;
     // Noise keeps its sender only (owner's decision, 2026-11-02).
-    db.prepare(`UPDATE mail_messages SET state = 'filed', category_id = ?, suggestion_id = NULL, source = ?, is_personal = 0, excerpt = ?, eligible = CASE WHEN ? IS NULL THEN 0 ELSE eligible END, subject = CASE WHEN ? = 'noise' THEN NULL ELSE subject END WHERE id = ?`).run(category.id, rowSource, excerpt, excerpt, category.system, row.id);
+    db.prepare(`UPDATE mail_messages SET state = 'filed', category_id = ?, suggestion_id = NULL, source = ?, is_personal = 0, excerpt = ?, eligible = CASE WHEN ? IS NULL THEN 0 ELSE eligible END, subject = CASE WHEN ? = 'noise' THEN NULL ELSE subject END, sender_hash = NULL WHERE id = ?`).run(category.id, rowSource, excerpt, excerpt, category.system, row.id);
     if ((keepsText && excerpt === null) || row.sender === null) refetch.run(row.account_id, row.gmail_id, category.id);
     // Anything else pending for this mail would file it by the older choice: the move above supersedes it.
     else db.prepare('DELETE FROM mail_pending WHERE account_id = ? AND gmail_id = ?').run(row.account_id, row.gmail_id);
@@ -48,7 +48,7 @@ export function sortMail(db: Database, mailId: number, categoryId: number, sourc
     // A twin keeps no text of its own (it was analysed once), so it follows without refetching or counting twice.
     for (const twin of twins) {
       if (category.system === 'personal' || twin.excerpt !== null) move({ ...twin, excerpt: null, sender: twin.sender ?? '' }, 'rule');
-      else db.prepare(`UPDATE mail_messages SET state = 'filed', category_id = ?, suggestion_id = NULL, source = 'rule', is_personal = 0, excerpt = NULL, eligible = 0 WHERE id = ?`).run(category.id, twin.id);
+      else db.prepare(`UPDATE mail_messages SET state = 'filed', category_id = ?, suggestion_id = NULL, source = 'rule', is_personal = 0, excerpt = NULL, eligible = 0, sender_hash = NULL, subject = CASE WHEN ? = 'noise' THEN NULL ELSE subject END WHERE id = ?`).run(category.id, category.system, twin.id);
     }
     db.prepare(`UPDATE decisions SET final_answer = ?, corrected_by_user = 1 WHERE subject_type = 'mail' AND subject_id = ? AND question = 'category'`).run(category.name, picked.gmail_id);
   })();
@@ -57,8 +57,10 @@ export function sortMail(db: Database, mailId: number, categoryId: number, sourc
 
 /** Rule for future mail; with `applyStored`, also the mail already here. Returns how many stored mails moved. */
 export function setSenderRule(db: Database, sender: string, categoryId: number, applyStored: boolean, hash: SenderHash | null = null): number {
-  // The owner's own rule: it replaces a learned or removed one for this sender.
-  db.prepare(`INSERT INTO mail_sender_rules (sender, category_id) VALUES (?, ?) ON CONFLICT (sender) DO UPDATE SET category_id = excluded.category_id, learned = 0, disabled = 0`).run(sender, categoryId);
+  // The owner's own rule: it replaces a learned or removed one for this sender. A Personal rule keeps only the hash;
+  // without the key there is no rule, as an address list of Personal senders is exactly what must not exist.
+  const key = ruleKey(db, sender, categoryId, hash);
+  if (key) db.prepare(`INSERT INTO mail_sender_rules (sender, category_id) VALUES (?, ?) ON CONFLICT (sender) DO UPDATE SET category_id = excluded.category_id, learned = 0, disabled = 0`).run(key, categoryId);
   if (!applyStored) return 0;
   const ids = db.prepare('SELECT id FROM mail_messages WHERE sender = ?').pluck().all(sender) as number[];
   for (const id of ids) sortMail(db, id, categoryId, 'rule', hash);

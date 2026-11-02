@@ -22,7 +22,7 @@ import { startRunner } from './jobs/runner.ts';
 import { mailAnalyse } from './mail/analyse.ts';
 import { createGmail, GmailError } from './mail/gmail.ts';
 import { accessTokenSource } from './mail/oauth.ts';
-import { learnRules } from './mail/senders.ts';
+import { credentialManagerHash, hashPersonalRules, learnRules } from './mail/senders.ts';
 import { enqueueSyncs, mailSync, RateBudget } from './mail/sync.ts';
 import { enqueuePurge, enqueueTriage, mailPurge, mailTriage } from './mail/triage.ts';
 import { loadContact } from './career/contact.ts';
@@ -101,6 +101,7 @@ const stopRunner = startRunner(
   (job) => failCareerJob(db, job),
 );
 const mailTick = () => {
+  hashPersonalRules(db, credentialManagerHash()); // a Personal rule from before keeps its hash, not its address
   learnRules(db); // from the owner's sorting so far, including what was sorted before this feature
   enqueueSyncs(db);
   enqueuePurge(db);
