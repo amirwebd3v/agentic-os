@@ -9,6 +9,7 @@ import type { createDecider, Question } from '../decider/client.ts';
 import type { JobHandler } from '../jobs/runner.ts';
 import { structured } from '../llm/client.ts';
 import { wrapUntrusted } from '../llm/untrusted.ts';
+import { mailProviderOk } from './analyse.ts';
 import { excerptOf, gate, storedFields } from './gate.ts';
 import type { GateAnswers, GateContext, GateStep } from './gate.ts';
 import { GmailError } from './gmail.ts';
@@ -232,6 +233,7 @@ export const mailTriage =
           answers.laya = { sensitive: sensitive.noul, category: byName.get(category.choice) ?? -1, confidence: category.confidence };
         } else if (step.action === 'ask_claude') {
           try {
+            if (!mailProviderOk(config, 'fast')) throw new Error('provider refused for mail');
             const names = categories.map((c) => c.name) as [string, ...string[]];
             const input = wrapUntrusted('mail', `From: ${redactContact(mail.sender, owner)}\nSubject: ${redactContact(scrubSecrets(mail.subject).text, owner)}\n\n${excerptOf(mail.body, owner)}`);
             const out = await llm({ db, config }, { pipeline: 'mail-triage', tier: 'fast', system: { rules: RULES }, input, schema: z.object({ category: z.enum(names) }), jobId: job.id });

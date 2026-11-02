@@ -19,6 +19,7 @@ import { careerRender } from './jobs/career-render.ts';
 import { careerAts, careerCompany, careerGaps, careerLetter, careerLetterVerify, careerQuestions, careerVacancy } from './jobs/career-steps.ts';
 import { careerVerify } from './jobs/career-verify.ts';
 import { startRunner } from './jobs/runner.ts';
+import { mailAnalyse } from './mail/analyse.ts';
 import { createGmail, GmailError } from './mail/gmail.ts';
 import { accessTokenSource } from './mail/oauth.ts';
 import { enqueueSyncs, mailSync, RateBudget } from './mail/sync.ts';
@@ -93,6 +94,7 @@ const stopRunner = startRunner(
       },
     }),
     mail_purge: mailPurge({ db }),
+    mail_analyse: mailAnalyse({ db, config, contact: () => loadContact(config.vaultDir) }),
   },
   (err) => app.log.error(err, 'job failed'),
   (job) => failCareerJob(db, job),

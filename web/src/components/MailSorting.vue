@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
-import { addMailCategory, ApiError, deleteSenderRule, getCategoryMails, getMailOverview, getNeedsSorting, gmailLink, removeMailCategory, renameMailCategory, sortMail } from '../api';
-import type { MailOverview, MailRow, SenderGroup } from '../api';
+import { addMailCategory, ApiError, clearParagraphs, deleteSenderRule, getCategoryMails, getMailOverview, getNeedsSorting, gmailLink, refreshParagraphs, removeMailCategory, renameMailCategory, setMailConsent, sortMail } from '../api';
+import type { MailOverview, MailParagraph, MailRow, SenderGroup } from '../api';
 
 // Sender and subject are mail text, which a stranger wrote: rendered with {{ }} only. Links come from gmailLink().
 const overview = ref<MailOverview>();
@@ -18,6 +18,20 @@ const renameTo = ref('');
 const confirmRemove = ref<number | null>(null);
 
 const categories = computed(() => overview.value?.categories ?? []);
+const hasParagraphs = computed(() => categories.value.some((c) => c.paragraph));
+async function refresh() {
+  const { queued } = await refreshParagraphs();
+  notice.value = queued ? `Writing ${queued} ${queued === 1 ? 'paragraph' : 'paragraphs'}.` : 'Nothing new since the last paragraphs.';
+}
+function paragraphMeta(p: MailParagraph): string {
+  const hours = Math.round((Date.now() - Date.parse(p.created_at)) / 3_600_000);
+  const parts = [hours < 1 ? 'Just now' : hours < 48 ? `${hours}h old` : `${Math.round(hours / 24)} days old`];
+  parts.push(`from ${p.cites.length} ${p.cites.length === 1 ? 'mail' : 'mails'}`);
+  parts.push(p.cost_usd === null ? 'cost not priced' : `cost $${p.cost_usd.toFixed(3)}`);
+  if (p.refresh_failed) parts.push("couldn't refresh");
+  if (p.source_removed) parts.push('a source was removed');
+  return parts.join(' · ');
+}
 const nameOf = (id: number) => categories.value.find((c) => c.id === id)?.name ?? 'Unknown';
 const senderKey = (g: SenderGroup) => g.sender ?? '';
 const picked = (g: SenderGroup) => choice.value[senderKey(g)] ?? g.suggestion_id ?? undefined;
@@ -106,6 +120,20 @@ defineExpose({ load });
       You check the first {{ overview.calibration.total }} mails yourself. Nothing is filed automatically and nothing goes to Claude until then.
     </p>
 
+    <section class="notice" aria-labelledby="consent-title">
+      <h2 id="consent-title">Claude analysis</h2>
+      <p v-if="overview.consent">
+        <strong>On.</strong> For mail that passes every check (a newsletter or a sender you approved, not sensitive, no secrets), the app sends sender, subject and a short redacted excerpt to Claude: to sort mail Laya is unsure about, and to write one paragraph per idea category.
+      </p>
+      <p v-else><strong>Off.</strong> Nothing from your mail goes to Claude. Sorting stays on this machine, and unsure mail waits for you.</p>
+      <p v-if="overview.consent && overview.provider_ok === false" class="muted">The configured provider isn't one mail may go to (this machine or Anthropic, Claude models only), so no call is made.</p>
+      <div class="row">
+        <button type="button" :class="overview.consent ? '' : 'primary'" :disabled="busy" @click="act(() => setMailConsent(!overview!.consent), 'Could not change that setting.')">{{ overview.consent ? 'Turn off' : 'Allow Claude analysis' }}</button>
+        <button v-if="overview.consent" type="button" :disabled="busy" @click="act(refresh, 'Could not refresh the paragraphs.')">Refresh paragraphs</button>
+        <button v-if="hasParagraphs" type="button" class="quiet" :disabled="busy" @click="act(clearParagraphs, 'Could not clear the paragraphs.')">Clear paragraphs</button>
+      </div>
+    </section>
+
     <section aria-labelledby="sorting-title">
       <h2 id="sorting-title" ref="heading" tabindex="-1">Needs sorting <span v-if="overview.needs_sorting" class="badge count">{{ overview.needs_sorting }}</span></h2>
       <p v-if="!groups.length" class="muted">Nothing is waiting for you.</p>
@@ -162,6 +190,13 @@ defineExpose({ load });
               </template>
             </div>
           </div>
+          <div v-if="c.paragraph" class="paragraph">
+            <p>{{ c.paragraph.text }}</p>
+            <p class="muted">
+              {{ paragraphMeta(c.paragraph) }}<template v-if="c.refreshing"> · refreshing</template>
+            </p>
+          </div>
+          <p v-else-if="c.refreshing" class="muted">Writing a paragraph…</p>
           <template v-if="open === c.id">
             <p v-if="c.system === 'personal'" class="muted">Personal mail keeps no sender or subject here. Move one to read it again.</p>
             <p v-if="!openMails.length" class="muted">Nothing new.</p>
@@ -210,5 +245,7 @@ section { margin-bottom: var(--s6); }
 button.link { border: none; background: none; padding: 0; min-height: 28px; color: var(--fg); font-weight: 600; text-align: left; }
 button.link:hover:not(:disabled) { color: var(--accent); background: none; }
 .add { margin-top: var(--s4); }
+.paragraph { margin-top: var(--s2); max-width: var(--measure); }
+.paragraph p { margin: 0 0 var(--s1); }
 .muted { color: var(--muted); }
 </style>

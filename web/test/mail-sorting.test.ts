@@ -99,6 +99,23 @@ test('empty: nothing waiting, no calibration notice once done', async () => {
   expect(el.textContent).not.toContain('Sorting 200');
 });
 
+test('consent off says nothing goes to Claude; the switch asks the server', async () => {
+  const { el, calls, bodies } = await mount(overview({ consent: false }));
+  expect(el.textContent).toContain('Nothing from your mail goes to Claude');
+  button(el, 'Allow Claude analysis').click();
+  await vi.waitFor(() => expect(calls).toContain('PUT /api/email/settings'));
+  expect(bodies[0]).toEqual({ consent: true });
+});
+
+test('a paragraph renders as text with its age, sources, cost and marks', async () => {
+  const paragraph = { text: EVIL, cites: [1, 2], created_at: new Date(Date.now() - 3 * 3_600_000).toISOString(), cost_usd: 0.0123, source_removed: true, refresh_failed: true };
+  const { el } = await mount(overview({ consent: true, provider_ok: false, categories: [{ id: 1, name: 'Blog ideas', system: null, count: 2, paragraph }] }));
+  expect(el.querySelector('img')).toBeNull();
+  expect(el.textContent).toContain(EVIL);
+  expect(el.textContent).toContain('3h old · from 2 mails · cost $0.012 · couldn\'t refresh · a source was removed');
+  expect(el.textContent).toContain("isn't one mail may go to");
+});
+
 test('a Gmail link escapes its parts', () => {
   expect(gmailLink({ gmail_id: 'a/b', account: 'x y@example.com' })).toBe('https://mail.google.com/mail/?authuser=x%20y%40example.com#all/a%2Fb');
 });

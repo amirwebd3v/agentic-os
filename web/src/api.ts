@@ -201,8 +201,13 @@ export type MailAccounts = { setup: boolean; flow: ConnectFlow; accounts: MailAc
 export const getMailAccounts = () => json<MailAccounts>('GET', '/api/email/accounts');
 export const connectMailAccount = () => json<{ url: string }>('POST', '/api/email/accounts/connect', {});
 export const disconnectMailAccount = (id: number, keep: boolean) => json<{ revoked: boolean }>('DELETE', `/api/email/accounts/${id}?keep=${keep ? 1 : 0}`);
-export type MailCategory = { id: number; name: string; system: 'personal' | 'noise' | null; count: number };
-export type MailOverview = { calibration: { done: number; total: number; calibrating: boolean }; categories: MailCategory[]; needs_sorting: number; rules: { sender: string; category_id: number }[] };
+// The paragraph is model text from mail: render as text only.
+export type MailParagraph = { text: string; cites: number[]; created_at: string; cost_usd: number | null; source_removed: boolean; refresh_failed: boolean };
+export type MailCategory = { id: number; name: string; system: 'personal' | 'noise' | null; count: number; refreshing?: number; paragraph?: MailParagraph | null };
+export type MailOverview = { calibration: { done: number; total: number; calibrating: boolean }; consent?: boolean; provider_ok?: boolean; categories: MailCategory[]; needs_sorting: number; rules: { sender: string; category_id: number }[] };
+export const setMailConsent = (consent: boolean) => json<MailOverview>('PUT', '/api/email/settings', { consent });
+export const refreshParagraphs = () => json<{ queued: number }>('POST', '/api/email/analyses/refresh', {});
+export const clearParagraphs = () => json<{ ok: true }>('DELETE', '/api/email/analyses');
 // Sender and subject are mail text: render as text only. A Personal mail has neither.
 export type MailRow = { id: number; gmail_id: string; state?: 'needs_sorting' | 'failed'; sender: string | null; subject: string | null; internal_date: string; account: string };
 export type SenderGroup = { sender: string | null; suggestion_id: number | null; mails: MailRow[] };
