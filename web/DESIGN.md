@@ -38,7 +38,7 @@ Mode: **Operate**. One person opens this in short sessions to answer one questio
 ## Layout
 
 - A sticky top bar: wordmark, Home · Applications · Master CV · Review (with a count), a `?` for shortcuts, and "New application". Content sits in one centred column (max 76rem) with equal 32 px margins (16 px on a phone).
-- **Home** answers "what do I do next?" in groups, in this order: Needs you (including a final draft you still have to send, and pending reviews), Follow-ups due, In progress, Sent, then Email and Social as "not connected". Rows, not tiles; each row has its next step in words and at most one inline action.
+- **Home** (command center, 2026-11-02): titled "Overview" with one status sentence (the date, how many things need you, whether every part works, the month's AI cost). On a 12-column grid with one 16px gutter, every row ending level: **Needs you** (8), one queue across areas, most urgent first, each row with its area, its next step in words and one action, capped at 6 with "Show all"; **System health** (4), a word and a dot per moving part (provider, Laya, Gmail, jobs, vault); one strip of five key figures in a single container split by rules; AI usage (8) beside Calls by step over Applications (4); Ideas from your mail (12). Each source loads on its own, so one failing hides nothing else.
 - **Applications**: search (`/`), filter chips with counts (All, Needs you, Follow up, In progress, Sent, Archived), select rows to archive, restore or delete in bulk.
 - **Application page**: names and actions (Retry, Rename, Archive, Delete) at the top, then the state notice, then the draft as a document with its sources beside it at ≥ 1180 px (below the focused line otherwise). Removed lines stay one click from "Put back".
 - **Email** (redesigned 2026-11-02, Operate, "achromatic ledger" inside this palette): the title row is one status sentence that leads with what needs you (an account to reconnect, sorting paused), then mail to sort, last sync and whether Claude analysis is on. Below it three columns: the views (Needs sorting, each category, Sender rules, with counts) at 14rem; the open view, fluid; the status rail (accounts, Claude analysis, learning) at 17rem. The open view is in the URL (`?view=`). A category leads with its paragraph, set as reading text, then its mail as a table with a quiet Move menu per row. Under 1100px the rail moves under the open view; under 720px the views become one select.
@@ -68,5 +68,5 @@ Flat. Surfaces differ by tone and 1 px rules, never by shadow. Only things that 
 
 - No gradients, glows, glass, decorative icons or emoji, no unicode arrows as icons.
 - No coloured side stripes on lines, cards or notices.
-- No big-number stat tiles; Home is rows that lead to an action.
+- No big-number stat tiles: key figures share one strip, and Home leads with rows that lead to an action.
 - No web font from a third-party host; no UI dependency for what native HTML and a few lines of CSS do.

@@ -43,24 +43,49 @@ const DASH: Dashboard = {
   },
 };
 
-test('the dashboard shows usage, cost, system state and areas from aggregates, and lists no applications', async () => {
-  vi.stubGlobal('fetch', vi.fn(async (path: string) => (path === '/api/dashboard' ? Response.json(DASH) : Response.json({}, { status: 404 }))));
+function mountHome(routes: Record<string, unknown>) {
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => (path in routes ? Response.json(routes[path]) : Response.json({}, { status: 404 }))));
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
   const el = document.createElement('div');
   document.body.append(el);
   createApp(HomeView).use(router).mount(el);
-  await vi.waitFor(() => expect(el.querySelector('.figures')).not.toBeNull());
-  const figures = el.querySelector('.figures')!.textContent!;
-  expect(figures).toContain('32');
-  expect(figures).toContain('$0.25');
-  expect(figures).toContain('3%');
+  return el;
+}
+const MAIL = '/api/email';
+
+// Home became a command center (owner's decision, 2026-11-02): it lists the applications that need you, which
+// career-v2 §6 had kept off Home.
+test('the overview leads with what needs you, most urgent first, then health, figures and usage', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const el = mountHome({
+    '/api/dashboard': DASH,
+    '/api/career/applications': [item({ id: 7, company: 'Acme', status: 'draft_ready' }), item({ id: 8, company: 'Hawk', status: 'applied', follow_up_on: today }), item({ id: 9, company: 'Old', status: 'applied' })],
+    [`${MAIL}/accounts`]: { setup: true, flow: 'idle', accounts: [{ id: 1, email: 'a@example.com', status: 'reconnect', backfill_done: 1, last_synced_at: null }] },
+    [`${MAIL}/overview`]: { calibration: { done: 10, total: 200, calibrating: true }, consent: false, categories: [], needs_sorting: 4, rules: [] },
+  });
+  await vi.waitFor(() => expect(el.querySelectorAll('.queue .item').length).toBe(5));
+  const queue = [...el.querySelectorAll('.queue .item .title')].map((t) => t.textContent);
+  expect(queue[0]).toBe('1 account needs reconnecting');
+  expect(queue).toEqual(expect.arrayContaining(['Acme · Engineer', 'Hawk · Engineer', '4 mails to sort', '2 items waiting in Review']));
+  expect(queue).not.toContain('Old · Engineer');
+  expect(el.querySelector('.queue a[href="/applications/7"]')).not.toBeNull();
+  expect(el.querySelector('.status-line')!.textContent).toContain('5 things need you');
+  expect(el.querySelector('.health')!.textContent).toContain('3 failed');
+  expect(el.querySelector('.health')!.textContent).toContain('1 to reconnect');
+  const strip = el.querySelector('.strip')!.textContent!;
+  for (const figure of ['32', '$0.25', '3% failed', '37']) expect(strip).toContain(figure);
   expect(el.querySelectorAll('.cols .col')).toHaveLength(30);
-  expect(el.querySelector('.rowbars')!.textContent).toContain('career_intake'); // most calls first
-  expect(el.querySelector('.rowbars li')!.textContent).toContain('career_intake');
-  expect(el.textContent).toContain('2 need you');
-  expect(el.textContent).toContain('37 lines');
-  expect(el.textContent).toContain('Not connected');
+  expect(el.querySelector('.calls .rowbars li')!.textContent).toContain('career_intake'); // most calls first
   expect(el.textContent).not.toContain('Show as a table'); // charts have no table toggle (#74)
   expect(el.querySelector('.cols .col')!.getAttribute('aria-label')).toMatch(/: /); // values stay readable to screen readers
-  expect(el.querySelector('a[href*="/applications/"]')).toBeNull(); // no application rows on Home
+});
+
+test('nothing needs you: the queue says so, and a source that fails hides nothing else', async () => {
+  const el = mountHome({ '/api/dashboard': { ...DASH, system: { ...DASH.system, approvals_pending: 0, jobs: { queued: 0, running: 0, failed_7d: 0 } } }, '/api/career/applications': [] });
+  await vi.waitFor(() => expect(el.querySelector('.queue .calm')).not.toBeNull());
+  expect(el.querySelector('.status-line')!.textContent).toContain('Nothing needs you');
+  expect(el.querySelector('.status-line')!.textContent).toContain('everything is working');
+  expect(el.querySelector('.health')!.textContent).toContain('Not connected');
+  await vi.waitFor(() => expect(el.textContent).toMatch(/mail summary didn.t load/)); // the mail part failed, alone
+  expect(el.querySelector('.strip')!.textContent).toContain('32');
 });

@@ -1,8 +1,7 @@
 import { createApp, h } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, expect, test, vi } from 'vitest';
-import type { MailAccounts, MailOverview } from '../src/api';
-import EmailArea from '../src/components/EmailArea.vue';
+import type { MailOverview } from '../src/api';
 import MailIdeas from '../src/components/MailIdeas.vue';
 
 afterEach(() => {
@@ -11,7 +10,6 @@ afterEach(() => {
 });
 
 const EVIL = '<img src=x onerror="alert(1)">';
-const account = (over = {}) => ({ id: 1, email: 'a@example.com', status: 'connected' as const, backfill_done: 1 as const, last_synced_at: new Date().toISOString(), ...over });
 const overview = (over: Partial<MailOverview> = {}): MailOverview => ({
   calibration: { done: 389, total: 200, calibrating: false },
   consent: true,
@@ -25,7 +23,7 @@ const overview = (over: Partial<MailOverview> = {}): MailOverview => ({
   ...over,
 });
 
-function mount(component: object, props: Record<string, unknown>) {
+function mount(props: { overview: MailOverview }) {
   const calls: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
     calls.push(`${init.method} ${url}`);
@@ -34,27 +32,12 @@ function mount(component: object, props: Record<string, unknown>) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
   const el = document.createElement('div');
   document.body.append(el);
-  createApp({ render: () => h(component, props) }).use(router).mount(el);
+  createApp({ render: () => h(MailIdeas, props) }).use(router).mount(el);
   return { el, calls };
 }
-const accounts = (list: ReturnType<typeof account>[]): MailAccounts => ({ setup: true, flow: 'idle', accounts: list });
-
-test('the area: not connected says so; connected leads with what needs you', () => {
-  expect(mount(EmailArea, { accounts: accounts([]), overview: null, failed: false }).el.textContent).toContain('Not connected');
-  document.body.innerHTML = '';
-  const { el } = mount(EmailArea, { accounts: accounts([account()]), overview: overview(), failed: false });
-  expect(el.querySelector('.big')!.textContent).toMatch(/12\s*to sort/);
-  expect(el.textContent).toContain('Claude analysis on');
-  expect(el.querySelector('a')!.getAttribute('href')).toBe('/email');
-});
-
-test('the area names a problem before the rest', () => {
-  const { el } = mount(EmailArea, { accounts: accounts([account({ status: 'reconnect' })]), overview: overview(), failed: false });
-  expect(el.querySelector('.problem')!.textContent).toBe('An account needs reconnecting');
-});
 
 test('ideas: one paragraph per category, as text, with Save idea; the rest in one line', async () => {
-  const { el, calls } = mount(MailIdeas, { overview: overview() });
+  const { el, calls } = mount({ overview: overview() });
   expect(el.querySelector('img')).toBeNull();
   expect(el.querySelectorAll('.idea')).toHaveLength(1);
   expect(el.textContent).toContain(EVIL);
@@ -67,6 +50,6 @@ test('ideas: one paragraph per category, as text, with Save idea; the rest in on
 });
 
 test('ideas with consent off say why there are none', () => {
-  const { el } = mount(MailIdeas, { overview: overview({ consent: false }) });
+  const { el } = mount({ overview: overview({ consent: false }) });
   expect(el.textContent).toContain('Claude analysis is off');
 });
