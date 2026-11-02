@@ -5,6 +5,7 @@ import type { TokenStore } from '../../mail/tokens.ts';
 import { googleClient, revoke, startConsent } from '../../mail/oauth.ts';
 import type { ConsentFlow, OAuthClient } from '../../mail/oauth.ts';
 import { consentOn, enqueueAnalyses, mailProviderOk, paragraphOf } from '../../mail/analyse.ts';
+import { saveIdea } from '../../mail/ideas.ts';
 import { setSenderRule, sortMail } from '../../mail/sorting.ts';
 import { CALIBRATION_MAILS, calibrationDone, enqueueTriage, isCalibrating } from '../../mail/triage.ts';
 import { getSecret } from '../../secrets.ts';
@@ -136,6 +137,11 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
 
   /** The Refresh button: reruns today; a second click while a job is queued or running is a no-op. */
   api.post('/email/analyses/refresh', async () => ({ queued: enqueueAnalyses(db, api.config, { force: true }) }));
+
+  api.post<{ Params: { id: string } }>('/email/categories/:id/ideas', { schema: { params: ID } }, async (req, reply) => {
+    const out = await saveIdea(db, api.config.vaultDir, Number(req.params.id));
+    return out ?? reply.code(404).send({ error: 'no_paragraph' });
+  });
 
   api.delete('/email/analyses', async () => {
     db.prepare('DELETE FROM mail_analyses').run();
