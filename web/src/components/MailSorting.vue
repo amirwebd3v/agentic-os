@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { addMailCategory, ApiError, deleteSenderRule, getCategoryMails, getMailOverview, getNeedsSorting, gmailLink, removeMailCategory, renameMailCategory, sortMail } from '../api';
 import type { MailOverview, MailRow, SenderGroup } from '../api';
 
@@ -46,8 +46,11 @@ async function act(run: () => Promise<unknown>, failure: string) {
     error.value = err instanceof ApiError && err.detail === 'name_taken' ? 'A category with that name already exists.' : failure;
   } finally {
     busy.value = false;
+    // The control that was clicked may be gone after the reload: keep keyboard focus somewhere sensible.
+    if (!document.activeElement || document.activeElement === document.body) await nextTick(() => heading.value?.focus());
   }
 }
+const heading = ref<HTMLElement>();
 
 /** Just these mails. */
 const sortMails = (mails: MailRow[], category: number) =>
@@ -104,9 +107,9 @@ defineExpose({ load });
     </p>
 
     <section aria-labelledby="sorting-title">
-      <h2 id="sorting-title">Needs sorting <span v-if="overview.needs_sorting" class="badge count">{{ overview.needs_sorting }}</span></h2>
+      <h2 id="sorting-title" ref="heading" tabindex="-1">Needs sorting <span v-if="overview.needs_sorting" class="badge count">{{ overview.needs_sorting }}</span></h2>
       <p v-if="!groups.length" class="muted">Nothing is waiting for you.</p>
-      <div v-for="g in groups" :key="senderKey(g)" class="group">
+      <div v-for="(g, gi) in groups" :key="senderKey(g)" class="group">
         <div class="spread">
           <div>
             <strong v-if="g.sender">{{ g.sender }}</strong>
@@ -114,8 +117,8 @@ defineExpose({ load });
             <span class="muted"> · {{ g.mails.length }} {{ g.mails.length === 1 ? 'mail' : 'mails' }}</span>
           </div>
           <div class="row">
-            <label class="sr-only" :for="`cat-${senderKey(g)}`">Category for {{ g.sender ?? 'unread mail' }}</label>
-            <select :id="`cat-${senderKey(g)}`" :value="picked(g)" @change="choice[senderKey(g)] = Number(($event.target as HTMLSelectElement).value)">
+            <label class="sr-only" :for="`cat-${gi}`">Category for {{ g.sender ?? 'unread mail' }}</label>
+            <select :id="`cat-${gi}`" :value="picked(g)" @change="choice[senderKey(g)] = Number(($event.target as HTMLSelectElement).value)">
               <option :value="undefined" disabled>Choose a category</option>
               <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
             </select>
@@ -167,7 +170,7 @@ defineExpose({ load });
                 <span><a :href="gmailLink(m)" target="_blank" rel="noopener noreferrer">{{ m.subject || (c.system === 'personal' ? 'Personal mail' : '(no subject)') }}</a><span v-if="m.sender" class="muted"> · {{ m.sender }}</span></span>
                 <span class="row">
                   <span class="muted">{{ day(m.internal_date) }}</span>
-                  <label class="sr-only" :for="`move-${m.id}`">Move to</label>
+                  <label class="sr-only" :for="`move-${m.id}`">Move {{ m.subject || 'this mail' }} to</label>
                   <select :id="`move-${m.id}`" :disabled="busy" :value="c.id" @change="sortMails([m], Number(($event.target as HTMLSelectElement).value))">
                     <option v-for="o in categories" :key="o.id" :value="o.id">{{ o.name }}</option>
                   </select>

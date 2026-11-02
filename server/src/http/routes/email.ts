@@ -145,7 +145,9 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
       const result = sortMail(db, id, category);
       if (result === 'not_found') return reply.code(404).send({ error: 'not_found' });
       if (result === 'bad_category') return reply.code(400).send({ error: 'bad_category' });
+      // The mail the owner clicked counts as checked; the others the rule moves don't (D12).
       const moved = always ? setSenderRule(db, sender!, category, !!applyStored) : 0;
+      if (always && applyStored) sortMail(db, id, category);
       for (const a of db.prepare(`SELECT id FROM mail_accounts WHERE status = 'connected'`).pluck().all() as number[]) enqueueTriage(db, a);
       return { moved };
     },

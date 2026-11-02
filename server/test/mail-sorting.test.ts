@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { Database } from '../src/db/index.ts';
 import type { Job } from '../src/db/jobs.ts';
+import { DeciderError } from '../src/decider/client.ts';
 import { emailRoutes } from '../src/http/routes/email.ts';
 import type { Gmail, GmailMessage } from '../src/mail/gmail.ts';
 import { sortMail } from '../src/mail/sorting.ts';
@@ -77,6 +78,28 @@ describe('sortMail', () => {
     ]);
   });
 
+  test('the same mail in the other account moves with it, without text or a second calibration count', () => {
+    const db = makeTestDb();
+    seed(db);
+    db.prepare(`INSERT INTO mail_accounts (email) VALUES ('b@example.com')`).run();
+    const original = mail(db, { state: 'filed', category_id: CAREER, excerpt: 'text', eligible: 1, rfc_message_id: '<x>' });
+    const copy = mail(db, { account_id: 2, gmail_id: 'g2', state: 'filed', category_id: CAREER, rfc_message_id: '<x>', source: 'rule' });
+    sortMail(db, copy, PERSONAL);
+    expect(row(db, original)).toMatchObject({ category_id: PERSONAL, excerpt: null, sender: null, is_personal: 1, source: 'rule' });
+    expect(row(db, copy)).toMatchObject({ category_id: PERSONAL, source: 'owner' });
+    sortMail(db, copy, BLOG);
+    expect(row(db, original)).toMatchObject({ category_id: BLOG, source: 'rule' });
+    expect(db.prepare(`SELECT count(*) FROM mail_messages WHERE source = 'owner'`).pluck().get()).toBe(1);
+  });
+
+  test('a rule applied to stored mail does not count as checked, except the mail the owner clicked', async () => {
+    const t = await buildTestApp({ loggedIn: true, plugins: [emailRoutes({ client: () => null, tokens: { get: () => null, set: () => {}, delete: () => {} } })] });
+    seed(t.db);
+    const ids = ['a', 'b', 'c'].map((g) => mail(t.db, { gmail_id: g }));
+    await t.app.inject(t.authed({ method: 'POST', url: `/api/email/mails/${ids[0]}/sort`, payload: { category_id: NOISE, always: true, apply_stored: true } }));
+    expect(t.db.prepare('SELECT source FROM mail_messages ORDER BY id').pluck().all()).toEqual(['owner', 'rule', 'rule']);
+  });
+
   test('an unknown mail or category', () => {
     const db = makeTestDb();
     seed(db);
@@ -106,6 +129,40 @@ describe('the fetch after sorting, through triage', () => {
     await run(db, message('About Vue'));
     const after = db.prepare('SELECT * FROM mail_messages').get() as Record<string, unknown>;
     expect(after).toMatchObject({ category_id: BLOG, source: 'owner', excerpt: 'About Vue', state: 'filed' });
+    expect(pending(db)).toEqual([]);
+  });
+
+  test('a newer move during the fetch wins: a mail moved into Personal stays empty', async () => {
+    const db = makeTestDb();
+    seed(db);
+    const id = mail(db);
+    sortMail(db, id, BLOG);
+    const m = message('About Vue');
+    await mailTriage({
+      db,
+      config: { llm: {} } as never,
+      gmailFor: () => ({ getMessage: async () => (sortMail(db, id, PERSONAL), m) }) as unknown as Gmail,
+      budget: new RateBudget(),
+      contact: () => ({}),
+      decider: () => ({ status: async () => 'ok', decide: async () => ({ latencyMs: 1, answers: { sensitive: { type: 'noul' as const, noul: 0, confidence: 1 }, category: { type: 'choice' as const, choice: 'Career', confidence: 1, probabilities: {} } } }) }),
+    })({ id: 1, payload: { accountId: 1 } } as Job);
+    expect(row(db, id)).toMatchObject({ category_id: PERSONAL, sender: null, subject: null, excerpt: null, is_personal: 1 });
+  });
+
+  test("a bad Laya reply keeps the owner's category and stores no text", async () => {
+    const db = makeTestDb();
+    seed(db);
+    const id = mail(db);
+    sortMail(db, id, BLOG);
+    await mailTriage({
+      db,
+      config: { llm: {} } as never,
+      gmailFor: () => ({ getMessage: async () => message('About Vue') }) as unknown as Gmail,
+      budget: new RateBudget(),
+      contact: () => ({}),
+      decider: () => ({ status: async () => 'ok', decide: async () => Promise.reject(new DeciderError('decider_error', 'x')) }),
+    })({ id: 1, payload: { accountId: 1 } } as Job);
+    expect(row(db, id)).toMatchObject({ id, state: 'filed', category_id: BLOG, source: 'owner', excerpt: null, eligible: 0 });
     expect(pending(db)).toEqual([]);
   });
 
