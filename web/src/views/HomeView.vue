@@ -33,8 +33,17 @@ const usd = (x: number) => `$${x < 10 ? x.toFixed(2) : Math.round(x).toLocaleStr
 const day = (d: string) => new Date(`${d}T00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 const dateLine = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
 
+// ---- which sources have answered: nothing says "all clear" until every one has, or names the one that couldn't
+const settled = computed(() => ({
+  dashboard: !!data.value || failed.value.dashboard,
+  apps: !!apps.value || failed.value.apps,
+  mail: !!mailAccounts.value || failed.value.mail,
+}));
+const allSettled = computed(() => settled.value.dashboard && settled.value.apps && settled.value.mail);
+const unchecked = computed(() => [failed.value.apps && 'your applications', failed.value.mail && 'your mail', failed.value.dashboard && 'Review and system'].filter(Boolean) as string[]);
+
 // ---- the queue: everything that waits on the owner, across areas, most urgent first
-type Item = { key: string; area: 'Career' | 'Email' | 'Review' | 'System'; title: string; detail: string; to: string; action: string; rank: number };
+type Item = { key: string; area: 'Career' | 'Email' | 'Review' | 'System'; title: string; detail: string; to: string; action: string; rank: number; due?: string };
 const liveMail = computed(() => mailAccounts.value?.accounts.filter((a) => a.status !== 'disconnected') ?? []);
 const queue = computed<Item[]>(() => {
   const items: Item[] = [];
@@ -44,7 +53,7 @@ const queue = computed<Item[]>(() => {
     const step = nextStep(a, d);
     if (step.group !== 'needs' && step.group !== 'follow') continue;
     const urgent = a.status === 'failed' || a.fail_code === 'render_failed';
-    items.push({ key: `a${a.id}`, area: 'Career', title: `${a.company} · ${a.role_title}`, detail: step.text, to: `/applications/${a.id}`, action: 'Open', rank: urgent ? 1 : step.group === 'needs' ? 3 : 4 });
+    items.push({ key: `a${a.id}`, area: 'Career', title: `${a.company} · ${a.role_title}`, detail: step.text, to: `/applications/${a.id}`, action: 'Open', rank: urgent ? 1 : step.group === 'needs' ? 3 : 4, ...(step.group === 'follow' && a.follow_up_on ? { due: a.follow_up_on } : {}) });
   }
   const reconnect = liveMail.value.filter((a) => a.status === 'reconnect');
   if (reconnect.length) items.push({ key: 'reconnect', area: 'Email', title: `${plural(reconnect.length, 'account needs', 'accounts need')} reconnecting`, detail: 'New mail from it is not read until you do', to: '/email', action: 'Reconnect', rank: 0 });
@@ -53,9 +62,13 @@ const queue = computed<Item[]>(() => {
   if (sort) items.push({ key: 'sort', area: 'Email', title: `${plural(sort, 'mail')} to sort`, detail: 'Each sort teaches a rule after 3 mails from one sender', to: '/email', action: 'Sort', rank: 5 });
   const reviews = data.value?.system.approvals_pending ?? 0;
   if (reviews) items.push({ key: 'review', area: 'Review', title: `${plural(reviews, 'item')} waiting in Review`, detail: 'Proposed changes to your vault', to: '/review', action: 'Review', rank: 2 });
-  if (data.value && data.value.system.provider !== 'ok') items.push({ key: 'provider', area: 'System', title: data.value.system.provider === 'error' ? 'The model provider rejects the key' : 'No model provider set up', detail: 'Drafts and mail analysis wait until it works', to: '/', action: '', rank: 0 });
-  return items.sort((x, y) => x.rank - y.rank);
+  if (data.value && data.value.system.provider !== 'ok')
+    items.push({ key: 'provider', area: 'System', title: data.value.system.provider === 'error' ? 'The model provider rejects the key' : 'No model provider set up', detail: 'Check the key in .env (or pnpm secrets), then restart the app', to: '', action: '', rank: 0 });
+  // Most urgent first; within a rank, the oldest-due follow-up first.
+  return items.sort((x, y) => x.rank - y.rank || (x.due ?? '').localeCompare(y.due ?? ''));
 });
+/** The figure strip counts the same Career items the queue shows, so the two never disagree. */
+const careerToDo = computed(() => queue.value.filter((i) => i.area === 'Career').length);
 const QUEUE_SHOWN = 6;
 const shownQueue = computed(() => (showAll.value ? queue.value : queue.value.slice(0, QUEUE_SHOWN)));
 
@@ -66,16 +79,25 @@ const health = computed<Health[]>(() => {
   const s = data.value?.system;
   if (s) rows.push({ name: 'Claude provider', word: s.provider === 'ok' ? 'Working' : s.provider === 'error' ? 'Key rejected' : 'Not set up', tone: s.provider === 'ok' ? 'ready' : 'danger', detail: 'Drafts, letters and mail analysis' });
   const live = liveMail.value;
-  const down = live.some((a) => a.triage_error === 'classifier_down');
-  rows.push({ name: 'Laya classifier', word: !live.length ? 'Not used yet' : down ? 'Down' : 'Working', tone: !live.length ? '' : down ? 'attention' : 'ready', detail: 'Sorts mail on this machine' });
-  const reconnect = live.filter((a) => a.status === 'reconnect').length;
-  const synced = live.map((a) => a.last_synced_at).filter((x): x is string => !!x).sort().at(-1);
-  rows.push({
-    name: 'Gmail',
-    word: !live.length ? 'Not connected' : reconnect ? `${reconnect} to reconnect` : 'Connected',
-    tone: !live.length ? '' : reconnect ? 'danger' : 'ready',
-    detail: live.length ? `${plural(live.length, 'account')}${synced ? ` · synced ${ago(synced)}` : ''}` : 'Read-only, when you connect it',
-  });
+  if (!mailAccounts.value) {
+    // Until the mail answers, "not connected" would be a guess that could hide a real problem.
+    const word = failed.value.mail ? 'Unknown' : 'Checking…';
+    const tone = failed.value.mail ? 'attention' : '';
+    rows.push({ name: 'Laya classifier', word, tone, detail: failed.value.mail ? 'The mail summary didn’t load' : 'Sorts mail on this machine' });
+    rows.push({ name: 'Gmail', word, tone, detail: failed.value.mail ? 'The mail summary didn’t load' : 'Read-only' });
+  } else {
+    const down = live.some((a) => a.triage_error === 'classifier_down');
+    rows.push({ name: 'Laya classifier', word: !live.length ? 'Not used yet' : down ? 'Down' : 'Working', tone: !live.length ? '' : down ? 'attention' : 'ready', detail: 'Sorts mail on this machine' });
+    const reconnect = live.filter((a) => a.status === 'reconnect').length;
+    const synced = live.map((a) => a.last_synced_at).filter((x): x is string => !!x).sort().at(-1);
+    rows.push({
+      name: 'Gmail',
+      word: !live.length ? 'Not connected' : reconnect ? `${reconnect} to reconnect` : 'Connected',
+      tone: !live.length ? '' : reconnect ? 'danger' : 'ready',
+      detail: live.length ? `${plural(live.length, 'account')}${synced ? ` · synced ${ago(synced)}` : ''}` : 'Read-only, when you connect it',
+    });
+  }
+  rows.push({ name: 'Social and blog', word: 'Not connected', tone: '', detail: 'Drafts for posts come in a later slice' });
   if (s) {
     rows.push({ name: 'Jobs', word: s.jobs.failed_7d ? `${s.jobs.failed_7d} failed` : 'Running fine', tone: s.jobs.failed_7d ? 'attention' : 'ready', detail: `${s.jobs.queued + s.jobs.running} queued or running · last 7 days` });
     rows.push({ name: 'Vault', word: s.last_vault_commit ? 'Saved' : 'No commits yet', tone: s.last_vault_commit ? 'ready' : '', detail: `${n(s.vault_notes)} notes${s.last_vault_commit ? ` · last commit ${ago(s.last_vault_commit)}` : ''}` });
@@ -104,8 +126,10 @@ const failRate = computed(() => {
 /** The title row's sentence: what needs you, whether it all works, what it cost. */
 const status = computed(() => {
   const parts: { text: string; tone?: string }[] = [];
-  if (apps.value || data.value || mailOverview.value) parts.push(queue.value.length ? { text: `${plural(queue.value.length, 'thing needs', 'things need')} you`, tone: 'lead' } : { text: 'Nothing needs you' });
-  if (data.value) parts.push(problems.value ? { text: `${plural(problems.value, 'part needs', 'parts need')} attention`, tone: 'attention' } : { text: 'everything is working' });
+  if (queue.value.length) parts.push({ text: `${plural(queue.value.length, 'thing needs', 'things need')} you`, tone: 'lead' });
+  else if (allSettled.value) parts.push(unchecked.value.length ? { text: `Couldn't check ${unchecked.value.join(' or ')}`, tone: 'attention' } : { text: 'Nothing needs you' });
+  if (problems.value) parts.push({ text: `${plural(problems.value, 'part needs', 'parts need')} attention`, tone: 'attention' });
+  else if (allSettled.value && !unchecked.value.length) parts.push({ text: 'everything is working' });
   if (ai.value && ai.value.totals.cost !== null) parts.push({ text: `${usd(ai.value.totals.cost)} of AI in 30 days` });
   return parts;
 });
@@ -129,19 +153,21 @@ const status = computed(() => {
           <h2 id="queue-title">Needs you</h2>
           <span v-if="queue.length" class="count">{{ queue.length }}</span>
         </header>
-        <p v-if="failed.apps" class="hint">Your applications didn't load, so this list may be short.</p>
-        <p v-if="!queue.length && (apps || data)" class="calm">Nothing waits on you. New drafts, follow-ups and mail to sort appear here.</p>
-        <p v-else-if="!apps && !data" class="hint" role="status">Loading…</p>
-        <ul v-else class="items">
+        <p v-if="unchecked.length" class="hint">Couldn't check {{ unchecked.join(' or ') }}, so this list may be short.</p>
+        <ul v-if="queue.length" class="items">
           <li v-for="item in shownQueue" :key="item.key" class="item">
             <span class="area-tag">{{ item.area }}</span>
             <span class="what">
-              <RouterLink :to="item.to" class="title" :title="item.title">{{ item.title }}</RouterLink>
-              <span class="detail">{{ item.detail }}</span>
+              <RouterLink v-if="item.to" :to="item.to" class="title" :title="item.title" :aria-describedby="`d-${item.key}`">{{ item.title }}</RouterLink>
+              <span v-else class="title">{{ item.title }}</span>
+              <span :id="`d-${item.key}`" class="detail">{{ item.detail }}</span>
             </span>
-            <RouterLink v-if="item.action" :to="item.to" class="act" tabindex="-1" aria-hidden="true">{{ item.action }}</RouterLink>
+            <!-- The same destination as the title: one stop for keyboards and screen readers, a clear verb for the eye. -->
+            <RouterLink v-if="item.action && item.to" :to="item.to" class="act" tabindex="-1" aria-hidden="true">{{ item.action }}</RouterLink>
           </li>
         </ul>
+        <p v-else-if="!allSettled" class="hint" role="status">Checking…</p>
+        <p v-else-if="!unchecked.length" class="calm">Nothing waits on you. New drafts, follow-ups and mail to sort appear here.</p>
         <button v-if="queue.length > QUEUE_SHOWN" type="button" class="quiet more" :aria-expanded="showAll" @click="showAll = !showAll">{{ showAll ? 'Show fewer' : `Show all ${queue.length}` }}</button>
       </section>
 
@@ -161,27 +187,27 @@ const status = computed(() => {
           <div>
             <dt>Applications</dt>
             <dd>{{ data ? n(totalApps) : '–' }}</dd>
-            <p class="sub"><RouterLink to="/applications">{{ data ? `${data.areas.career.needs_you} need you · ${data.areas.career.new_this_week} new this week` : 'View all' }}</RouterLink></p>
+            <dd class="sub"><RouterLink to="/applications">{{ data ? `${apps ? careerToDo : data.areas.career.needs_you} to act on · ${data.areas.career.new_this_week} new this week` : 'View all' }}</RouterLink></dd>
           </div>
           <div>
             <dt>Mail sorted by you</dt>
             <dd>{{ mailOverview ? n(mailOverview.calibration.done) : '–' }}</dd>
-            <p class="sub"><RouterLink to="/email">{{ mailOverview ? `${n(mailOverview.needs_sorting)} to sort · ${mailOverview.rules.length} rules` : liveMail.length ? 'Open Email' : 'Connect Gmail' }}</RouterLink></p>
+            <dd class="sub"><RouterLink to="/email">{{ mailOverview ? `${n(mailOverview.needs_sorting)} to sort · ${mailOverview.rules.length} rules` : liveMail.length ? 'Open Email' : 'Connect Gmail' }}</RouterLink></dd>
           </div>
           <div>
             <dt>AI calls, 30 days</dt>
             <dd>{{ ai ? n(ai.totals.calls) : '–' }}</dd>
-            <p class="sub">{{ ai ? `${failRate}% failed · ${tokens(ai.totals.input_tokens + ai.totals.output_tokens)} tokens` : '' }}</p>
+            <dd class="sub">{{ ai ? `${failRate}% failed · ${tokens(ai.totals.input_tokens + ai.totals.output_tokens)} tokens` : '' }}</dd>
           </div>
           <div>
             <dt>Estimated cost, 30 days</dt>
             <dd>{{ ai ? (ai.totals.cost === null ? 'Not priced' : usd(ai.totals.cost)) : '–' }}</dd>
-            <p class="sub">{{ ai ? (ai.priced ? 'From list prices' : 'Some models have no known price') : '' }}</p>
+            <dd class="sub">{{ ai ? (ai.priced ? 'From list prices' : 'Some models have no known price') : '' }}</dd>
           </div>
           <div>
             <dt>Master CV</dt>
             <dd>{{ data ? (data.areas.career.master.exists && data.areas.career.master.lines !== null ? n(data.areas.career.master.lines) : data.areas.career.master.exists ? '?' : '0') : '–' }}</dd>
-            <p class="sub"><RouterLink to="/cv">{{ data && data.areas.career.master.entries !== null ? `lines in ${data.areas.career.master.entries} entries` : 'Open the Master CV' }}</RouterLink></p>
+            <dd class="sub"><RouterLink to="/cv">{{ data && data.areas.career.master.entries !== null ? `lines in ${data.areas.career.master.entries} entries` : 'Open the Master CV' }}</RouterLink></dd>
           </div>
         </dl>
       </section>
@@ -270,7 +296,7 @@ const status = computed(() => {
 .strip dl > div:first-child { border-left: 0; }
 .strip dt { font-size: 13px; line-height: 18px; color: var(--muted); }
 .strip dd { margin: var(--s1) 0; font-family: var(--serif); font-size: 30px; line-height: 36px; font-variant-numeric: tabular-nums; }
-.strip .sub { margin: 0; font-size: 13px; line-height: 19px; color: var(--muted); }
+.strip dd.sub { margin: 0; font-size: 13px; line-height: 19px; color: var(--muted); }
 .strip .sub a { color: var(--muted); }
 .strip .sub a:hover { color: var(--fg); }
 

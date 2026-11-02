@@ -2,7 +2,7 @@ import { createApp } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, expect, test, vi } from 'vitest';
 import type { ApplicationListItem, Dashboard } from '../src/api';
-import { nextStep } from '../src/stores/career';
+import { nextStep, today } from '../src/stores/career';
 import HomeView from '../src/views/HomeView.vue';
 
 afterEach(() => {
@@ -56,10 +56,10 @@ const MAIL = '/api/email';
 // Home became a command center (owner's decision, 2026-11-02): it lists the applications that need you, which
 // career-v2 §6 had kept off Home.
 test('the overview leads with what needs you, most urgent first, then health, figures and usage', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const day = today(); // the app's own local day, not UTC
   const el = mountHome({
     '/api/dashboard': DASH,
-    '/api/career/applications': [item({ id: 7, company: 'Acme', status: 'draft_ready' }), item({ id: 8, company: 'Hawk', status: 'applied', follow_up_on: today }), item({ id: 9, company: 'Old', status: 'applied' })],
+    '/api/career/applications': [item({ id: 7, company: 'Acme', status: 'draft_ready' }), item({ id: 8, company: 'Hawk', status: 'applied', follow_up_on: day }), item({ id: 9, company: 'Old', status: 'applied' })],
     [`${MAIL}/accounts`]: { setup: true, flow: 'idle', accounts: [{ id: 1, email: 'a@example.com', status: 'reconnect', backfill_done: 1, last_synced_at: null }] },
     [`${MAIL}/overview`]: { calibration: { done: 10, total: 200, calibrating: true }, consent: false, categories: [], needs_sorting: 4, rules: [] },
   });
@@ -73,7 +73,8 @@ test('the overview leads with what needs you, most urgent first, then health, fi
   expect(el.querySelector('.health')!.textContent).toContain('3 failed');
   expect(el.querySelector('.health')!.textContent).toContain('1 to reconnect');
   const strip = el.querySelector('.strip')!.textContent!;
-  for (const figure of ['32', '$0.25', '3% failed', '37']) expect(strip).toContain(figure);
+  for (const figure of ['32', '$0.25', '3% failed', '37', '2 to act on']) expect(strip).toContain(figure); // the queue's 2 Career items
+  expect(el.querySelector('.strip dl > div > p')).toBeNull(); // a dl group holds only dt and dd
   expect(el.querySelectorAll('.cols .col')).toHaveLength(30);
   expect(el.querySelector('.calls .rowbars li')!.textContent).toContain('career_intake'); // most calls first
   expect(el.textContent).not.toContain('Show as a table'); // charts have no table toggle (#74)
@@ -82,10 +83,44 @@ test('the overview leads with what needs you, most urgent first, then health, fi
 
 test('nothing needs you: the queue says so, and a source that fails hides nothing else', async () => {
   const el = mountHome({ '/api/dashboard': { ...DASH, system: { ...DASH.system, approvals_pending: 0, jobs: { queued: 0, running: 0, failed_7d: 0 } } }, '/api/career/applications': [] });
-  await vi.waitFor(() => expect(el.querySelector('.queue .calm')).not.toBeNull());
-  expect(el.querySelector('.status-line')!.textContent).toContain('Nothing needs you');
-  expect(el.querySelector('.status-line')!.textContent).toContain('everything is working');
-  expect(el.querySelector('.health')!.textContent).toContain('Not connected');
+  await vi.waitFor(() => expect(el.querySelector('.queue')!.textContent).toContain("Couldn't check your mail"));
+  expect(el.querySelector('.queue .calm')).toBeNull(); // no all-clear while a source is unchecked
   await vi.waitFor(() => expect(el.textContent).toMatch(/mail summary didn.t load/)); // the mail part failed, alone
   expect(el.querySelector('.strip')!.textContent).toContain('32');
+  // A source that failed is named; nothing claims all is clear.
+  expect(el.querySelector('.status-line')!.textContent).toContain("Couldn't check your mail");
+  expect(el.querySelector('.status-line')!.textContent).not.toContain('Nothing needs you');
+  expect(el.querySelector('.health')!.textContent).toContain('Unknown');
+});
+
+test('nothing needs you only once every source has answered', async () => {
+  let release = () => {};
+  const late = new Promise<void>((r) => (release = r));
+  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+    if (path === '/api/dashboard') return Response.json({ ...DASH, system: { ...DASH.system, approvals_pending: 0, jobs: { queued: 0, running: 0, failed_7d: 0 } } });
+    if (path === '/api/career/applications') return Response.json([]);
+    if (path.endsWith('/accounts')) {
+      await late;
+      return Response.json({ setup: true, flow: 'idle', accounts: [] });
+    }
+    return Response.json({}, { status: 404 });
+  }));
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
+  const el = document.createElement('div');
+  document.body.append(el);
+  createApp(HomeView).use(router).mount(el);
+  await vi.waitFor(() => expect(el.querySelector('.strip')!.textContent).toContain('32'));
+  expect(el.querySelector('.queue')!.textContent).toContain('Checking…');
+  expect(el.querySelector('.status-line')!.textContent).not.toContain('Nothing needs you');
+  release();
+  await vi.waitFor(() => expect(el.querySelector('.status-line')!.textContent).toContain('Nothing needs you'));
+  expect(el.querySelector('.status-line')!.textContent).toContain('everything is working');
+  expect(el.querySelector('.health')!.textContent).toContain('Not connected');
+});
+
+test('a provider problem says how to fix it, without a link to nowhere', async () => {
+  const el = mountHome({ '/api/dashboard': { ...DASH, system: { ...DASH.system, provider: 'error' } }, '/api/career/applications': [] });
+  await vi.waitFor(() => expect(el.querySelector('.queue')!.textContent).toContain('The model provider rejects the key'));
+  expect(el.querySelector('.queue')!.textContent).toContain('Check the key in .env');
+  expect([...el.querySelectorAll('.queue a')].some((a) => a.textContent === 'The model provider rejects the key')).toBe(false);
 });
