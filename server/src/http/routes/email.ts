@@ -7,6 +7,8 @@ import type { ConsentFlow, OAuthClient } from '../../mail/oauth.ts';
 import { consentOn, enqueueAnalyses, mailProviderOk, paragraphOf } from '../../mail/analyse.ts';
 import { saveIdea } from '../../mail/ideas.ts';
 import { enqueueSyncs } from '../../mail/sync.ts';
+import { credentialManagerHash, learnRules } from '../../mail/senders.ts';
+import type { SenderHash } from '../../mail/senders.ts';
 import { setSenderRule, sortMail } from '../../mail/sorting.ts';
 import { CALIBRATION_MAILS, calibrationDone, enqueueTriage, isCalibrating } from '../../mail/triage.ts';
 import { getSecret } from '../../secrets.ts';
@@ -16,6 +18,8 @@ export interface EmailDeps {
   client: () => OAuthClient | null;
   tokens: TokenStore;
   gmailBase?: string;
+  /** Defaults to the key in Credential Manager; tests pass a fixed one. */
+  senderHash?: () => SenderHash | null;
 }
 
 const realDeps: EmailDeps = {
@@ -150,7 +154,8 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
         .all() as { id: number; system: string | null }[]
     ).map((c) => ({ ...c, paragraph: c.system === null ? paragraphOf(db, c.id) : null })),
     needs_sorting: db.prepare(`SELECT count(*) FROM mail_messages WHERE state IN ('needs_sorting', 'failed')`).pluck().get(),
-    rules: db.prepare('SELECT sender, category_id FROM mail_sender_rules ORDER BY sender').all(),
+    // A `#…` sender is a Personal sender known only by its hash.
+    rules: db.prepare('SELECT sender, category_id, learned FROM mail_sender_rules WHERE disabled = 0 ORDER BY learned, sender').all(),
   });
 
   api.put<{ Body: { consent: boolean } }>('/email/settings', { schema: { body: { type: 'object', properties: { consent: { type: 'boolean' } }, required: ['consent'], additionalProperties: false } } }, async (req) => {
@@ -199,20 +204,24 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
       const { category_id: category, always, apply_stored: applyStored } = req.body;
       const sender = db.prepare('SELECT sender FROM mail_messages WHERE id = ?').pluck().get(id) as string | null | undefined;
       if (always && !sender) return reply.code(400).send({ error: sender === undefined ? 'not_found' : 'no_sender' });
-      const result = sortMail(db, id, category);
+      const hash = (deps.senderHash ?? credentialManagerHash)();
+      const result = sortMail(db, id, category, 'owner', hash);
       if (result === 'not_found') return reply.code(404).send({ error: 'not_found' });
       if (result === 'bad_category') return reply.code(400).send({ error: 'bad_category' });
       // The mail the owner clicked counts as checked; the others the rule moves don't (D12).
-      const moved = always ? setSenderRule(db, sender!, category, !!applyStored) : 0;
-      if (always && applyStored) sortMail(db, id, category);
+      const moved = always ? setSenderRule(db, sender!, category, !!applyStored, hash) : 0;
+      if (always && applyStored) sortMail(db, id, category, 'owner', hash);
+      learnRules(db);
       for (const a of db.prepare(`SELECT id FROM mail_accounts WHERE status = 'connected'`).pluck().all() as number[]) enqueueTriage(db, a);
       return { moved };
     },
   );
 
   api.delete<{ Querystring: { sender: string } }>('/email/rules', { schema: { querystring: { type: 'object', properties: { sender: { type: 'string', minLength: 1 } }, required: ['sender'] } } }, async (req, reply) => {
-    const { changes } = db.prepare('DELETE FROM mail_sender_rules WHERE sender = ?').run(req.query.sender);
-    return changes ? { ok: true } : reply.code(404).send({ error: 'not_found' });
+    // A learned rule is switched off, not deleted, so the same history can't teach it again; the owner's own goes.
+    const { changes } = db.prepare('UPDATE mail_sender_rules SET disabled = 1 WHERE sender = ? AND learned = 1 AND disabled = 0').run(req.query.sender);
+    const deleted = changes ? 0 : db.prepare('DELETE FROM mail_sender_rules WHERE sender = ? AND learned = 0').run(req.query.sender).changes;
+    return changes || deleted ? { ok: true } : reply.code(404).send({ error: 'not_found' });
   });
 
   api.post<{ Body: { name: string } }>('/email/categories', { schema: { body: { type: 'object', properties: { name: NAME }, required: ['name'], additionalProperties: false } } }, async (req, reply) => {

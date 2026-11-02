@@ -225,10 +225,14 @@ defineExpose({ load });
 
     <section v-if="overview.rules.length" aria-labelledby="rules-title">
       <h2 id="rules-title">Sender rules</h2>
+      <p class="muted">A sender you sort the same way 3 times gets a rule. Mail from a Personal or Noise sender is then filed from its headers alone: its text is never fetched or sent anywhere.</p>
       <ul class="categories">
         <li v-for="r in overview.rules" :key="r.sender" class="spread">
-          <span>{{ r.sender }} <span class="muted">· {{ nameOf(r.category_id) }}</span></span>
-          <button type="button" class="quiet" :disabled="busy" @click="act(() => deleteSenderRule(r.sender), 'Could not remove that rule.')">Remove</button>
+          <span>
+            {{ r.sender.startsWith('#') ? 'A Personal sender (address not kept)' : r.sender }}
+            <span class="muted">· {{ nameOf(r.category_id) }}<template v-if="r.learned"> · learned from your sorting</template></span>
+          </span>
+          <button type="button" class="quiet" :disabled="busy" @click="act(() => deleteSenderRule(r.sender), 'Could not remove that rule.')">{{ r.learned ? 'Stop this rule' : 'Remove' }}</button>
         </li>
       </ul>
     </section>

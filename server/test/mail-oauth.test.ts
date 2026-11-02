@@ -309,7 +309,7 @@ describe('the Gmail client', () => {
     expect(src).not.toMatch(/method\s*:/);
     expect(src).not.toMatch(/\b(POST|PUT|PATCH|DELETE)\b/);
     expect(src).not.toMatch(/\/(send|modify|trash|untrash|batchModify|batchDelete|drafts|labels|settings|import|insert|watch|stop)\b/i);
-    expect([...src.matchAll(/=> get</g)].length).toBe(4);
+    expect([...src.matchAll(/=> get</g)].length).toBe(5);
   });
 
   test('no other source file holds a Gmail URL or a wider scope', () => {

@@ -5,6 +5,7 @@ import type { Job } from '../src/db/jobs.ts';
 import { DeciderError } from '../src/decider/client.ts';
 import { GmailError } from '../src/mail/gmail.ts';
 import type { Gmail, GmailMessage } from '../src/mail/gmail.ts';
+import { hashKey, hmacSender } from '../src/mail/senders.ts';
 import { RateBudget } from '../src/mail/sync.ts';
 import { CALIBRATION_MAILS, calibrationDone, enqueuePurge, isCalibrating, mailPurge, mailTriage, parseMail } from '../src/mail/triage.ts';
 import type { TriageDeps } from '../src/mail/triage.ts';
@@ -41,12 +42,20 @@ function setup(opts: { mails?: Record<string, GmailMessage | GmailError>; laya?:
   const mails = opts.mails ?? { m1: message('m1') };
   for (const id of Object.keys(mails)) db.prepare('INSERT INTO mail_pending (account_id, gmail_id) VALUES (1, ?)').run(id);
   const fetched: string[] = [];
+  const headed: string[] = [];
   const gmail = {
     getMessage: async (id: string) => {
       fetched.push(id);
       const m = mails[id]!;
       if (m instanceof GmailError) throw m;
       return m;
+    },
+    // The fake returns the whole message; parseMail then reads only what headers-first needs.
+    getMessageHeaders: async (id: string) => {
+      headed.push(id);
+      const m = mails[id]!;
+      if (m instanceof GmailError) throw m;
+      return { ...m, payload: { ...m.payload, parts: [], body: {} } };
     },
   } as unknown as Gmail;
   const answer = opts.laya ?? { sensitive: 0.05, category: 'Blog ideas', confidence: 0.95 };
@@ -68,7 +77,7 @@ function setup(opts: { mails?: Record<string, GmailMessage | GmailError>; laya?:
     ...opts.deps,
   });
   const fresh = (d: Database) => d.prepare(`SELECT * FROM mail_messages WHERE gmail_id NOT LIKE 'old%' ORDER BY gmail_id`).all() as Record<string, unknown>[];
-  return { db, run: () => handler({ id: 1, payload: { accountId: 1 } } as Job), rows: () => fresh(db), pending: () => db.prepare('SELECT gmail_id FROM mail_pending').pluck().all(), fetched, decide, llm, states, error: () => db.prepare('SELECT triage_error, status FROM mail_accounts').get() as { triage_error: string | null; status: string } };
+  return { db, run: () => handler({ id: 1, payload: { accountId: 1 } } as Job), rows: () => fresh(db), pending: () => db.prepare('SELECT gmail_id FROM mail_pending').pluck().all(), fetched, headed, decide, llm, states, error: () => db.prepare('SELECT triage_error, status FROM mail_accounts').get() as { triage_error: string | null; status: string } };
 }
 
 const THRESHOLDS = { thresholds: { 1: 0.8, 3: 0.8 } };
@@ -273,6 +282,52 @@ describe('jobs', () => {
     enqueuePurge(db, new Date('2026-11-01T01:00:00Z'));
     enqueuePurge(db, new Date('2026-11-01T23:00:00Z'));
     expect(db.prepare(`SELECT count(*) FROM jobs WHERE kind = 'mail_purge'`).pluck().get()).toBe(1);
+  });
+});
+
+describe('known Personal and Noise senders, from headers alone', () => {
+  const hash = hmacSender('test-key');
+  const withHash = { senderHash: () => hash };
+
+  test('a Personal rule by hash: headers only, no body, no model; keeps id, category and the hash', async () => {
+    const t = setup({ deps: withHash, mails: { m1: message('m1', { from: 'Mum <mum@family.example>', subject: 'Sunday', body: SECRET_BODY, bulk: false }) } });
+    t.db.prepare(`INSERT INTO mail_sender_rules (sender, category_id, learned) VALUES (?, 5, 1)`).run(hashKey(hash('mum@family.example')));
+    await t.run();
+    expect(t.headed).toEqual(['m1']);
+    expect(t.fetched).toEqual([]);
+    expect(t.decide).not.toHaveBeenCalled();
+    expect(t.llm).not.toHaveBeenCalled();
+    expect(t.rows()[0]).toMatchObject({ category_id: 5, is_personal: 1, sender: null, subject: null, excerpt: null, sender_hash: hash('mum@family.example'), source: 'rule' });
+  });
+
+  test('a Noise rule: headers only, keeps the sender and nothing else', async () => {
+    const t = setup({ deps: withHash, mails: { m1: message('m1', { from: 'Deals <deals@shop.example>', subject: '40% off' }) } });
+    t.db.prepare(`INSERT INTO mail_sender_rules (sender, category_id, learned) VALUES ('deals@shop.example', 6, 1)`).run();
+    await t.run();
+    expect(t.fetched).toEqual([]);
+    expect(t.decide).not.toHaveBeenCalled();
+    expect(t.rows()[0]).toMatchObject({ category_id: 6, sender: 'deals@shop.example', subject: null, excerpt: null });
+  });
+
+  test('spam is dropped from the headers; an unknown sender is fetched in full as before', async () => {
+    const t = setup({ deps: withHash, ...THRESHOLDS, mails: { s: message('s', { labels: ['SPAM'] }), m: message('m') } });
+    await t.run();
+    expect(t.fetched).toEqual(['m']);
+    expect(t.rows().map((r) => r['gmail_id'])).toEqual(['m']);
+  });
+
+  test('a disabled rule does nothing, and an idea-category rule still reads the mail for its checks', async () => {
+    const t = setup({ deps: withHash, mails: { a: message('a', { from: 'deals@shop.example' }), b: message('b', { from: 'blog@writing.example' }) } });
+    t.db.prepare(`INSERT INTO mail_sender_rules (sender, category_id, learned, disabled) VALUES ('deals@shop.example', 6, 1, 1), ('blog@writing.example', 1, 1, 0)`).run();
+    await t.run();
+    expect(t.fetched.sort()).toEqual(['a', 'b']);
+    expect(t.rows().find((r) => r['gmail_id'] === 'b')).toMatchObject({ category_id: 1, source: 'rule' });
+  });
+
+  test('a Personal mail filed by Laya keeps the sender hash, never the address', async () => {
+    const t = setup({ deps: withHash, laya: { sensitive: 0.95, category: 'Blog ideas', confidence: 0.9 }, mails: { m1: message('m1', { from: 'friend@mail.example', bulk: false }) } });
+    await t.run();
+    expect(t.rows()[0]).toMatchObject({ is_personal: 1, sender: null, sender_hash: hash('friend@mail.example') });
   });
 });
 

@@ -20,8 +20,9 @@ export interface GmailMessage { id: string; labelIds?: string[]; internalDate?: 
 export interface GmailHistory { history?: { messagesAdded?: { message: { id: string } }[]; messagesDeleted?: { message: { id: string } }[]; labelsAdded?: { message: { id: string }; labelIds?: string[] }[]; labelsRemoved?: { message: { id: string }; labelIds?: string[] }[] }[]; historyId?: string; nextPageToken?: string }
 
 export function createGmail(getAccessToken: () => Promise<string>, base = BASE) {
-  async function get<T>(path: string, params: Record<string, string | undefined> = {}): Promise<T> {
-    const query = new URLSearchParams(Object.entries(params).filter((e): e is [string, string] => e[1] !== undefined));
+  async function get<T>(path: string, params: Record<string, string | string[] | undefined> = {}): Promise<T> {
+    const query = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) for (const one of v === undefined ? [] : [v].flat()) query.append(k, one);
     const url = `${base}${path}${query.size ? `?${query}` : ''}`;
     let res: Response;
     try {
@@ -45,6 +46,8 @@ export function createGmail(getAccessToken: () => Promise<string>, base = BASE) 
     listMessages: (q: string, pageToken?: string) => get<{ messages?: { id: string }[]; nextPageToken?: string; resultSizeEstimate?: number }>('/messages', { q, pageToken, maxResults: '100' }),
     listHistory: (startHistoryId: string, pageToken?: string) => get<GmailHistory>('/history', { startHistoryId, pageToken }),
     getMessage: (id: string) => get<GmailMessage>(`/messages/${encodeURIComponent(id)}`, { format: 'full' }),
+    /** Labels and a few headers, no body: enough to file a known Personal or Noise sender without reading the mail. */
+    getMessageHeaders: (id: string) => get<GmailMessage>(`/messages/${encodeURIComponent(id)}`, { format: 'metadata', metadataHeaders: ['From', 'Message-ID', 'List-Unsubscribe', 'List-Id'] }),
   };
 }
 export type Gmail = ReturnType<typeof createGmail>;
