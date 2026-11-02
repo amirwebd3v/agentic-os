@@ -215,11 +215,12 @@ export const mailTriage =
       return category === undefined ? null : { action: 'file', category, source: 'rule', eligible: false, keepText: false };
     }
 
-    async function classify(mail: ParsedMail, gmailId: string): Promise<Extract<GateStep, { action: 'skip' | 'file' | 'needs_sorting' }>> {
+    async function classify(mail: ParsedMail, gmailId: string, ownerCategory: number | null): Promise<Extract<GateStep, { action: 'skip' | 'file' | 'needs_sorting' }>> {
       const scan = scrubSecrets(`${mail.sender}\n${mail.subject}\n${mail.body}`);
       const facts = { labels: mail.labels, bulk: mail.bulk, secretsHit: scan.kinds.length > 0 };
       const rule = db.prepare('SELECT category_id FROM mail_sender_rules WHERE sender = ?').pluck().get(mail.sender) as number | undefined;
-      const ctx: GateContext = { ...base, rule: rule ?? null };
+      // The owner's choice acts like a rule: it picks the category, and the checks still decide what text stays.
+      const ctx: GateContext = { ...base, rule: ownerCategory ?? rule ?? null };
       const answers: GateAnswers = {};
       for (;;) {
         const step = gate(facts, ctx, answers);
@@ -243,10 +244,10 @@ export const mailTriage =
       }
     }
 
-    const ids = db.prepare('SELECT gmail_id FROM mail_pending WHERE account_id = ? ORDER BY created_at, gmail_id LIMIT ?').pluck().all(accountId, BATCH) as string[];
+    const batch = db.prepare('SELECT gmail_id, owner_category_id FROM mail_pending WHERE account_id = ? ORDER BY created_at, gmail_id LIMIT ?').all(accountId, BATCH) as { gmail_id: string; owner_category_id: number | null }[];
     const gmail = gmailFor(accountId);
     setError(null);
-    for (const id of ids) {
+    for (const { gmail_id: id, owner_category_id: ownerCategory } of batch) {
       if (!budget.take(accountId, UNITS_PER_MAIL)) {
         later();
         return;
@@ -285,11 +286,11 @@ export const mailTriage =
       }
       try {
         let step;
-        const twin = copyOf(mail);
+        const twin = ownerCategory === null ? copyOf(mail) : null;
         if (twin) step = twin;
         else {
           try {
-            step = await classify(mail, id);
+            step = await classify(mail, id, ownerCategory);
           } catch (err) {
             if (err instanceof DeciderError && err.kind === 'decider_down') {
               setError('classifier_down');
@@ -313,11 +314,12 @@ export const mailTriage =
           state: step.action === 'file' ? 'filed' : 'needs_sorting',
           category_id: step.action === 'file' ? step.category : null,
           suggestion_id: step.action === 'needs_sorting' ? step.suggestion : null,
-          source: step.action === 'file' ? step.source : null,
+          source: ownerCategory !== null ? 'owner' : step.action === 'file' ? step.source : null,
           bulk: mail.bulk ? 1 : 0,
           ...fields,
         };
         db.transaction(() => {
+          if (ownerCategory !== null) db.prepare('DELETE FROM mail_messages WHERE account_id = ? AND gmail_id = ?').run(accountId, id);
           insert.run(row);
           removePending.run(accountId, id);
         })();

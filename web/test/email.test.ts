@@ -16,6 +16,8 @@ async function mount(first: MailAccounts) {
   const calls: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (path: string, init: RequestInit) => {
     calls.push(`${init.method} ${path}`);
+    if (path.endsWith('/overview')) return Response.json({ calibration: { done: 0, total: 200, calibrating: true }, categories: [], needs_sorting: 0, rules: [] });
+    if (path.endsWith('/needs-sorting')) return Response.json({ groups: [] });
     if (init.method === 'GET') return Response.json(current);
     if (init.method === 'DELETE') return Response.json({ revoked: false });
     return Response.json({ url: 'https://accounts.example/auth' });

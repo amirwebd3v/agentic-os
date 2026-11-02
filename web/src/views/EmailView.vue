@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { ApiError, connectMailAccount, disconnectMailAccount, getMailAccounts } from '../api';
 import type { ConnectFlow, MailAccount, MailAccounts } from '../api';
+import MailSorting from '../components/MailSorting.vue';
 
 const state = ref<MailAccounts>();
 const loadError = ref('');
@@ -22,6 +23,19 @@ const STATUS_TEXT: Record<MailAccount['status'], string> = {
   reconnect: 'Needs reconnecting',
   disconnected: 'Disconnected, local mail kept',
 };
+
+function ago(iso: string): string {
+  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
+  if (minutes < 60) return `${minutes} min ago`;
+  return minutes < 2880 ? `${Math.round(minutes / 60)}h ago` : `${Math.round(minutes / 1440)} days ago`;
+}
+function health(a: MailAccount): string {
+  if (a.triage_error === 'classifier_down') return 'The classifier is down. Sorting is paused, and nothing is sent to Claude instead.';
+  if (a.triage_error === 'contact_unreadable') return 'career/contact.md could not be read. Sorting is paused until it is fixed.';
+  const parts = [a.last_synced_at ? `Last synced ${ago(a.last_synced_at)}` : 'First sync running'];
+  if (a.pending) parts.push(`${a.pending} ${a.pending === 1 ? 'mail' : 'mails'} to sort through${a.estimate ? `, about ${a.estimate} in all` : ''}`);
+  return parts.join(' · ');
+}
 
 async function load() {
   loadError.value = '';
@@ -104,12 +118,16 @@ onBeforeUnmount(() => clearTimeout(poll));
       <p>No account connected yet. Connecting reads nothing until sorting is switched on.</p>
     </section>
 
-    <section v-if="state?.accounts.length" aria-label="Accounts">
+    <MailSorting v-if="state?.accounts.length" />
+
+    <section v-if="state?.accounts.length" aria-labelledby="accounts-title">
+      <h2 id="accounts-title">Accounts</h2>
       <ul class="accounts">
         <li v-for="a in state.accounts" :key="a.id" class="spread">
           <div>
             <strong>{{ a.email }}</strong>
-            <p class="muted">{{ STATUS_TEXT[a.status] }}</p>
+            <p class="muted">{{ a.last_error === 'deleted_client' ? 'The Google client was deleted. Restore it in the Google Cloud console within 30 days, then reconnect.' : a.last_error === 'invalid_client' ? 'Google refused the saved client. Save it again with pnpm secrets, then reconnect.' : STATUS_TEXT[a.status] }}</p>
+            <p v-if="a.status === 'connected'" class="muted">{{ health(a) }}</p>
           </div>
           <div class="row">
             <button v-if="a.status !== 'connected'" type="button" :disabled="busy" @click="connect">Reconnect</button>
@@ -131,4 +149,5 @@ onBeforeUnmount(() => clearTimeout(poll));
 .accounts { list-style: none; margin: 0; padding: 0; }
 .accounts li { border-top: 1px solid var(--border); padding: var(--s4) 0; }
 .accounts p { margin: 0; }
+.muted { color: var(--muted); }
 </style>

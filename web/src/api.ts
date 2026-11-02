@@ -195,12 +195,27 @@ export const parseCvFiles = (files: { name: string; data: string }[]) => json<Ma
 export const parseLinkedIn = () => json<MasterMerge>('POST', '/api/career/master/parse-linkedin', {});
 
 // Email (docs/week3/email-spec.md). Read-only access to Gmail; no token ever reaches the browser.
-export type MailAccount = { id: number; email: string; status: 'connected' | 'reconnect' | 'disconnected'; backfill_done: 0 | 1; last_synced_at: string | null };
+export type MailAccount = { id: number; email: string; status: 'connected' | 'reconnect' | 'disconnected'; backfill_done: 0 | 1; last_synced_at: string | null; last_error?: string | null; triage_error?: string | null; pending?: number; estimate?: number | null };
 export type ConnectFlow = 'idle' | 'waiting' | 'connected' | 'cancelled' | 'wrong_scope' | 'failed' | 'timed_out';
 export type MailAccounts = { setup: boolean; flow: ConnectFlow; accounts: MailAccount[] };
 export const getMailAccounts = () => json<MailAccounts>('GET', '/api/email/accounts');
 export const connectMailAccount = () => json<{ url: string }>('POST', '/api/email/accounts/connect', {});
 export const disconnectMailAccount = (id: number, keep: boolean) => json<{ revoked: boolean }>('DELETE', `/api/email/accounts/${id}?keep=${keep ? 1 : 0}`);
+export type MailCategory = { id: number; name: string; system: 'personal' | 'noise' | null; count: number };
+export type MailOverview = { calibration: { done: number; total: number; calibrating: boolean }; categories: MailCategory[]; needs_sorting: number; rules: { sender: string; category_id: number }[] };
+// Sender and subject are mail text: render as text only. A Personal mail has neither.
+export type MailRow = { id: number; gmail_id: string; state?: 'needs_sorting' | 'failed'; sender: string | null; subject: string | null; internal_date: string; account: string };
+export type SenderGroup = { sender: string | null; suggestion_id: number | null; mails: MailRow[] };
+export const getMailOverview = () => json<MailOverview>('GET', '/api/email/overview');
+export const getNeedsSorting = () => json<{ groups: SenderGroup[] }>('GET', '/api/email/needs-sorting');
+export const getCategoryMails = (id: number) => json<{ mails: MailRow[] }>('GET', `/api/email/categories/${id}/mails`);
+export const sortMail = (id: number, categoryId: number, opts: { always?: boolean; apply_stored?: boolean } = {}) => json<{ moved: number }>('POST', `/api/email/mails/${id}/sort`, { category_id: categoryId, ...opts });
+export const deleteSenderRule = (sender: string) => json<{ ok: true }>('DELETE', `/api/email/rules?sender=${encodeURIComponent(sender)}`);
+export const addMailCategory = (name: string) => json<{ id: number }>('POST', '/api/email/categories', { name });
+export const renameMailCategory = (id: number, name: string) => json<{ ok: true }>('PATCH', `/api/email/categories/${id}`, { name });
+export const removeMailCategory = (id: number) => json<{ ok: true }>('DELETE', `/api/email/categories/${id}`);
+/** Built by code from ids, never taken from a mail. */
+export const gmailLink = (m: Pick<MailRow, 'gmail_id' | 'account'>) => `https://mail.google.com/mail/?authuser=${encodeURIComponent(m.account)}#all/${encodeURIComponent(m.gmail_id)}`;
 
 // Dashboard (career-v2.md §6): counts and aggregates only.
 export type Usage = { calls: number; input_tokens: number; output_tokens: number; failures?: number; cost: number | null };
