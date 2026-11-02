@@ -27,7 +27,8 @@ export function mailProviderOk(config: Pick<Config, 'llm'>, tier: 'fast' | 'work
     return false;
   }
   const local = host === '127.0.0.1' || host === 'localhost' || host === '[::1]';
-  return (local || host === 'api.anthropic.com') && /^claude-/.test(config.llm.models[tier]);
+  // A router may put its route in front ("cc/claude-haiku-4-5"); what follows must still be a Claude model.
+  return (local || host === 'api.anthropic.com') && /^(?:[a-z0-9-]{1,20}\/)?claude-[a-z0-9.-]+$/i.test(config.llm.models[tier]);
 }
 
 const setting = (db: Database, key: string) => db.prepare('SELECT value FROM mail_settings WHERE key = ?').pluck().get(key) as string | undefined;
