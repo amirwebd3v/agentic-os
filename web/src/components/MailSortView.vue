@@ -5,7 +5,7 @@ import type { MailCategory, MailRow, SenderGroup } from '../api';
 import { mailDay, plural } from '../mail';
 
 // Needs sorting, grouped by sender: the screen's main job. Sender and subject are a stranger's text: {{ }} only.
-const props = defineProps<{ categories: MailCategory[]; total: number; version: number; busy: boolean; run: (job: () => Promise<string | void>, failure: string) => Promise<void> }>();
+const props = defineProps<{ categories: MailCategory[]; total: number; version: number; busy: boolean; run: (job: () => Promise<string | void>, failure: string, after?: () => void) => Promise<void> }>();
 
 const PREVIEW = 3;
 const groups = ref<SenderGroup[] | null>(null);
@@ -14,16 +14,24 @@ const choice = ref<Record<string, number | undefined>>({});
 const expanded = ref<Set<string>>(new Set());
 
 const key = (g: SenderGroup) => g.sender ?? '';
-const picked = (g: SenderGroup) => choice.value[key(g)] ?? g.suggestion_id ?? undefined;
+/** Only a category that still exists: one removed since it was picked counts as no choice. */
+const picked = (g: SenderGroup) => {
+  const id = choice.value[key(g)] ?? g.suggestion_id ?? undefined;
+  return id !== undefined && props.categories.some((c) => c.id === id) ? id : undefined;
+};
 const nameOf = (id: number) => props.categories.find((c) => c.id === id)?.name ?? 'that category';
 const shown = (g: SenderGroup) => (expanded.value.has(key(g)) ? g.mails : g.mails.slice(0, PREVIEW));
 
+let latest = 0;
 async function load() {
+  const mine = ++latest;
   try {
-    groups.value = (await getNeedsSorting()).groups;
+    const next = (await getNeedsSorting()).groups;
+    if (mine !== latest) return; // a newer load answers instead
+    groups.value = next;
     failed.value = false;
   } catch {
-    failed.value = true;
+    if (mine === latest) failed.value = true;
   }
 }
 
@@ -84,7 +92,7 @@ watch(() => props.version, load);
         <li v-for="m in shown(g)" :key="m.id">
           <a :href="gmailLink(m)" target="_blank" rel="noopener noreferrer" :title="m.subject ?? ''">{{ m.subject || '(no subject)' }}</a>
           <span class="meta">{{ mailDay(m.internal_date) }}</span>
-          <button type="button" class="quiet" :disabled="busy || !picked(g)" :aria-label="`File only ${m.subject || 'this mail'}`" @click="sortAll([m], picked(g)!)">Only this</button>
+          <button type="button" class="quiet" :disabled="busy || !picked(g)" :aria-label="`Only this: ${m.subject || 'this mail'}`" @click="sortAll([m], picked(g)!)">Only this</button>
         </li>
       </ul>
       <button v-if="g.mails.length > PREVIEW" type="button" class="quiet more" :aria-expanded="expanded.has(key(g))" @click="toggle(g)">

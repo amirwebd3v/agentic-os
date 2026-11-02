@@ -1,8 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { getDashboard, type ApplicationStatus, type Dashboard } from '../api';
+import { getDashboard, getMailAccounts, getMailOverview, type ApplicationStatus, type Dashboard, type MailAccounts, type MailOverview } from '../api';
 import BarChart from '../components/BarChart.vue';
-import EmailCard from '../components/EmailCard.vue';
+import EmailArea from '../components/EmailArea.vue';
+import MailIdeas from '../components/MailIdeas.vue';
+
+// The mail summary loads apart from the dashboard: a mail problem must not hide the rest of Home.
+const mailAccounts = ref<MailAccounts | null>(null);
+const mailOverview = ref<MailOverview | null>(null);
+const mailFailed = ref(false);
+onMounted(async () => {
+  try {
+    mailAccounts.value = await getMailAccounts();
+    if (mailAccounts.value.accounts.some((a) => a.status !== 'disconnected')) mailOverview.value = await getMailOverview();
+  } catch {
+    mailFailed.value = true;
+  }
+});
 
 // The OS overview: how the agents work (usage, cost, failures), the state of the system, and each area at a glance.
 // Only counts and aggregates reach this page.
@@ -64,6 +78,7 @@ onMounted(() => getDashboard().then((d) => (data.value = d), () => (error.value 
           <p v-else class="big">None <span>yet</span></p>
           <p class="hint">{{ career!.master.entries !== null && career!.master.exists ? `${career!.master.entries} ${career!.master.entries === 1 ? 'entry' : 'entries'}, from all your CVs` : career!.master.exists ? 'Fix it on the Master CV page' : 'Import your Word CVs to start' }}</p>
         </RouterLink>
+        <EmailArea :accounts="mailAccounts" :overview="mailOverview" :failed="mailFailed" />
         <div class="area off">
           <h2>Social and blog</h2>
           <p class="big"><span>Not connected</span></p>
@@ -71,7 +86,7 @@ onMounted(() => getDashboard().then((d) => (data.value = d), () => (error.value 
         </div>
       </section>
 
-      <EmailCard />
+      <MailIdeas v-if="mailOverview" :overview="mailOverview" />
 
       <section class="dash-grid" aria-labelledby="ai-title">
         <div class="panel wide">

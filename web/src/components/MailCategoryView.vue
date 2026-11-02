@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { nextTick, onMounted, ref, watch } from 'vue';
 import { getCategoryMails, gmailLink, removeMailCategory, renameMailCategory, saveIdea, sortMail } from '../api';
 import type { MailCategory, MailRow } from '../api';
 import { mailDay, paragraphMeta, plural } from '../mail';
 
 // One category: its paragraph first (what the mail gave you), then its mail with a Move on each.
-const props = defineProps<{ category: MailCategory; categories: MailCategory[]; consent: boolean; version: number; busy: boolean; run: (job: () => Promise<string | void>, failure: string) => Promise<void> }>();
+const props = defineProps<{ category: MailCategory; categories: MailCategory[]; consent: boolean; version: number; busy: boolean; run: (job: () => Promise<string | void>, failure: string, after?: () => void) => Promise<void> }>();
 const emit = defineEmits<{ removed: [] }>();
 
 const mails = ref<MailRow[] | null>(null);
@@ -15,12 +15,37 @@ const renameTo = ref('');
 const confirmRemove = ref(false);
 
 async function load() {
+  const id = props.category.id;
   try {
-    mails.value = (await getCategoryMails(props.category.id)).mails;
+    const next = (await getCategoryMails(id)).mails;
+    if (id !== props.category.id) return; // the owner opened another category meanwhile
+    mails.value = next;
     failed.value = false;
   } catch {
-    failed.value = true;
+    if (id === props.category.id) failed.value = true;
   }
+}
+
+// A control that replaces another takes the focus with it, and gives it back on Cancel.
+const renameInput = ref<HTMLInputElement>();
+const renameButton = ref<HTMLButtonElement>();
+const removeButton = ref<HTMLButtonElement>();
+const keepButton = ref<HTMLButtonElement>();
+async function startRename() {
+  renaming.value = true;
+  renameTo.value = props.category.name;
+  await nextTick();
+  renameInput.value?.select();
+}
+async function stopRename() {
+  renaming.value = false;
+  await nextTick();
+  renameButton.value?.focus();
+}
+async function askRemove(on: boolean) {
+  confirmRemove.value = on;
+  await nextTick();
+  (on ? keepButton : removeButton).value?.focus();
 }
 
 const nameOf = (id: number) => props.categories.find((c) => c.id === id)?.name ?? 'that category';
@@ -30,8 +55,7 @@ const move = (m: MailRow, to: number) => props.run(async () => {
 }, 'Could not move that mail. Try again.');
 const rename = () => props.run(async () => {
   await renameMailCategory(props.category.id, renameTo.value.trim());
-  renaming.value = false;
-}, 'Could not rename it. The name may be taken.');
+}, 'Could not rename it. The name may be taken.', () => void stopRename());
 const remove = () => props.run(async () => {
   await removeMailCategory(props.category.id);
   emit('removed');
@@ -56,22 +80,22 @@ watch(() => props.category.id, () => {
     <div v-if="!renaming" class="title-row">
       <h2 id="view-title" tabindex="-1">{{ category.name }}</h2>
       <div class="row">
-        <button type="button" class="quiet" @click="(renaming = true), (renameTo = category.name)">Rename</button>
+        <button ref="renameButton" type="button" class="quiet" @click="startRename">Rename</button>
         <template v-if="!category.system">
           <template v-if="confirmRemove">
             <span class="hint">Its mail goes back to Needs sorting.</span>
             <button type="button" class="quiet danger" :disabled="busy" @click="remove">Remove</button>
-            <button type="button" class="quiet" @click="confirmRemove = false">Keep</button>
+            <button ref="keepButton" type="button" class="quiet" @click="askRemove(false)">Keep</button>
           </template>
-          <button v-else type="button" class="quiet" @click="confirmRemove = true">Remove</button>
+          <button v-else ref="removeButton" type="button" class="quiet" @click="askRemove(true)">Remove</button>
         </template>
       </div>
     </div>
     <form v-else class="row rename" @submit.prevent="rename">
       <label class="sr-only" for="rename-category">New name for {{ category.name }}</label>
-      <input id="rename-category" v-model="renameTo" type="text" maxlength="60" />
+      <input id="rename-category" ref="renameInput" v-model="renameTo" type="text" maxlength="60" @keydown.esc="stopRename" />
       <button type="submit" :disabled="busy || !renameTo.trim()">Save</button>
-      <button type="button" class="quiet" @click="renaming = false">Cancel</button>
+      <button type="button" class="quiet" @click="stopRename">Cancel</button>
     </form>
     <p class="hint">
       {{ plural(category.count, 'mail') }}
@@ -115,7 +139,8 @@ watch(() => props.category.id, () => {
         <td class="when">{{ mailDay(m.internal_date) }}</td>
         <td class="move">
           <label class="sr-only" :for="`move-${m.id}`">Move {{ m.subject || 'this mail' }} to</label>
-          <select :id="`move-${m.id}`" :disabled="busy" :value="category.id" @change="move(m, Number(($event.target as HTMLSelectElement).value))">
+          <!-- Keyed on the reload count: after a failed move it snaps back to this category instead of showing the choice. -->
+          <select :id="`move-${m.id}`" :key="`${m.id}-${version}`" :disabled="busy" :value="category.id" @change="move(m, Number(($event.target as HTMLSelectElement).value))">
             <option v-for="o in categories" :key="o.id" :value="o.id">{{ o.name }}</option>
           </select>
         </td>

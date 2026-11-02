@@ -50,40 +50,60 @@ const status = computed(() => {
   return parts;
 });
 
-function open(v: string) {
-  void router.replace({ query: { ...route.query, view: v } });
-  void nextTick(() => document.getElementById('view-title')?.focus());
+/** `focus` moves keyboard focus to the new view's heading: right after a click, wrong while arrowing through the select. */
+async function open(v: string, focus = true) {
+  await router.replace({ query: { ...route.query, view: v } });
+  if (focus) await nextTick(() => document.getElementById('view-title')?.focus());
+}
+function pick(v: string) {
+  if (v === 'new') {
+    adding.value = true;
+    void nextTick(() => newInput.value?.focus());
+  } else void open(v, false);
 }
 
+let latest = 0;
+let unmounted = false;
 async function load() {
+  clearTimeout(poll); // one poll chain at most, whoever calls
+  const mine = ++latest;
   loadError.value = '';
   try {
     const next = await getMailAccounts();
+    const nextOverview = next.accounts.length ? await getMailOverview() : null;
+    if (mine !== latest || unmounted) return; // a newer load answers instead
     state.value = next;
-    if (next.flow === 'waiting') poll = setTimeout(() => void load(), 2000);
-    else if (polling && next.flow === 'failed') notice.value = { text: failureText(next.reason ?? null), tone: 'danger' };
+    overview.value = nextOverview;
+    if (next.flow === 'failed' && polling) notice.value = { text: failureText(next.reason ?? null), tone: 'danger' };
     else if (polling && FLOW_TEXT[next.flow]) notice.value = { text: FLOW_TEXT[next.flow]!, tone: next.flow === 'connected' ? 'ok' : '' };
     if (next.flow !== 'waiting') polling = false;
-    overview.value = next.accounts.length ? await getMailOverview() : null;
+    // Waiting for Google, or a paragraph being written: look again shortly, so the page never shows a stale state.
+    const writing = nextOverview?.categories.some((c) => c.refreshing);
+    if (next.flow === 'waiting' || writing) poll = setTimeout(() => void load().then(() => version.value++), next.flow === 'waiting' ? 2000 : 4000);
   } catch {
-    loadError.value = 'Could not load your mail. Is the server running?';
+    if (mine === latest) loadError.value = 'Could not load your mail. Is the server running?';
   }
 }
 
-/** Every action goes through here: one busy flag, one notice, and a reload of whatever the action changed. */
-async function run(job: () => Promise<string | void>, failure: string) {
+/**
+ * Every action goes through here: one busy flag, one notice, and a reload of whatever the action changed, also after
+ * a failure (a batch that stopped halfway has still filed its first mails). `after` runs once the reload has landed.
+ */
+async function run(job: () => Promise<string | void>, failure: string, after?: () => void) {
   busy.value = true;
   notice.value = null;
   try {
     const text = await job();
     if (text) notice.value = { text, tone: 'ok' };
-    await load();
-    version.value++;
   } catch (err) {
     notice.value = { text: err instanceof ApiError && err.detail === 'name_taken' ? 'A category with that name already exists.' : failure, tone: 'danger' };
+    after = undefined;
   } finally {
+    await load();
+    version.value++;
     busy.value = false;
   }
+  after?.();
 }
 
 async function connect() {
@@ -120,24 +140,44 @@ const refresh = () =>
     return queued ? `Writing ${plural(queued, 'paragraph')}.` : 'Nothing new since the last paragraphs.';
   }, 'Could not refresh the paragraphs.');
 const clear = () => run(async () => void (await clearParagraphs()), 'Could not clear the paragraphs.');
+let added = 0;
 const add = () =>
-  run(async () => {
-    const { id } = await addMailCategory(newName.value.trim());
-    newName.value = '';
-    adding.value = false;
-    open(String(id));
-    return 'Category added. It applies to mail from now on.';
-  }, 'Could not add that category.');
+  run(
+    async () => {
+      added = (await addMailCategory(newName.value.trim())).id;
+      newName.value = '';
+      adding.value = false;
+      return 'Category added. It applies to mail from now on.';
+    },
+    'Could not add that category.',
+    () => void open(String(added)), // after the reload, when the new category exists in the list
+  );
+const startAdding = async () => {
+  adding.value = true;
+  await nextTick();
+  newInput.value?.focus();
+};
+const cancelAdding = async () => {
+  adding.value = false;
+  newName.value = '';
+  await nextTick();
+  addOpen.value?.focus();
+};
+const newInput = ref<HTMLInputElement>();
+const addOpen = ref<HTMLButtonElement>();
 
 onMounted(load);
-onBeforeUnmount(() => clearTimeout(poll));
+onBeforeUnmount(() => {
+  unmounted = true;
+  clearTimeout(poll);
+});
 </script>
 
 <template>
   <main class="page mail-page">
     <header class="mail-head">
       <h1>Email</h1>
-      <p v-if="live.length" class="status-line" role="status">
+      <p v-if="live.length" class="status-line">
         <template v-for="(p, i) in status" :key="p.text"><span v-if="i" class="sep" aria-hidden="true"> · </span><span :class="p.tone">{{ p.text }}</span></template>
       </p>
       <p v-else class="status-line">Read-only access to your Gmail. The app never sends, labels, archives or deletes anything.</p>
@@ -165,10 +205,11 @@ onBeforeUnmount(() => clearTimeout(poll));
     <div v-else-if="state && overview" class="mail-grid">
       <nav class="views" aria-label="Email views">
         <label class="sr-only" for="view-pick">Show</label>
-        <select id="view-pick" class="view-pick" :value="viewKey" @change="open(($event.target as HTMLSelectElement).value)">
+        <select id="view-pick" :key="`${viewKey}-${version}`" class="view-pick" :value="viewKey" @change="pick(($event.target as HTMLSelectElement).value)">
           <option value="sort">Needs sorting ({{ overview.needs_sorting }})</option>
           <option v-for="c in categories" :key="c.id" :value="String(c.id)">{{ c.name }} ({{ c.count }})</option>
           <option value="rules">Sender rules ({{ overview.rules.length }})</option>
+          <option value="new">New category…</option>
         </select>
 
         <ul class="view-list">
@@ -188,13 +229,13 @@ onBeforeUnmount(() => clearTimeout(poll));
         </ul>
         <form v-if="adding" class="add" @submit.prevent="add">
           <label class="sr-only" for="new-category">New category name</label>
-          <input id="new-category" v-model="newName" type="text" maxlength="60" placeholder="Name" />
+          <input id="new-category" ref="newInput" v-model="newName" type="text" maxlength="60" placeholder="Name" @keydown.esc="cancelAdding" />
           <div class="row">
             <button type="submit" :disabled="busy || !newName.trim()">Add</button>
-            <button type="button" class="quiet" @click="(adding = false), (newName = '')">Cancel</button>
+            <button type="button" class="quiet" @click="cancelAdding">Cancel</button>
           </div>
         </form>
-        <button v-else type="button" class="quiet add-open" @click="adding = true">New category</button>
+        <button v-else ref="addOpen" type="button" class="quiet add-open" @click="startAdding">New category</button>
         <ul class="view-list setup-list">
           <li>
             <button type="button" class="view-item" :aria-current="viewKey === 'rules' ? 'page' : undefined" @click="open('rules')">
@@ -258,6 +299,7 @@ onBeforeUnmount(() => clearTimeout(poll));
   .mail-grid > :deep(.rail) { grid-column: 1; }
   .views { position: static; }
   .view-pick { display: block; }
-  .view-list, .group-label, .add-open, .add { display: none; }
+  .view-list, .group-label, .add-open { display: none; }
+  .add { padding: var(--s2) 0 0; }
 }
 </style>

@@ -5,7 +5,7 @@ import type { MailCategory, MailOverview } from '../api';
 import { plural } from '../mail';
 
 // Every rule in one table: who, where it files, whose rule it is.
-const props = defineProps<{ rules: MailOverview['rules']; categories: MailCategory[]; busy: boolean; run: (job: () => Promise<string | void>, failure: string) => Promise<void> }>();
+const props = defineProps<{ rules: MailOverview['rules']; categories: MailCategory[]; busy: boolean; run: (job: () => Promise<string | void>, failure: string, after?: () => void) => Promise<void> }>();
 
 const nameOf = (id: number) => props.categories.find((c) => c.id === id)?.name ?? 'Unknown';
 const learned = computed(() => props.rules.filter((r) => r.learned).length);

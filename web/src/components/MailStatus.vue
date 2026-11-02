@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import type { MailAccount, MailOverview } from '../api';
 import { accountState, plural } from '../mail';
 
@@ -15,6 +15,13 @@ const emit = defineEmits<{
 }>();
 
 const confirming = ref<number | null>(null);
+// Asking to confirm swaps the Disconnect button out: focus goes to the safe choice, and back on Cancel.
+async function confirm(id: number | null) {
+  const from = confirming.value;
+  confirming.value = id;
+  await nextTick();
+  document.getElementById(id === null ? `disconnect-${from}` : `cancel-${id}`)?.focus();
+}
 const learned = computed(() => props.overview?.rules.filter((r) => r.learned).length ?? 0);
 const own = computed(() => (props.overview?.rules.length ?? 0) - learned.value);
 const hasParagraphs = computed(() => props.overview?.categories.some((c) => c.paragraph) ?? false);
@@ -34,9 +41,9 @@ const hasParagraphs = computed(() => props.overview?.categories.some((c) => c.pa
             <template v-if="a.status !== 'disconnected' && confirming === a.id">
               <button type="button" class="quiet" :disabled="busy" @click="emit('disconnect', a, true), (confirming = null)">Disconnect, keep its mail</button>
               <button type="button" class="quiet danger" :disabled="busy" @click="emit('disconnect', a, false), (confirming = null)">Disconnect, delete its mail</button>
-              <button type="button" class="quiet" @click="confirming = null">Cancel</button>
+              <button :id="`cancel-${a.id}`" type="button" class="quiet" @click="confirm(null)">Cancel</button>
             </template>
-            <button v-else-if="a.status !== 'disconnected'" type="button" class="quiet" :disabled="busy" @click="confirming = a.id">Disconnect</button>
+            <button v-else-if="a.status !== 'disconnected'" :id="`disconnect-${a.id}`" type="button" class="quiet" :disabled="busy" @click="confirm(a.id)">Disconnect</button>
             <button v-else type="button" class="quiet danger" :disabled="busy" @click="emit('disconnect', a, false)">Delete its mail</button>
           </div>
         </li>
