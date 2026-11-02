@@ -59,7 +59,7 @@ function setup(opts: { mails?: Record<string, GmailMessage | GmailError>; laya?:
   const llm = vi.fn(async () => ({ category: 'Career' }));
   const handler = mailTriage({
     db,
-    config: { llm: {} } as never,
+    config: { llm: { baseURL: 'http://127.0.0.1:20128', models: { fast: 'claude-haiku-5-5', work: 'claude-sonnet-5-5', deep: 'claude-opus-5-5' } } } as never,
     gmailFor: () => gmail,
     budget: opts.budget ?? new RateBudget(),
     contact: () => ({ name: 'Jan Doe', email: 'jan@example.com' }),
@@ -137,6 +137,13 @@ describe('calibration and Claude', () => {
     expect(input.input).not.toContain('Jan Doe');
     expect(input.input).not.toContain('jan@example.com');
     expect(input.input.match(/<\/mail>/g)).toHaveLength(1);
+  });
+
+  test('a provider mail may not go to: nothing reaches it, and the mail waits', async () => {
+    const t = setup({ consent: true, deps: { config: { llm: { baseURL: 'https://router.example.com', models: { fast: 'claude-haiku-5-5' } } } as never } });
+    await t.run();
+    expect(t.llm).not.toHaveBeenCalled();
+    expect(t.rows()[0]).toMatchObject({ state: 'needs_sorting' });
   });
 
   test('consent off: nothing reaches Claude', async () => {

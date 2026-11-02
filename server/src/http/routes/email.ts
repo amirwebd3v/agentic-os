@@ -4,6 +4,7 @@ import { credentialManagerTokens } from '../../mail/tokens.ts';
 import type { TokenStore } from '../../mail/tokens.ts';
 import { googleClient, revoke, startConsent } from '../../mail/oauth.ts';
 import type { ConsentFlow, OAuthClient } from '../../mail/oauth.ts';
+import { consentOn, enqueueAnalyses, mailProviderOk, paragraphOf } from '../../mail/analyse.ts';
 import { setSenderRule, sortMail } from '../../mail/sorting.ts';
 import { CALIBRATION_MAILS, calibrationDone, enqueueTriage, isCalibrating } from '../../mail/triage.ts';
 import { getSecret } from '../../secrets.ts';
@@ -103,18 +104,43 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
   const ID = { type: 'object', properties: { id: { type: 'string', pattern: '^\\d+$' } }, required: ['id'] } as const;
   const NAME = { type: 'string', minLength: 1, maxLength: 60, pattern: '\\S' } as const;
 
-  api.get('/email/overview', async () => ({
+  // Opening the page (or Home) is the "first open each day" that queues paragraphs (D11).
+  api.get('/email/overview', async () => {
+    enqueueAnalyses(db, api.config);
+    return overview();
+  });
+  const overview = () => ({
     calibration: { done: calibrationDone(db), total: CALIBRATION_MAILS, calibrating: isCalibrating(db) },
+    consent: consentOn(db),
+    provider_ok: mailProviderOk(api.config, 'work'),
     // D18: the same mail in two accounts counts once.
-    categories: db
-      .prepare(
-        `SELECT c.id, c.name, c.system, (SELECT count(DISTINCT COALESCE(m.rfc_message_id, m.account_id || ':' || m.gmail_id)) FROM mail_messages m WHERE m.category_id = c.id AND m.state = 'filed') AS count
-         FROM mail_categories c ORDER BY c.id`,
-      )
-      .all(),
+    categories: (
+      db
+        .prepare(
+          `SELECT c.id, c.name, c.system, (SELECT count(DISTINCT COALESCE(m.rfc_message_id, m.account_id || ':' || m.gmail_id)) FROM mail_messages m WHERE m.category_id = c.id AND m.state = 'filed') AS count,
+             EXISTS (SELECT 1 FROM jobs j WHERE j.kind = 'mail_analyse' AND j.status IN ('queued', 'running') AND json_extract(j.payload, '$.categoryId') = c.id) AS refreshing
+           FROM mail_categories c ORDER BY c.id`,
+        )
+        .all() as { id: number; system: string | null }[]
+    ).map((c) => ({ ...c, paragraph: c.system === null ? paragraphOf(db, c.id) : null })),
     needs_sorting: db.prepare(`SELECT count(*) FROM mail_messages WHERE state IN ('needs_sorting', 'failed')`).pluck().get(),
     rules: db.prepare('SELECT sender, category_id FROM mail_sender_rules ORDER BY sender').all(),
-  }));
+  });
+
+  api.put<{ Body: { consent: boolean } }>('/email/settings', { schema: { body: { type: 'object', properties: { consent: { type: 'boolean' } }, required: ['consent'], additionalProperties: false } } }, async (req) => {
+    db.prepare(`INSERT INTO mail_settings (key, value) VALUES ('consent', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`).run(String(req.body.consent));
+    // Off stops calls at once: queued paragraph jobs check consent before calling, and new ones aren't queued.
+    if (!req.body.consent) db.prepare(`DELETE FROM jobs WHERE kind = 'mail_analyse' AND status = 'queued'`).run();
+    return overview();
+  });
+
+  /** The Refresh button: reruns today; a second click while a job is queued or running is a no-op. */
+  api.post('/email/analyses/refresh', async () => ({ queued: enqueueAnalyses(db, api.config, { force: true }) }));
+
+  api.delete('/email/analyses', async () => {
+    db.prepare('DELETE FROM mail_analyses').run();
+    return { ok: true };
+  });
 
   api.get('/email/needs-sorting', async () => {
     const rows = db
