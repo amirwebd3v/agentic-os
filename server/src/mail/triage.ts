@@ -215,11 +215,12 @@ export const mailTriage =
       return category === undefined ? null : { action: 'file', category, source: 'rule', eligible: false, keepText: false };
     }
 
-    async function classify(mail: ParsedMail, gmailId: string): Promise<Extract<GateStep, { action: 'skip' | 'file' | 'needs_sorting' }>> {
+    async function classify(mail: ParsedMail, gmailId: string, ownerCategory: number | null): Promise<Extract<GateStep, { action: 'skip' | 'file' | 'needs_sorting' }>> {
       const scan = scrubSecrets(`${mail.sender}\n${mail.subject}\n${mail.body}`);
       const facts = { labels: mail.labels, bulk: mail.bulk, secretsHit: scan.kinds.length > 0 };
       const rule = db.prepare('SELECT category_id FROM mail_sender_rules WHERE sender = ?').pluck().get(mail.sender) as number | undefined;
-      const ctx: GateContext = { ...base, rule: rule ?? null };
+      // The owner's choice acts like a rule: it picks the category, and the checks still decide what text stays.
+      const ctx: GateContext = { ...base, rule: ownerCategory ?? rule ?? null };
       const answers: GateAnswers = {};
       for (;;) {
         const step = gate(facts, ctx, answers);
@@ -243,10 +244,10 @@ export const mailTriage =
       }
     }
 
-    const ids = db.prepare('SELECT gmail_id FROM mail_pending WHERE account_id = ? ORDER BY created_at, gmail_id LIMIT ?').pluck().all(accountId, BATCH) as string[];
+    const batch = db.prepare('SELECT gmail_id, owner_category_id FROM mail_pending WHERE account_id = ? ORDER BY created_at, gmail_id LIMIT ?').all(accountId, BATCH) as { gmail_id: string; owner_category_id: number | null }[];
     const gmail = gmailFor(accountId);
     setError(null);
-    for (const id of ids) {
+    for (const { gmail_id: id, owner_category_id: ownerCategory } of batch) {
       if (!budget.take(accountId, UNITS_PER_MAIL)) {
         later();
         return;
@@ -285,11 +286,11 @@ export const mailTriage =
       }
       try {
         let step;
-        const twin = copyOf(mail);
+        const twin = ownerCategory === null ? copyOf(mail) : null;
         if (twin) step = twin;
         else {
           try {
-            step = await classify(mail, id);
+            step = await classify(mail, id, ownerCategory);
           } catch (err) {
             if (err instanceof DeciderError && err.kind === 'decider_down') {
               setError('classifier_down');
@@ -297,11 +298,16 @@ export const mailTriage =
               return;
             }
             if (!(err instanceof DeciderError)) throw err;
-            step = { action: 'needs_sorting', suggestion: null } as const;
+            // The owner's choice still stands; only the text, which needs a clean check, stays out.
+            step = ownerCategory === null ? ({ action: 'needs_sorting', suggestion: null } as const) : ({ action: 'file', category: ownerCategory, source: 'rule', eligible: false, keepText: false } as const);
           }
         }
         if (step.action === 'skip') {
-          removePending.run(accountId, id);
+          db.transaction(() => {
+            // In Spam or Trash now: out of scope, the owner's earlier move included.
+            if (ownerCategory !== null) db.prepare('DELETE FROM mail_messages WHERE account_id = ? AND gmail_id = ?').run(accountId, id);
+            removePending.run(accountId, id);
+          })();
           continue;
         }
         const fields = storedFields(step, mail, base, owner);
@@ -318,7 +324,12 @@ export const mailTriage =
           ...fields,
         };
         db.transaction(() => {
-          insert.run(row);
+          // The owner may have moved this mail while it was being fetched: the newer choice wins, and nothing is written.
+          const current = db.prepare('SELECT owner_category_id FROM mail_pending WHERE account_id = ? AND gmail_id = ?').get(accountId, id) as { owner_category_id: number | null } | undefined;
+          if (!current || current.owner_category_id !== ownerCategory) return;
+          if (ownerCategory === null) insert.run(row);
+          // Updated in place: the row keeps its id (an open page still points at it) and the source the move gave it.
+          else db.prepare(`UPDATE mail_messages SET rfc_message_id = @rfc_message_id, internal_date = @internal_date, bulk = @bulk, sender = @sender, subject = @subject, excerpt = @excerpt, eligible = @eligible WHERE account_id = @account_id AND gmail_id = @gmail_id AND category_id = ${ownerCategory}`).run(row);
           removePending.run(accountId, id);
         })();
       } catch {

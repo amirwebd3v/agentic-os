@@ -4,6 +4,8 @@ import { credentialManagerTokens } from '../../mail/tokens.ts';
 import type { TokenStore } from '../../mail/tokens.ts';
 import { googleClient, revoke, startConsent } from '../../mail/oauth.ts';
 import type { ConsentFlow, OAuthClient } from '../../mail/oauth.ts';
+import { setSenderRule, sortMail } from '../../mail/sorting.ts';
+import { CALIBRATION_MAILS, calibrationDone, enqueueTriage, isCalibrating } from '../../mail/triage.ts';
 import { getSecret } from '../../secrets.ts';
 
 export interface EmailDeps {
@@ -58,7 +60,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
     flow: status,
     accounts: db
       .prepare(
-        `SELECT id, email, status, backfill_done, last_synced_at, last_error, estimate,
+        `SELECT id, email, status, backfill_done, last_synced_at, last_error, triage_error, estimate,
            (SELECT count(*) FROM mail_pending p WHERE p.account_id = a.id) AS pending FROM mail_accounts a ORDER BY id`,
       )
       .all(),
@@ -95,6 +97,87 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
     } finally {
       starting = false;
     }
+  });
+
+  // Sorting. Sender and subject are mail text: the page renders them as text only, and no log or error carries them.
+  const ID = { type: 'object', properties: { id: { type: 'string', pattern: '^\\d+$' } }, required: ['id'] } as const;
+  const NAME = { type: 'string', minLength: 1, maxLength: 60, pattern: '\\S' } as const;
+
+  api.get('/email/overview', async () => ({
+    calibration: { done: calibrationDone(db), total: CALIBRATION_MAILS, calibrating: isCalibrating(db) },
+    // D18: the same mail in two accounts counts once.
+    categories: db
+      .prepare(
+        `SELECT c.id, c.name, c.system, (SELECT count(DISTINCT COALESCE(m.rfc_message_id, m.account_id || ':' || m.gmail_id)) FROM mail_messages m WHERE m.category_id = c.id AND m.state = 'filed') AS count
+         FROM mail_categories c ORDER BY c.id`,
+      )
+      .all(),
+    needs_sorting: db.prepare(`SELECT count(*) FROM mail_messages WHERE state IN ('needs_sorting', 'failed')`).pluck().get(),
+    rules: db.prepare('SELECT sender, category_id FROM mail_sender_rules ORDER BY sender').all(),
+  }));
+
+  api.get('/email/needs-sorting', async () => {
+    const rows = db
+      .prepare(
+        `SELECT m.id, m.gmail_id, m.state, m.sender, m.subject, m.internal_date, m.suggestion_id, a.email AS account FROM mail_messages m JOIN mail_accounts a ON a.id = m.account_id
+         WHERE m.state IN ('needs_sorting', 'failed') ORDER BY m.sender IS NULL, m.sender, m.internal_date DESC LIMIT 500`,
+      )
+      .all() as { sender: string | null; suggestion_id: number | null }[];
+    const groups = new Map<string | null, typeof rows>();
+    for (const r of rows) groups.set(r.sender, [...(groups.get(r.sender) ?? []), r]);
+    return { groups: [...groups].map(([sender, mails]) => ({ sender, suggestion_id: mails[0]!.suggestion_id, mails })) };
+  });
+
+  api.get<{ Params: { id: string } }>('/email/categories/:id/mails', { schema: { params: ID } }, async (req) => ({
+    mails: db
+      .prepare(`SELECT m.id, m.gmail_id, m.sender, m.subject, m.internal_date, a.email AS account FROM mail_messages m JOIN mail_accounts a ON a.id = m.account_id WHERE m.category_id = ? AND m.state = 'filed' ORDER BY m.internal_date DESC LIMIT 100`)
+      .all(Number(req.params.id)),
+  }));
+
+  api.post<{ Params: { id: string }; Body: { category_id: number; always?: boolean; apply_stored?: boolean } }>(
+    '/email/mails/:id/sort',
+    { schema: { params: ID, body: { type: 'object', properties: { category_id: { type: 'integer' }, always: { type: 'boolean' }, apply_stored: { type: 'boolean' } }, required: ['category_id'], additionalProperties: false } } },
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      const { category_id: category, always, apply_stored: applyStored } = req.body;
+      const sender = db.prepare('SELECT sender FROM mail_messages WHERE id = ?').pluck().get(id) as string | null | undefined;
+      if (always && !sender) return reply.code(400).send({ error: sender === undefined ? 'not_found' : 'no_sender' });
+      const result = sortMail(db, id, category);
+      if (result === 'not_found') return reply.code(404).send({ error: 'not_found' });
+      if (result === 'bad_category') return reply.code(400).send({ error: 'bad_category' });
+      // The mail the owner clicked counts as checked; the others the rule moves don't (D12).
+      const moved = always ? setSenderRule(db, sender!, category, !!applyStored) : 0;
+      if (always && applyStored) sortMail(db, id, category);
+      for (const a of db.prepare(`SELECT id FROM mail_accounts WHERE status = 'connected'`).pluck().all() as number[]) enqueueTriage(db, a);
+      return { moved };
+    },
+  );
+
+  api.delete<{ Querystring: { sender: string } }>('/email/rules', { schema: { querystring: { type: 'object', properties: { sender: { type: 'string', minLength: 1 } }, required: ['sender'] } } }, async (req, reply) => {
+    const { changes } = db.prepare('DELETE FROM mail_sender_rules WHERE sender = ?').run(req.query.sender);
+    return changes ? { ok: true } : reply.code(404).send({ error: 'not_found' });
+  });
+
+  api.post<{ Body: { name: string } }>('/email/categories', { schema: { body: { type: 'object', properties: { name: NAME }, required: ['name'], additionalProperties: false } } }, async (req, reply) => {
+    const name = req.body.name.trim();
+    if (db.prepare('SELECT 1 FROM mail_categories WHERE name = ?').get(name)) return reply.code(409).send({ error: 'name_taken' });
+    return { id: db.prepare('INSERT INTO mail_categories (name) VALUES (?) RETURNING id').pluck().get(name) };
+  });
+
+  api.patch<{ Params: { id: string }; Body: { name: string } }>('/email/categories/:id', { schema: { params: ID, body: { type: 'object', properties: { name: NAME }, required: ['name'], additionalProperties: false } } }, async (req, reply) => {
+    const name = req.body.name.trim();
+    const id = Number(req.params.id);
+    if (db.prepare('SELECT 1 FROM mail_categories WHERE name = ? AND id <> ?').get(name, id)) return reply.code(409).send({ error: 'name_taken' });
+    const { changes } = db.prepare('UPDATE mail_categories SET name = ? WHERE id = ?').run(name, id);
+    return changes ? { ok: true } : reply.code(404).send({ error: 'not_found' });
+  });
+
+  api.delete<{ Params: { id: string } }>('/email/categories/:id', { schema: { params: ID } }, async (req, reply) => {
+    const category = db.prepare('SELECT system FROM mail_categories WHERE id = ?').get(Number(req.params.id)) as { system: string | null } | undefined;
+    if (!category) return reply.code(404).send({ error: 'not_found' });
+    if (category.system) return reply.code(409).send({ error: 'system_category' });
+    db.prepare('DELETE FROM mail_categories WHERE id = ?').run(Number(req.params.id)); // its mail moves to Needs sorting (trigger, 0012)
+    return { ok: true };
   });
 
   api.delete<{ Params: { id: string }; Querystring: { keep?: string } }>(
