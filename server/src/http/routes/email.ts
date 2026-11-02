@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { createGmail } from '../../mail/gmail.ts';
+import { createGmail, GmailError } from '../../mail/gmail.ts';
 import { credentialManagerTokens } from '../../mail/tokens.ts';
 import type { TokenStore } from '../../mail/tokens.ts';
 import { googleClient, revoke, startConsent } from '../../mail/oauth.ts';
@@ -39,10 +39,28 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
      ON CONFLICT (email) DO UPDATE SET status = 'connected', failures = 0, last_error = NULL RETURNING id`,
   );
 
+  /**
+   * Why the last connect failed, as a fixed code: the page explains it, and it is kept in the database because the
+   * server log may not be visible. Never a message: a Google error message can quote a request.
+   */
+  let reason: string | null = null;
+  const fail = (code: string) => {
+    reason = code;
+    db.prepare(`INSERT INTO mail_settings (key, value) VALUES ('connect_error', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`).run(JSON.stringify({ code, at: new Date().toISOString() }));
+    api.log.warn({ code }, 'gmail connect failed');
+  };
+
   /** Row and token commit together or not at all; a token nobody holds is revoked, including the one a reconnect replaces. */
   async function store(client: OAuthClient, accessToken: string, refreshToken: string): Promise<boolean> {
+    let emailAddress: string;
     try {
-      const { emailAddress } = await createGmail(async () => accessToken, deps.gmailBase).getProfile();
+      ({ emailAddress } = await createGmail(async () => accessToken, deps.gmailBase).getProfile());
+    } catch (err) {
+      fail(err instanceof GmailError ? `profile:${err.kind}${err.reason && /^[\w.]{1,40}$/.test(err.reason) ? `:${err.reason}` : ''}` : 'profile:unknown');
+      await revoke(client, refreshToken);
+      return false;
+    }
+    try {
       const replaced = db.transaction(() => {
         const id = upsert.pluck().get(emailAddress) as number;
         const old = deps.tokens.get(id);
@@ -52,6 +70,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
       if (replaced && replaced !== refreshToken) void revoke(client, replaced);
       return true;
     } catch {
+      fail('store');
       await revoke(client, refreshToken);
       return false;
     }
@@ -60,6 +79,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
   api.get('/email/accounts', async () => ({
     setup: deps.client() !== null,
     flow: status,
+    reason: status === 'failed' ? reason : null,
     accounts: db
       .prepare(
         `SELECT id, email, status, backfill_done, last_synced_at, last_error, triage_error, estimate,
@@ -84,6 +104,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
         }
         flow = null;
         if (result.status !== 'granted') {
+          if (result.status === 'failed') fail(result.reason);
           status = result.status;
           return;
         }
@@ -94,6 +115,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
       flow = started;
       return { url: started.url };
     } catch (err) {
+      fail('start');
       status = 'failed';
       throw err;
     } finally {
