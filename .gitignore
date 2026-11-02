@@ -8,3 +8,6 @@ agentic-os.json
 sidecar/.venv/
 # Plans and specs stay on this machine only (removed from history 2026-10-29)
 docs/
+
+# taste-skill working files (direction sheets, screenshots)
+.taste-skill/

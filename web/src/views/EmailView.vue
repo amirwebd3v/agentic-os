@@ -1,124 +1,193 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
-import { ApiError, connectMailAccount, disconnectMailAccount, getMailAccounts } from '../api';
-import type { ConnectFlow, MailAccount, MailAccounts } from '../api';
-import MailSorting from '../components/MailSorting.vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { addMailCategory, ApiError, clearParagraphs, connectMailAccount, disconnectMailAccount, getMailAccounts, getMailOverview, refreshParagraphs, setMailConsent } from '../api';
+import type { MailAccount, MailAccounts, MailOverview } from '../api';
+import MailCategoryView from '../components/MailCategoryView.vue';
+import MailRulesView from '../components/MailRulesView.vue';
+import MailSortView from '../components/MailSortView.vue';
+import MailStatus from '../components/MailStatus.vue';
+import { ago, failureText, FLOW_TEXT, plural } from '../mail';
+
+// Three columns: the views (what to look at), the open view (what to do), and the rail (is it all working).
+// The open view is in the URL (?view=sort | rules | <category id>), so a reload stays where you were.
+const route = useRoute();
+const router = useRouter();
 
 const state = ref<MailAccounts>();
+const overview = ref<MailOverview | null>(null);
 const loadError = ref('');
-const notice = ref('');
-const confirming = ref<number | null>(null);
+const notice = ref<{ text: string; tone: 'ok' | 'danger' | '' } | null>(null);
 const busy = ref(false);
+const version = ref(0);
+const newName = ref('');
+const adding = ref(false);
 let poll: ReturnType<typeof setTimeout> | undefined;
+let polling = false;
 
-const FLOW_TEXT: Partial<Record<ConnectFlow, string>> = {
-  connected: 'Connected. Nothing is read from this account yet.',
-  cancelled: 'Nothing was connected.',
-  timed_out: 'The wait for Google ran out. Nothing was connected.',
-  wrong_scope: 'Google gave wider access than read-only, so the app refused and revoked it. Nothing was connected.',
-  failed: 'Connecting failed. Nothing was stored. Try again.',
-};
-/** What to do about a failed connect, from the server's fixed reason code. */
-function failureText(reason: string | null): string {
-  const tail = ` Nothing was stored.${reason ? ` (Code: ${reason})` : ''}`;
-  if (reason?.startsWith('profile:') && /accessNotConfigured|SERVICE_DISABLED/.test(reason)) return `Google signed you in, but the Gmail API isn't enabled in your Google Cloud project. Enable it under APIs & Services, wait a minute, then connect again.${tail}`;
-  if (reason?.startsWith('profile:auth') || reason?.startsWith('profile:bad_request')) return `Google signed you in, but refused to let the app read your Gmail profile. Check that the Gmail API is enabled and your account is allowed to use the app (a test user, if the app is still in Testing).${tail}`;
-  if (reason === 'exchange:redirect_uri_mismatch' || reason === 'exchange:invalid_client' || reason === 'exchange:unauthorized_client') return `Google refused the app's OAuth client. It must be a Desktop app client, saved with pnpm secrets set gmail_client_id and gmail_client_secret.${tail}`;
-  if (reason === 'exchange:invalid_grant') return `Google refused the sign-in code. It can expire within a minute; connect again and finish without waiting.${tail}`;
-  if (reason === 'no_refresh_token') return `Google didn't give the app lasting access. Remove the app under Security in your Google Account, then connect again.${tail}`;
-  if (reason === 'store') return `Signed in, but the token couldn't be saved in Windows Credential Manager.${tail}`;
-  return `Connecting failed.${tail} Try again.`;
+const live = computed(() => state.value?.accounts.filter((a) => a.status !== 'disconnected') ?? []);
+const categories = computed(() => overview.value?.categories ?? []);
+const view = computed(() => {
+  const v = String(route.query['view'] ?? 'sort');
+  if (v === 'rules') return { kind: 'rules' as const };
+  const category = categories.value.find((c) => String(c.id) === v);
+  return category ? { kind: 'category' as const, category } : { kind: 'sort' as const };
+});
+const viewKey = computed(() => (view.value.kind === 'category' ? String(view.value.category.id) : view.value.kind));
+
+/** The title row's sentence: what needs you first, then that everything else is fine. */
+const status = computed(() => {
+  const o = overview.value;
+  const parts: { text: string; tone?: 'attention' }[] = [];
+  const reconnect = live.value.filter((a) => a.status === 'reconnect').length;
+  if (reconnect) parts.push({ text: `${plural(reconnect, 'account needs', 'accounts need')} reconnecting`, tone: 'attention' });
+  if (live.value.some((a) => a.triage_error)) parts.push({ text: 'Sorting paused', tone: 'attention' });
+  if (o) parts.push({ text: o.needs_sorting ? `${plural(o.needs_sorting, 'mail')} to sort` : 'Nothing to sort' });
+  const synced = live.value.map((a) => a.last_synced_at).filter((s): s is string => !!s).sort().at(-1);
+  parts.push({ text: synced ? `Synced ${ago(synced)}` : 'First sync running' });
+  if (o?.calibration.calibrating) parts.push({ text: `Sorting ${o.calibration.done} of ${o.calibration.total} before automatic filing` });
+  if (o) parts.push({ text: `Claude analysis ${o.consent ? 'on' : 'off'}` });
+  return parts;
+});
+
+/** `focus` moves keyboard focus to the new view's heading: right after a click, wrong while arrowing through the select. */
+async function open(v: string, focus = true) {
+  await router.replace({ query: { ...route.query, view: v } });
+  if (focus) await nextTick(() => document.getElementById('view-title')?.focus());
+}
+function pick(v: string) {
+  if (v === 'new') {
+    adding.value = true;
+    void nextTick(() => newInput.value?.focus());
+  } else void open(v, false);
 }
 
-const STATUS_TEXT: Record<MailAccount['status'], string> = {
-  connected: 'Connected, read-only',
-  reconnect: 'Needs reconnecting',
-  disconnected: 'Disconnected, local mail kept',
-};
-
-function ago(iso: string): string {
-  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
-  if (minutes < 60) return `${minutes} min ago`;
-  return minutes < 2880 ? `${Math.round(minutes / 60)}h ago` : `${Math.round(minutes / 1440)} days ago`;
-}
-function health(a: MailAccount): string {
-  if (a.triage_error === 'classifier_down') return 'The classifier is down. Sorting is paused, and nothing is sent to Claude instead.';
-  if (a.triage_error === 'contact_unreadable') return 'career/contact.md could not be read. Sorting is paused until it is fixed.';
-  const parts = [a.last_synced_at ? `Last synced ${ago(a.last_synced_at)}` : 'First sync running'];
-  if (a.pending) parts.push(`${a.pending} ${a.pending === 1 ? 'mail' : 'mails'} to sort through${a.estimate ? `, about ${a.estimate} in all` : ''}`);
-  return parts.join(' · ');
-}
-
+let latest = 0;
+let unmounted = false;
 async function load() {
+  clearTimeout(poll); // one poll chain at most, whoever calls
+  const mine = ++latest;
   loadError.value = '';
   try {
     const next = await getMailAccounts();
+    const nextOverview = next.accounts.length ? await getMailOverview() : null;
+    if (mine !== latest || unmounted) return; // a newer load answers instead
     state.value = next;
-    if (next.flow === 'waiting') poll = setTimeout(() => void load(), 2000);
-    else if (next.flow === 'failed' && polling) notice.value = failureText(next.reason ?? null);
-    else if (FLOW_TEXT[next.flow] && polling) notice.value = FLOW_TEXT[next.flow]!;
+    overview.value = nextOverview;
+    if (next.flow === 'failed' && polling) notice.value = { text: failureText(next.reason ?? null), tone: 'danger' };
+    else if (polling && FLOW_TEXT[next.flow]) notice.value = { text: FLOW_TEXT[next.flow]!, tone: next.flow === 'connected' ? 'ok' : '' };
     if (next.flow !== 'waiting') polling = false;
+    // Waiting for Google, or a paragraph being written: look again shortly, so the page never shows a stale state.
+    const writing = nextOverview?.categories.some((c) => c.refreshing);
+    if (next.flow === 'waiting' || writing) poll = setTimeout(() => void load().then(() => version.value++), next.flow === 'waiting' ? 2000 : 4000);
   } catch {
-    loadError.value = 'Could not load your accounts.';
+    if (mine === latest) loadError.value = 'Could not load your mail. Is the server running?';
   }
 }
-let polling = false;
+
+/**
+ * Every action goes through here: one busy flag, one notice, and a reload of whatever the action changed, also after
+ * a failure (a batch that stopped halfway has still filed its first mails). `after` runs once the reload has landed.
+ */
+async function run(job: () => Promise<string | void>, failure: string, after?: () => void) {
+  busy.value = true;
+  notice.value = null;
+  try {
+    const text = await job();
+    if (text) notice.value = { text, tone: 'ok' };
+  } catch (err) {
+    notice.value = { text: err instanceof ApiError && err.detail === 'name_taken' ? 'A category with that name already exists.' : failure, tone: 'danger' };
+    after = undefined;
+  } finally {
+    await load();
+    version.value++;
+    busy.value = false;
+  }
+  after?.();
+}
 
 async function connect() {
-  busy.value = true;
-  notice.value = '';
+  notice.value = null;
   // Opened before the await, or the browser treats it as an unwanted popup.
   const tab = window.open('about:blank', '_blank');
+  busy.value = true;
   try {
     const { url } = await connectMailAccount();
     if (tab) {
       tab.opener = null;
       tab.location.href = url;
-    } else notice.value = 'Your browser blocked the Google tab. Allow pop-ups for this page and try again.';
+    } else notice.value = { text: 'Your browser blocked the Google tab. Allow pop-ups for this page and try again.', tone: 'danger' };
     polling = true;
     clearTimeout(poll);
     await load();
   } catch (err) {
     tab?.close();
-    notice.value = err instanceof ApiError && err.detail === 'gmail_not_set_up' ? 'The Google client is not saved yet. Follow the steps below.' : 'Could not start connecting. Try again.';
+    notice.value = { text: err instanceof ApiError && err.detail === 'gmail_not_set_up' ? 'The Google client is not saved yet. Follow the steps below.' : 'Could not start connecting. Try again.', tone: 'danger' };
   } finally {
     busy.value = false;
   }
 }
 
-async function disconnect(account: MailAccount, keep: boolean) {
-  busy.value = true;
-  try {
-    const { revoked } = await disconnectMailAccount(account.id, keep);
-    confirming.value = null;
-    notice.value = revoked ? 'Disconnected, and access is revoked at Google.' : 'Disconnected here, but Google could not be reached. Remove the app under Security in your Google Account.';
-    await load();
-  } catch {
-    notice.value = 'Could not disconnect. Try again.';
-  } finally {
-    busy.value = false;
-  }
-}
+const disconnect = (a: MailAccount, keep: boolean) =>
+  run(async () => {
+    const { revoked } = await disconnectMailAccount(a.id, keep);
+    return revoked ? 'Disconnected, and access is revoked at Google.' : 'Disconnected here, but Google could not be reached. Remove the app under Security in your Google Account.';
+  }, 'Could not disconnect. Try again.');
+const consent = (on: boolean) => run(async () => void (await setMailConsent(on)), 'Could not change that setting.');
+const refresh = () =>
+  run(async () => {
+    const { queued } = await refreshParagraphs();
+    return queued ? `Writing ${plural(queued, 'paragraph')}.` : 'Nothing new since the last paragraphs.';
+  }, 'Could not refresh the paragraphs.');
+const clear = () => run(async () => void (await clearParagraphs()), 'Could not clear the paragraphs.');
+let added = 0;
+const add = () =>
+  run(
+    async () => {
+      added = (await addMailCategory(newName.value.trim())).id;
+      newName.value = '';
+      adding.value = false;
+      return 'Category added. It applies to mail from now on.';
+    },
+    'Could not add that category.',
+    () => void open(String(added)), // after the reload, when the new category exists in the list
+  );
+const startAdding = async () => {
+  adding.value = true;
+  await nextTick();
+  newInput.value?.focus();
+};
+const cancelAdding = async () => {
+  adding.value = false;
+  newName.value = '';
+  await nextTick();
+  addOpen.value?.focus();
+};
+const newInput = ref<HTMLInputElement>();
+const addOpen = ref<HTMLButtonElement>();
 
 onMounted(load);
-onBeforeUnmount(() => clearTimeout(poll));
+onBeforeUnmount(() => {
+  unmounted = true;
+  clearTimeout(poll);
+});
 </script>
 
 <template>
-  <main class="page email">
-    <header class="page-head spread">
-      <div>
-        <h1>Email</h1>
-        <p class="lede">Read-only access to your Gmail. The app never sends, labels, archives or deletes anything.</p>
-      </div>
-      <button v-if="state?.setup" type="button" class="primary" :disabled="busy || state.flow === 'waiting'" @click="connect">{{ state.flow === 'waiting' ? 'Waiting for Google…' : 'Connect Gmail' }}</button>
+  <main class="page mail-page">
+    <header class="mail-head">
+      <h1>Email</h1>
+      <p v-if="live.length" class="status-line">
+        <template v-for="(p, i) in status" :key="p.text"><span v-if="i" class="sep" aria-hidden="true"> · </span><span :class="p.tone">{{ p.text }}</span></template>
+      </p>
+      <p v-else class="status-line">Read-only access to your Gmail. The app never sends, labels, archives or deletes anything.</p>
     </header>
 
     <p v-if="loadError" class="notice danger" role="alert">{{ loadError }} <button type="button" @click="load">Try again</button></p>
-    <p v-if="notice" class="notice" role="status">{{ notice }}</p>
+    <p v-if="notice" class="notice" :class="notice.tone" role="status">{{ notice.text }}</p>
 
-    <section v-if="state && !state.setup" class="notice attention">
-      <h2>Set up Google once</h2>
+    <section v-if="state && !state.setup" class="notice attention setup" aria-labelledby="setup-title">
+      <h2 id="setup-title">Set up Google once</h2>
       <ol>
         <li>Create a Google Cloud project and enable the Gmail API.</li>
         <li>On the Google Auth platform, create a <strong>Desktop app</strong> OAuth client. Choose External and <strong>In production</strong>. The secret is shown only once, so save it when it appears.</li>
@@ -127,40 +196,110 @@ onBeforeUnmount(() => clearTimeout(poll));
       <p>Google warns that the app is unverified, once per account. That is expected for an app only you use.</p>
     </section>
 
-    <section v-if="state?.setup && !state.accounts.length">
-      <p>No account connected yet. Connecting reads nothing until sorting is switched on.</p>
+    <section v-else-if="state && !state.accounts.length" class="first-run" aria-labelledby="first-title">
+      <h2 id="first-title">Connect your Gmail</h2>
+      <p>The app reads your mail, never changes it, and sorts it into categories. Personal mail keeps no text at all; anything sent to Claude is opt-in, redacted and shown here.</p>
+      <button type="button" class="primary" :disabled="busy || state.flow === 'waiting'" @click="connect">{{ state.flow === 'waiting' ? 'Waiting for Google…' : 'Connect Gmail' }}</button>
     </section>
 
-    <MailSorting v-if="state?.accounts.length" />
+    <div v-else-if="state && overview" class="mail-grid">
+      <nav class="views" aria-label="Email views">
+        <label class="sr-only" for="view-pick">Show</label>
+        <select id="view-pick" :key="`${viewKey}-${version}`" class="view-pick" :value="viewKey" @change="pick(($event.target as HTMLSelectElement).value)">
+          <option value="sort">Needs sorting ({{ overview.needs_sorting }})</option>
+          <option v-for="c in categories" :key="c.id" :value="String(c.id)">{{ c.name }} ({{ c.count }})</option>
+          <option value="rules">Sender rules ({{ overview.rules.length }})</option>
+          <option value="new">New category…</option>
+        </select>
 
-    <section v-if="state?.accounts.length" aria-labelledby="accounts-title">
-      <h2 id="accounts-title">Accounts</h2>
-      <ul class="accounts">
-        <li v-for="a in state.accounts" :key="a.id" class="spread">
-          <div>
-            <strong>{{ a.email }}</strong>
-            <p class="muted">{{ a.last_error === 'deleted_client' ? 'The Google client was deleted. Restore it in the Google Cloud console within 30 days, then reconnect.' : a.last_error === 'invalid_client' ? 'Google refused the saved client. Save it again with pnpm secrets, then reconnect.' : STATUS_TEXT[a.status] }}</p>
-            <p v-if="a.status === 'connected'" class="muted">{{ health(a) }}</p>
-          </div>
+        <ul class="view-list">
+          <li>
+            <button type="button" class="view-item lead" :aria-current="viewKey === 'sort' ? 'page' : undefined" @click="open('sort')">
+              <span>Needs sorting</span><span class="n" :class="{ due: overview.needs_sorting }">{{ overview.needs_sorting }}</span>
+            </button>
+          </li>
+        </ul>
+        <p id="cat-label" class="group-label">Categories</p>
+        <ul class="view-list" aria-labelledby="cat-label">
+          <li v-for="c in categories" :key="c.id">
+            <button type="button" class="view-item" :aria-current="viewKey === String(c.id) ? 'page' : undefined" @click="open(String(c.id))">
+              <span class="name" :title="c.name">{{ c.name }}</span><span class="n">{{ c.count }}</span>
+            </button>
+          </li>
+        </ul>
+        <form v-if="adding" class="add" @submit.prevent="add">
+          <label class="sr-only" for="new-category">New category name</label>
+          <input id="new-category" ref="newInput" v-model="newName" type="text" maxlength="60" placeholder="Name" @keydown.esc="cancelAdding" />
           <div class="row">
-            <button v-if="a.status !== 'connected'" type="button" :disabled="busy" @click="connect">Reconnect</button>
-            <template v-if="a.status !== 'disconnected' && confirming === a.id">
-              <button type="button" :disabled="busy" @click="disconnect(a, true)">Disconnect, keep local mail</button>
-              <button type="button" class="danger" :disabled="busy" @click="disconnect(a, false)">Disconnect, delete local mail</button>
-              <button type="button" :disabled="busy" @click="confirming = null">Cancel</button>
-            </template>
-            <button v-else-if="a.status !== 'disconnected'" type="button" :disabled="busy" @click="confirming = a.id">Disconnect</button>
-            <button v-else type="button" class="danger" :disabled="busy" @click="disconnect(a, false)">Delete local mail</button>
+            <button type="submit" :disabled="busy || !newName.trim()">Add</button>
+            <button type="button" class="quiet" @click="cancelAdding">Cancel</button>
           </div>
-        </li>
-      </ul>
-    </section>
+        </form>
+        <button v-else ref="addOpen" type="button" class="quiet add-open" @click="startAdding">New category</button>
+        <ul class="view-list setup-list">
+          <li>
+            <button type="button" class="view-item" :aria-current="viewKey === 'rules' ? 'page' : undefined" @click="open('rules')">
+              <span>Sender rules</span><span class="n">{{ overview.rules.length }}</span>
+            </button>
+          </li>
+        </ul>
+      </nav>
+
+      <section class="view" aria-labelledby="view-title">
+        <MailSortView v-if="view.kind === 'sort'" :categories="categories" :total="overview.needs_sorting" :version="version" :busy="busy" :run="run" />
+        <MailCategoryView v-else-if="view.kind === 'category'" :category="view.category" :categories="categories" :consent="!!overview.consent" :version="version" :busy="busy" :run="run" @removed="open('sort')" />
+        <MailRulesView v-else :rules="overview.rules" :categories="categories" :busy="busy" :run="run" />
+      </section>
+
+      <MailStatus :accounts="state.accounts" :overview="overview" :busy="busy" :waiting="state.flow === 'waiting'" @connect="connect" @disconnect="disconnect" @consent="consent" @refresh="refresh" @clear="clear" @rules="open('rules')" />
+    </div>
+    <p v-else-if="!loadError" class="placeholder" role="status">Loading…</p>
   </main>
 </template>
 
 <style scoped>
-.accounts { list-style: none; margin: 0; padding: 0; }
-.accounts li { border-top: 1px solid var(--border); padding: var(--s4) 0; }
-.accounts p { margin: 0; }
-.muted { color: var(--muted); }
+.mail-head { margin-bottom: var(--s5); }
+.mail-head h1 { margin-bottom: var(--s1); }
+.status-line { color: var(--fg); font-variant-numeric: tabular-nums; margin: 0; }
+.status-line .attention { font-weight: 600; color: var(--fg); background: var(--attention-tint); padding: 0 6px; border-radius: 4px; }
+.sep { color: var(--muted); }
+.setup, .first-run { max-width: 44rem; }
+.first-run h2 { margin-top: 0; }
+
+/* views 14rem · gap 32 · open view (fluid) · gap 32 · rail 17rem = the 76rem page minus its 32px gutters */
+.mail-grid { display: grid; grid-template-columns: 14rem minmax(0, 1fr) 17rem; gap: var(--s6); align-items: start; }
+.views { position: sticky; top: 76px; }
+.view-pick { display: none; width: 100%; }
+.view-list { list-style: none; margin: 0; padding: 0; }
+.view-item {
+  width: 100%; display: flex; justify-content: space-between; align-items: center; gap: var(--s2);
+  border: 0; border-radius: 6px; background: none; padding: 0 var(--s3); min-height: 34px; font-weight: 450; color: var(--fg); text-align: left;
+}
+.view-item:hover:not(:disabled) { background: var(--inset); border: 0; }
+.view-item[aria-current='page'] { background: var(--inset); font-weight: 600; }
+.view-item.lead { font-weight: 600; }
+.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.n { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 450; }
+.n.due { color: var(--fg); font-weight: 600; }
+.group-label { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--muted); margin: var(--s5) 0 var(--s1) var(--s3); }
+.add-open { margin: var(--s1) 0 0 var(--s1); }
+.add { padding: var(--s2) var(--s3) 0; display: grid; gap: var(--s2); }
+.setup-list { margin-top: var(--s5); padding-top: var(--s3); border-top: 1px solid var(--border); }
+.view { min-width: 0; }
+.view :deep(.view-head) { margin-bottom: var(--s5); }
+.view :deep(.view-head h2) { margin: 0 0 var(--s1); }
+.view :deep(.view-head h2:focus) { outline: none; }
+
+@media (max-width: 1100px) {
+  .mail-grid { grid-template-columns: 13rem minmax(0, 1fr); }
+  .mail-grid > :deep(.rail) { grid-column: 2; }
+}
+@media (max-width: 720px) {
+  .mail-grid { grid-template-columns: minmax(0, 1fr); gap: var(--s5); }
+  .mail-grid > :deep(.rail) { grid-column: 1; }
+  .views { position: static; }
+  .view-pick { display: block; }
+  .view-list, .group-label, .add-open { display: none; }
+  .add { padding: var(--s2) 0 0; }
+}
 </style>
