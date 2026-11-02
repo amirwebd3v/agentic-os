@@ -216,7 +216,7 @@ describe('routes', () => {
     const res = await t.call('POST', `/mails/${a}/sort`, { category_id: NOISE, always: true, apply_stored: true });
     expect(res.json()).toEqual({ moved: 2 });
     expect(row(t.db, b)).toMatchObject({ state: 'filed', category_id: NOISE });
-    expect((await t.call('GET', '/overview')).json().rules).toEqual([{ sender: 'news@example.com', category_id: NOISE }]);
+    expect((await t.call('GET', '/overview')).json().rules).toEqual([{ sender: 'news@example.com', category_id: NOISE, learned: 0 }]);
     expect((await t.call('DELETE', `/rules?sender=${encodeURIComponent('news@example.com')}`)).json()).toEqual({ ok: true });
     expect((await t.call('DELETE', '/rules?sender=x')).statusCode).toBe(404);
   });

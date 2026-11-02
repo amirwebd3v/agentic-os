@@ -113,7 +113,9 @@ export function storedFields(
   const subject = redactContact(scrubSecrets(mail.subject).text, contact);
   if (step.action === 'needs_sorting') return { sender: mail.sender, subject, excerpt: null, is_personal: 0, eligible: 0 };
   if (step.category === ctx.personalId) return { sender: null, subject: null, excerpt: null, is_personal: 1, eligible: 0 };
-  const keep = step.keepText && step.category !== ctx.noiseId && scrubSecrets(mail.body).kinds.length === 0;
+  // Noise keeps its sender only (owner's decision, 2026-11-02): enough for its rule and count.
+  if (step.category === ctx.noiseId) return { sender: mail.sender, subject: null, excerpt: null, is_personal: 0, eligible: 0 };
+  const keep = step.keepText && scrubSecrets(mail.body).kinds.length === 0;
   const excerpt = keep ? excerptOf(mail.body, contact) : null;
   return { sender: mail.sender, subject, excerpt, is_personal: 0, eligible: step.eligible && excerpt ? 1 : 0 };
 }

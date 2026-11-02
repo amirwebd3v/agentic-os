@@ -28,6 +28,9 @@ function fake(over: Partial<Gmail> = {}) {
     getMessage: async () => {
       throw new Error('sync never reads a mail');
     },
+    getMessageHeaders: async () => {
+      throw new Error('sync never reads a mail');
+    },
     ...over,
   };
   return { gmail, calls };
