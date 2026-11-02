@@ -40,6 +40,11 @@ describe('gate branches, in order', () => {
     expect(gate(mail({ secretsHit: true }), ctx({ rule: BLOG }), laya(0.1, CAREER, 0.9))).toMatchObject({ category: BLOG, eligible: false, keepText: false });
   });
 
+  test('a mail that talks to the model goes to the owner, with no model; under a rule it keeps no text', () => {
+    expect(gate(mail({ injection: true }), ctx())).toEqual({ action: 'needs_sorting', suggestion: null });
+    expect(gate(mail({ injection: true }), ctx({ rule: BLOG }), laya(0.1, BLOG, 0.9))).toMatchObject({ category: BLOG, eligible: false, keepText: false });
+  });
+
   test('a secrets hit is Personal before any model sees it', () => {
     expect(gate(mail({ secretsHit: true }), ctx())).toEqual({ action: 'file', category: PERSONAL, source: 'secrets', eligible: false, keepText: false });
   });
