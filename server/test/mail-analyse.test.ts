@@ -143,6 +143,9 @@ describe('when no call is made', () => {
     expect(mailProviderOk(config('http://localhost:20128'), 'work')).toBe(true);
     expect(mailProviderOk(config('https://api.anthropic.com'), 'work')).toBe(true);
     expect(mailProviderOk(config('https://api.anthropic.com.evil.example'), 'work')).toBe(false);
+    // 9router's route prefix, as on the owner's machine
+    expect(mailProviderOk(config('http://localhost:20128', 'cc/claude-haiku-4-5-20251001'), 'work')).toBe(true);
+    for (const model of ['gpt-9', 'cc/gpt-9', 'claude', 'cc/claude-', 'openai/claude-x/../gpt', 'a/b/claude-x', 'claudeX-1']) expect(mailProviderOk(config('http://localhost:20128', model), 'work')).toBe(false);
   });
 });
 
