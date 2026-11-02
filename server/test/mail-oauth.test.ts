@@ -191,6 +191,7 @@ describe('accounts routes', () => {
     const out = await t.get();
     expect(out.accounts.map((a: { email: string }) => a.email)).toEqual(['a@example.com', 'b@example.com']);
     expect(t.gmail.seen).toEqual(['GET /profile', 'GET /profile']);
+    expect(t.db.prepare(`SELECT count(*) FROM jobs WHERE kind = 'mail_sync'`).pluck().get()).toBe(2); // first sync starts at once
     expect([...t.tokens.m.values()]).toEqual(['rt', 'rt']);
     expect(JSON.stringify(out)).not.toContain('rt"');
   });

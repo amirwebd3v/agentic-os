@@ -6,6 +6,7 @@ import { googleClient, revoke, startConsent } from '../../mail/oauth.ts';
 import type { ConsentFlow, OAuthClient } from '../../mail/oauth.ts';
 import { consentOn, enqueueAnalyses, mailProviderOk, paragraphOf } from '../../mail/analyse.ts';
 import { saveIdea } from '../../mail/ideas.ts';
+import { enqueueSyncs } from '../../mail/sync.ts';
 import { setSenderRule, sortMail } from '../../mail/sorting.ts';
 import { CALIBRATION_MAILS, calibrationDone, enqueueTriage, isCalibrating } from '../../mail/triage.ts';
 import { getSecret } from '../../secrets.ts';
@@ -68,6 +69,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
         return old;
       })();
       if (replaced && replaced !== refreshToken) void revoke(client, replaced);
+      enqueueSyncs(db); // the first sync starts now, not on the next 5-minute tick
       return true;
     } catch {
       fail('store');
@@ -95,6 +97,7 @@ export const emailRoutes = (deps: EmailDeps = realDeps): FastifyPluginAsync => a
     flow?.cancel(); // a second click replaces the wait, and frees the old port
     const mine = ++generation;
     status = 'waiting';
+    reason = null;
     starting = true;
     try {
       const started = await startConsent(client, (result) => {
