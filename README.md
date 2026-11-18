@@ -6,15 +6,6 @@ A personal, local-first knowledge base for the areas of your life (career first;
 - **Plans and specs** live in `docs/`, kept on the owner's machine only (gitignored): original review (architecture, threat model) `docs/plan-review.md`; how work is built `docs/Workflow.md`; Career spec `docs/week2/career-v2.md`, status `docs/week2/implementation-plan.md`, shapes `docs/week2/career-contract.md`
 - **Backlog:** the GitHub Project (https://github.com/users/amirwebd3v/projects/1)
 
-## Prerequisites (Windows 11)
-| Tool | Version | Install |
-|---|---|---|
-| Node.js | 22.12+ | nvm-windows or nodejs.org |
-| pnpm | 10 | `corepack enable` |
-| git | any recent | git-scm.com |
-| uv + NVIDIA driver (CUDA 13), for the decider sidecar (Email triage) | uv 0.13+ | `winget install --id=astral-sh.uv -e` |
-
-There's no Visual Studio requirement: native packages use prebuilt binaries.
 
 ## First-time setup
 ```powershell
