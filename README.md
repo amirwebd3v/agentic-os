@@ -60,10 +60,4 @@ The server (and the sidecar, when you run it) bind to `127.0.0.1` only. As a sec
 New-NetFirewallRule -DisplayName "AgenticOS block inbound" -Direction Inbound -LocalPort 3000,8009 -Protocol TCP -Action Block
 ```
 
-## Troubleshooting
-| Symptom | Fix |
-|---|---|
-| A "Connect provider" banner | `.env` is missing `ANTHROPIC_API_KEY`, or the provider is down. Check with `pnpm smoke`, then Reload. |
-| "Port 8009 is in use by …, not a sidecar" (only when running the sidecar) | Another program holds the port. Free it; the app never kills non-sidecar processes. |
-| `uv` / `bun` not found right after installing | Open a new terminal: winget's PATH change only reaches new shells. |
-| 401 everywhere | The session cookie expired or the database was reset. Open a fresh `pnpm login-url` link. |
+
